@@ -24,6 +24,8 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.6")),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "602.0.0" ..< "604.0.0"),
         .package(url: "https://github.com/vapor/vapor", "4.102.1" ..< "5.0.0"),
+        // `#huggingFaceTokenizerLoader()` + the chat template (Tokenizers).
+        .package(url: "https://github.com/huggingface/swift-transformers", exact: "1.3.3"),
     ],
     targets: [
         .target(
@@ -38,10 +40,12 @@ let package = Package(
         .executableTarget(
             name: "HTTPServer",
             dependencies: [
-                "MLXFastModel",
+                .target(name: "MLXFastModel"),
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "Vapor", package: "vapor"),
             ]
         ),
@@ -51,6 +55,8 @@ let package = Package(
                 "MLXFastModel",
                 "HTTPServer",
                 .product(name: "Vapor", package: "vapor"),
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
             ]
         ),
     ]

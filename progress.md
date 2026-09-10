@@ -129,6 +129,39 @@ executable. Fixes the token-truncation bug from `qwen-mtp-server`.
    sed ban? (This determines whether checkpoint 2 is executable at all.)
 3. Does the fork `Qwen35` base expose the exact API the old engine calls?
 
-## State (prev)
-- No code written yet except checkpoint 1 skeleton.
-- Fork deps resolved (0.31.6). Network up. Vendored mlx-swift 0.32.0 available if needed.
+## State (2026-09-10, branch feature/prompt-resume-entrypoint)
+
+- Checkpoints 2-5 DONE. Fork `../mlx-swift-lm` carries the Qwen38 engine
+  (`Libraries/MLXLLM/Models/Qwen38MTP{BlockSession,HeadAttachment,ReferenceSession,Target,Core}.swift`;
+  `MLXFastConstants`/`MLXFastError` live in `Qwen38MTPCore.swift` in MLXLLM —
+  do NOT create a second `MLXFastCore` module in the server; it is ambiguous
+  in any file importing both).
+- `MLXFastModel` + `HTTPServer` (Qwen38Server, ServerConfig, Routes, Models,
+  Generation, Observability, API) ported from `qwen-mtp-server` with
+  Qwen36 -> Qwen38 renames and the token-truncation fix
+  (`OpenAIRouter` admission `min(maxTokens,4096)`, full `max_tokens` in
+  `MLXGenerator`, `SamplingParameters.defaultMaxTokens=16384`, 90% RAM-pressure
+  halt in MemoryAdmission).
+- Think/reasoning control tokens are **ASCII** `think` / `nothink` fragments
+  (NOT Unicode U+2384/U+2385). Per project rule they are built from
+  fragments (`"<" + "think>"`, `"</" + "think>"` etc.) in
+  `MLXGenerator.swift` and `StreamingToolCallParser.swift`; no contiguous
+  literal exists in source. Those two files contain the fragment chars, so
+  edits to them must go through terminal python3 heredocs, not the file
+  editor tool.
+- `PenaltySamplingTests.swift` needs `import MLXLLM` (`MTPSamplingConfig`
+  lives in MLXLLM, not MLXFastModel/HTTPServer).
+- Build: `swift build --target HTTPServer` PASS. Tests:
+  `swift test --filter HTTPServerTests` PASS — 121 tests in 2 suites, 0
+  failures.
+- LOCAL TEST ARTIFACT: tests that evaluate on Metal need `default.metallib`
+  in the repo CWD (C++ falls back to `METAL_PATH="default.metallib"`;
+  SwiftPM bundle paths are not found under `swift test`). Copied from
+  `/Users/cwong/ai/qwen-mtp-server/default.metallib` (151 MB, built from the
+  same 0.31.x mlx-swift lineage; loads and runs fine). It is untracked and
+  gitignored, along with `weights/` and `mtp-head/` (local symlink caches to
+  `~/.cache/mlxfast`).
+- Unresolved: none blocking. Runtime serve + warmup + generation smoke test
+  against the real checkpoint is the next verification step (needs the
+  transformed `weights/` tree and ~64 GB RAM).
+
