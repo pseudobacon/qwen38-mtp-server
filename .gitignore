@@ -1,5 +1,5 @@
 .build/
 .vscode/
 default.metallib
-weights/
-mtp-head/
+weights
+mtp-head
