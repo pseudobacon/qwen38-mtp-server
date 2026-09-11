@@ -1,5 +1,19 @@
+# SwiftPM & Build Products
 .build/
-.vscode/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+
+# Model Weights & Compiled Metallib Caches
+weights/
+mtp-head/
 default.metallib
-weights
-mtp-head
+
+# IDE & Environment
+.vscode/
+.DS_Store
+
+# Benchmark / Trace Logs
+*.log
+*.json

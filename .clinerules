@@ -1,0 +1,106 @@
+# Project Rules: Local MLX Inference Server
+
+Long-lived Swift 6 / Vapor server exposing an OpenAI-compatible API over an in-process MLX runtime (quantized target model + optional native MTP draft head, no per-request subprocess). Correctness, cancellation, and bounded memory beat endpoint surface area.
+
+## Project Profile
+* **Build target:** `HTTPServer`
+* **Full-suite test filter:** `swift test --filter HTTPServerTests`
+* **Docs:** `docs/api-contract.md` (error shape, SSE chunk sequence), `docs/metrics.md` (required metric list) — create before touching response or metrics code
+* **Progress log:** `progress.md` — read before planning, update after every task
+* **Model:** Qwen3.8-27B 4-bit + native MTP head
+* **Hardware:** MacBook M5 Pro, 48GB unified memory
+* **Configured context ceiling:** 262,144 tokens (an upper bound, not a promise — see admission control)
+
+## Commands
+* **Build:** `swift build --target HTTPServer`
+* **Test (narrow):** `swift test --filter <SpecificClassName>`
+* **Test (full server suite):** `swift test --filter HTTPServerTests`
+* **After every edit batch:** `git diff --check`, then `git diff --stat`
+* **Progress audit:** Read `progress.md` before planning; update it after every task
+
+## Non-Negotiables
+* Never run tensor ops (`eval`, prefill, decode, draft/verify, KV-cache mutation) in a Vapor route handler or NIO event-loop callback.
+* Never run blocking inference from `Task.detached` unless all runtime/model/KV ownership stays exclusively inside the dedicated model executor.
+* Never reload weights, tokenizer, or draft head, and never re-warm hot paths per request: one long-lived loaded model per process.
+* Never stream draft tokens; emit only target-verified committed tokens.
+* Never silently accept a sampling parameter that is not applied; reject the request instead (error shape: `docs/api-contract.md`).
+* Never swallow SSE write errors with `try?`; propagate failure into model-session cancellation.
+* Never use unbounded `AsyncStream` buffering; use bounded buffering and/or token coalescing.
+* Never edit source files with python, sed, awk, or shell scripts; use native file-editing tools.
+* Never write any tokenizer chat-template control token (`im-start`/`im-end`, end-of-turn, end-of-text, or equivalent special tokens for the loaded model family) as one contiguous string literal in Swift, Python, or C++ source. Build them from fragments so the literal never appears, e.g., `"<" + "|im_" + "end|>"`. Check the target tokenizer's special-token set per project. Joining fragments in code is correct; the same characters in a single literal is forbidden.
+
+## Change Budget & Task Discipline
+Estimate the budget before editing:
+* **Small:** 1-2 production files, under ~120 changed lines, no new abstractions.
+* **Medium:** up to 3 production files, under ~250 changed lines.
+* **Large:** anything beyond Medium, or new protocols/adapters, or changes spanning router + generator + tests.
+
+**Rules:**
+* One task is one independently buildable change; never implement a Large change in one task.
+* If the work is Large, stop after the plan and propose split tasks with independently buildable checkpoints.
+* Never generate or apply a patch batch over ~120 changed lines without asking first; after each batch run `git diff --check` and the narrowest build/test.
+* Replace whole functions or blocks, not isolated lines; locate bounds with `grep -n` or `search_files` first.
+* For files over 1,000 lines needing distant edits, use sequential single-function edits, never one multi-site patch or a full-file overwrite.
+* No new protocols, adapters, DI, or test doubles solely for testability unless direct testing is impossible and two production call sites will reuse them.
+* Do not refactor working or unrelated benchmark/runtime/kernel code while making a narrowly scoped change.
+* On the second failure of an identical read/search/edit call, stop, report the blocked operation, and ask for a smaller next step.
+* Read economically: grep to locate, then read only the needed line ranges; do not dump files over ~500 lines in full.
+
+## Handoff on Context Pressure
+If planning or inspection has consumed substantial context and the patch would exceed Small, stop and record a handoff in `progress.md` instead of editing:
+* Record branch and clean/dirty state, files inspected, exact planned files, accepted invariants, build/test commands, unresolved questions.
+* Implement in a new task.
+
+## Architecture Invariants
+* The HTTP layer never owns tensors, model state, or mutable KV state; the model executor owns all runtime interaction.
+* Tensors and mutable cache/model state stay actor-isolated; favor actor isolation over `@unchecked Sendable`.
+* If `@unchecked Sendable` is unavoidable, document the ownership invariant at the declaration and keep the wrapper private to the runtime execution boundary.
+* One active generation lane plus a bounded request queue; no concurrent sessions sharing mutable cache state without a tested KV-ownership design.
+* Explicit request/session IDs and cancellation handles on every request.
+* Cancellation is mandatory and prompt: HTTP disconnect, SSE write failure, explicit cancel, timeout, and shutdown all stop generation.
+* Make cleanup deterministic with `defer` / cancellation handlers.
+* Keep network I/O, JSON encoding, logging, and detokenization off the model-critical lane where practical.
+
+## Sampling and Decoding Correctness
+* For greedy decoding, speculative output must be token-ID identical to serial greedy target decoding for the same prompt and configuration.
+* Speculative decoding must be safely disableable per request (`mtp_enabled: false`) and at startup (`--spec-draft-n-max 0`).
+* Temperature $\le 0$ means greedy; sampling filters and penalties must have a defined, documented behavior in that mode.
+* For non-greedy requests, use mathematically correct target-based sampling or a documented target-only serial sampling fallback.
+* Never apply sampling controls solely to draft logits.
+* Do not claim speculative sampling support until distribution/correctness tests exist for it.
+* Presence, frequency, and repetition penalties apply to target logits before target token selection; if unimplemented, reject the request (400/501, `docs/api-contract.md`).
+* Every request has an explicit max output limit and a context-limit policy.
+
+## SSE and API Surface
+* Stream as `text/event-stream`; event format, chunk sequence, and the error JSON shape are specified in `docs/api-contract.md` — read it before touching response code.
+* Support only implemented API fields; reject unsupported ones with the OpenAI-shaped error, never ignore them.
+* Validate model aliases, message roles/content, token limits, and context budget before model execution.
+* Maintain `/healthz` and `/readyz`; readiness requires a loaded, warmed model.
+
+## Memory and KV Cache
+* Do not clear the global runtime memory cache between requests; reuse allocator memory.
+* Release per-request/session references on completion or cancellation.
+* Bound queue depth, active sessions, max prompt tokens, max output tokens, and cache capacity.
+* `MLX.Memory.clearCache()` is only a measured recovery/eviction action: after a failed request, a controlled low-memory policy, shutdown, or test teardown.
+* The configured context ceiling (project profile) is an upper bound, not a promise; admission control rejects requests that cannot fit weights + KV + headroom.
+* Compute the real admission budget from the model config and hardware, never a hardcoded token count:
+  $$\text{kv\_bytes\_per\_token} = 2 \times \text{full\_attention\_layers} \times \text{kv\_heads} \times \text{head\_dim} \times \text{bytes\_per\_element}$$
+  Adjusted for KV quantization and hybrid architectures where only some layers maintain per-token KV state. For this project: 16 full-attention layers, 4 KV heads, head_dim 256 $\rightarrow$ ~64 KiB/token fp16, ~16 GiB at 262k tokens, on top of ~15 GB of 4-bit weights — check against GPU wired memory limits.
+* K and V cache formats are independently configured unless the runtime supports only one shared format; never expose an ignored config field.
+
+## Performance and Observability
+* Optimize only after correctness tests and measurements exist.
+* Warm common prefill/decode/verification shapes at startup.
+* Coalesce committed tokens into one SSE event when it cuts overhead without materially harming interactive latency.
+* Structured, level-gated logging only; no `print()` in request hot paths or per-token loops.
+* Emit the metrics listed in `docs/metrics.md`.
+* No continuous batching until the single-stream path is correct, bounded, and benchmarked.
+
+## Verification and Reporting
+* For each task: inspect existing code and `progress.md` first; build the server target; add or update focused tests where practical; run relevant tests; report changed files, behavior changes, remaining caveats, and exact verification commands; update `progress.md` accurately — compiling does not mean complete.
+
+## Automated Workflow and Git Policy
+* **Branch creation:** At the start of a prompt/task, if on main, cut a new branch: `git checkout -b feature/prompt-<N>`.
+* **Completion criteria:** All server suite tests must pass (`swift test --filter HTTPServerTests`).
+* **Auto-merge rule:** Once all tests pass and `progress.md` is updated, commit the changes, switch to main, merge the feature branch, and delete the feature branch.
+* **Sequential execution:** If given a batch of prompts, proceed directly to the next prompt immediately after merging main.
