@@ -735,10 +735,15 @@ actor MLXGenerator {
                         logger.logString(.info, "Pre-generation memory pressure triggered KV cache eviction.")
                     }
 
+                    // A/B (QWEN_MTP_POSTNORM=0): initialize the session with
+                    // `postNorm: false` so the hidden row feeding the next
+                    // draft skips the final RMSNorm; default (unset/1) keeps
+                    // `postNorm: true`.
                     let currentSession = try Qwen38MTPBlockSession(
                         model: model,
                         stopTokens: stopTokens,
                         generateParameters: generateParameters,
+                        postNorm: ProcessInfo.processInfo.environment["QWEN_MTP_POSTNORM"] != "0",
                         sampling: MTPSamplingConfig(
                             temperature: samplingParams.temperature,
                             topP: samplingParams.topP,
@@ -784,11 +789,38 @@ actor MLXGenerator {
                     var stopMatcher = StopSequenceMatcher(sequences: samplingParams.stopSequences)
                     var stoppedByStopSequence = false
 
+                    // TEMPORARY step-level diagnostics (task: isolate the TTLT
+                    // throughput regression). Gate: QWEN_MTP_STEP_TRACE=1.
+                    // High-resolution wall clock around each generateRound plus
+                    // the round's offered/accepted draft counts. Written
+                    // directly to stderr via fputs to avoid a per-round logger
+                    // actor hop in the hot loop; never enable in a timed run.
+                    let stepTrace =
+                        ProcessInfo.processInfo.environment["QWEN_MTP_STEP_TRACE"] == "1"
+                    var stepLatencyTotalMs = 0.0
+
                     while emitted < maxTokens && !done {
                         if await registry.isCancelled(id) { throw GenerationCancelledError(id: id) }
                         try Task.checkCancellation()
 
+                        let tStep0 = stepTrace
+                            ? DispatchTime.now().uptimeNanoseconds : 0
                         let result = try currentSession.generateRound(depth: decodeDepth)
+                        if stepTrace {
+                            let stepNs =
+                                DispatchTime.now().uptimeNanoseconds - tStep0
+                            stepLatencyTotalMs += Double(stepNs) / 1e6
+                            let line = String(format:
+                                "MTP-STEP round=%d depth=%d offered=%d accepted=%d committed=%d stepMs=%.4f\n",
+                                rounds + 1,
+                                decodeDepth,
+                                result.acceptedDraftCount + result.rejectedDraftCount,
+                                result.acceptedDraftCount,
+                                result.tokens.count,
+                                Double(stepNs) / 1e6
+                            )
+                            line.withCString { fputs($0, stderr) }
+                        }
 
                         if await registry.isCancelled(id) { throw GenerationCancelledError(id: id) }
 
@@ -868,6 +900,20 @@ actor MLXGenerator {
 
                     let decodeElapsed = decodeStart.duration(to: .now)
                     decodeSeconds = Double(decodeElapsed.components.seconds) + Double(decodeElapsed.components.attoseconds) / 1e18
+
+                    if stepTrace && rounds > 0 {
+                        let summary = String(format:
+                            "MTP-STEP-SUMMARY rounds=%d proposed=%d accepted=%d acceptedPerStep=%.4f avgStepMs=%.4f decodeSeconds=%.4f committed=%d\n",
+                            rounds,
+                            proposedDraftTokens,
+                            acceptedDraftTokens,
+                            Double(acceptedDraftTokens) / Double(rounds),
+                            stepLatencyTotalMs / Double(rounds),
+                            decodeSeconds,
+                            emitted
+                        )
+                        summary.withCString { fputs($0, stderr) }
+                    }
 
                     if !stoppedByStopSequence {
                         for fragment in reasoningParser.finish() {
