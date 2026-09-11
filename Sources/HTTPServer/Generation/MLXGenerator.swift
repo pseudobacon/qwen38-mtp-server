@@ -284,6 +284,14 @@ struct SamplingParameters: Sendable {
                 ?? request.max_completion_tokens
                 ?? SamplingParameters.defaultMaxTokens,
             contextWindow: request.context_window ?? serverConfig.ctxSize,
+            // `enable_thinking` defaults to `true` (Qwen3 reasoning-model
+            // behavior: the response opens with thinking tokens unless the
+            // caller explicitly disables it via the field or
+            // `chat_template_kwargs`). This is context, not a sampling bug,
+            // but it measurably lowers MTP draft acceptance on short prompts
+            // (~55% thinking-on vs ~74% thinking-off at depth 3, T=0), so the
+            // `mean_mtp_acceptance_rate` metric is prompt/context-dependent
+            // and must be read against the request's thinking mode.
             enableThinking: request.enable_thinking ?? kwargsEnableThinking ?? true,
             mtpEnabled: request.mtp_enabled ?? (serverConfig.specDraftNMax > 0),
             prefillChunkSize: serverConfig.prefillChunkSize,
