@@ -29,7 +29,7 @@ struct ServerConfig: Sendable {
     // Context & Generation (llama.cpp names, act as server defaults)
     var ctxSize: Int = 262144          // --ctx-size, -c
     var nPredict: Int = 262144          // --n-predict, --predict, -n
-    var temp: Float = 1.0              // --temp, --temperature
+    var temp: Float = 0.0              // --temp, --temperature
     var topK: Int = 20                  // --top-k
     var topP: Float = 0.95              // --top-p
     var minP: Float = 0.05              // --min-p
