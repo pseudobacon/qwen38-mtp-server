@@ -188,8 +188,33 @@ Fixed five defects in the wide QMV dispatch in `Qwen35Kernels.swift` and complet
 
 ---
 
+### Checkpoint 2c: Native $M = 1$ wide QMV dispatch (DONE)
+Implemented native $M = 1$ (single-token decode) routing through the candidate-owned 4-bit wide QMV Metal kernel, so the projection path covers the dominant decode shape **without fallbacks** to eager `layer(x)`:
+
+* **`Qwen35Kernels.swift`:** added the `M = 1` case to the `qwen_e120_qmv_m` template set (`IPG = 1`: one input row per SIMD group, so the wide helper degenerates to a plain matrix-vector pass over the four output rows the group owns); `Qwen35CustomQMV.widths` now includes `1` and `ipg(for:)` maps `1 → 1`. `M = 1` always takes the live-sums arm (the table sidecar only pays at `M >= 3`).
+* **`Qwen35+FastPath.swift`:** `Qwen35Attention.projectPreRope` routes q/k/v through `qwen35RoutedLinear` (previously eager `qProj`/`kProj`/`vProj` calls).
+* **`Qwen35.swift`:** `Qwen35DecoderLayer.attentionPostBody` routes `oProj` via `mergeHeadsAndProject(..., routed: true)`.
+
+**Verification (active fork `../mlx-swift-lm` + server):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean (engine: 3 files, +29/−13).
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 acceptance **93.46%** (1072/1147); $M = 1$ wide QMV dispatch active on the decode path without fallbacks.
+* Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+## Performance Checkpoint 2c & Diagnostic Metrics
+Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token request (`finish_reason: length`), with the native $M = 1$ wide QMV dispatch active on every decode projection:
+
+| Metric | Checkpoint 2c | Notes |
+| :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | **116.06 ms** | per decode round |
+| **Eval Latency (`tEvalAvg`)** | **~104.21 ms** | target eval (draft verify + bonus token) |
+| **Decoding Throughput (TTLT)** | **20.7 tok/s** | 49.47 s wall-clock for 1,024 committed tokens |
+
+**Key Change:** Native $M = 1$ wide QMV Metal kernel routing implemented and verified without fallbacks — the $M = 1$ gap flagged in Checkpoint 2b-fix is closed; single-token decode now dispatches through the same wide kernel as the $M = 2..9$ verify shapes.
+
+---
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
-* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), and the structural refactor completed. Step latency reduced from ~151 ms to 115.21 ms (benchmark: tEvalAvg 104.21 ms, stepAvg 115.21 ms over 437 rounds, greedy T=0); TTLT ~20.2 tok/s (1024 tokens in 50.71 s wall).
-* **Pending Scope (Checkpoint 2c):** Attention-layer fused kernels and an M = 1 wide QMV dispatch so the projection path applies to single-token decode (the dominant shape).
-* **Target Milestone:** Reduce `tEvalMs` from 107.93 ms to ~24 ms, achieving decoding throughput of **~30+ tok/sec**.
+* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), Checkpoint 2c (native $M = 1$ wide QMV dispatch), and the structural refactor completed. Step latency 116.06 ms (tEvalAvg ~104.21 ms, greedy T=0); TTLT 20.7 tok/s (1,024 tokens in 49.47 s wall).
+* **Pending Scope:** Attention-layer fused kernels — the remaining path toward the ~24 ms `tEvalMs` target.
+* **Target Milestone:** Reduce `tEvalMs` from ~104.21 ms to ~24 ms, achieving decoding throughput of **~30+ tok/sec**.
