@@ -33,21 +33,15 @@ Long-lived Swift 6 / Vapor server exposing an OpenAI-compatible API over an in-p
 * Never edit source files with python, sed, awk, or shell scripts; use native file-editing tools.
 * Never write any tokenizer chat-template control token (`im-start`/`im-end`, end-of-turn, end-of-text, or equivalent special tokens for the loaded model family) as one contiguous string literal in Swift, Python, or C++ source. Build them from fragments so the literal never appears, e.g., `"<" + "|im_" + "end|>"`. Check the target tokenizer's special-token set per project. Joining fragments in code is correct; the same characters in a single literal is forbidden.
 
-## Change Budget & Task Discipline
-Estimate the budget before editing:
-* **Small:** 1-2 production files, under ~120 changed lines, no new abstractions.
-* **Medium:** up to 3 production files, under ~250 changed lines.
-* **Large:** anything beyond Medium, or new protocols/adapters, or changes spanning router + generator + tests.
+## Task Discipline & Change Scoping
+* **Atomic Task Scope:** Focus one task on a single cohesive layer or module.
+* **Targeted Edits Only:** Replace whole functions or targeted blocks using exact text matching. Never perform full-file overwrites on files over 500 lines; for 1,000+ line files use sequential single-function edits.
+* **Build & Verification Loops:** Run the narrowest build/test immediately after updating a logical set of files, before moving to the next component.
+* **Uninterrupted Execution:** When executing an accepted technical plan, apply multi-file changes sequentially without calculating line budgets or prompting for size permission.
+* **Stop Conditions (override the above):** Pause and report instead of proceeding when (a) the change touches a documented contract surface, sampling/greedy semantics, or introduces a new abstraction solely for testability; (b) the file's actual content diverges from the plan's assumed anchors; (c) the same read/edit call fails twice.
+* **No Abstraction Inflation:** No new protocols, adapters, or test doubles unless direct testing is impossible and two production call sites exist.
 
-**Rules:**
-* One task is one independently buildable change; never implement a Large change in one task.
-* If the work is Large, stop after the plan and propose split tasks with independently buildable checkpoints.
-* Never generate or apply a patch batch over ~120 changed lines without asking first; after each batch run `git diff --check` and the narrowest build/test.
-* Replace whole functions or blocks, not isolated lines; locate bounds with `grep -n` or `search_files` first.
-* For files over 1,000 lines needing distant edits, use sequential single-function edits, never one multi-site patch or a full-file overwrite.
-* No new protocols, adapters, DI, or test doubles solely for testability unless direct testing is impossible and two production call sites will reuse them.
-* Do not refactor working or unrelated benchmark/runtime/kernel code while making a narrowly scoped change.
-* On the second failure of an identical read/search/edit call, stop, report the blocked operation, and ask for a smaller next step.
+## Reading & Context Discipline
 * Read economically: grep to locate, then read only the needed line ranges; do not dump files over ~500 lines in full.
 
 ## Handoff on Context Pressure
