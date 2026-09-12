@@ -89,8 +89,47 @@ Gate (27B-only): `attentionHeads == 24 && kvHeads == 4 && headDim == 256 && rope
   `postNorm: false => 14.0` (finite, aligned).
 * Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
 
-Remaining Checkpoint 2 scope: the other pinned attention fusions (beyond QK RMSNorm + RoPE)
-are still to be ported; `tEvalMs` / TTLT step-trace re-measurement remains pending (Checkpoint 3).
+The step-trace re-measurement for the fused QK RMSNorm + RoPE kernel is complete — see
+Checkpoint 3 below. The remaining pinned attention fusions (beyond QK RMSNorm + RoPE)
+are still to be ported.
+
+### Checkpoint 3: Step-trace benchmark of the fused QK RMSNorm + RoPE kernel (DONE)
+
+Release build of `qwen38-mtp-server` run with `QWEN_MTP_STEP_TRACE=1`, greedy (`temperature: 0.0`),
+`enable_thinking: false`, 1,024-token request (prompt 38 tokens, total 1,062 tokens, `finish_reason: length`).
+The fused `qwen35_attention_qk_rms_rope_bf16_v1` kernel is active (compiled decode on by default).
+
+**MTP-STEP-SUMMARY (per-request, stderr):**
+```
+rounds=426 proposed=1086 accepted=599 acceptedPerStep=1.4061 avgStepMs=116.6788 decodeSeconds=49.7432 committed=1024
+```
+
+**Per-round timing breakdown (426 rounds, `STEP-TRACE`):**
+| Component | avg ms | | :--- | :--- | :--- |
+| `tGraphBuildMs` | 9.98 | Metal graph build per round |
+| `tEvalMs` | **104.92** | Target eval (draft verify + bonus token) |
+| `tHostReadMs` | 0.02 | Host readback |
+| `tCacheStateMs` | 1.63 | KV-cache state mutation |
+| `stepMs` (total) | 116.55 | = sum of the components above |
+
+**`/metrics` (post-run):** `mean_mtp_acceptance_rate=0.5516`, `average_ttft_seconds=0.3435`,
+`total_completion_tokens=1024`, `total_prompt_tokens=38`, `total_requests=1`, `cancelled_requests=0`.
+
+**Checkpoint 3 vs v1.0-baseline:**
+| Metric | v1.0-baseline | Checkpoint 3 (fused kernel) | Delta |
+| :--- | :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | ~151 ms/round | **116.68 ms/round** | −34.3 ms (−22.7%) |
+| **`tEvalMs`** | ~163 ms (roadmap est.) | **104.92 ms** | −58.1 ms (−35.6%) |
+| **Decoding Throughput (TTLT)** | ~14.7–17.0 tok/s | **~20.6 tok/s** (1024 / 49.74 s) | +3.6–5.9 tok/s (+21–40%) |
+| **TTFT** | ~0.44–0.65 s | 0.3435 s | at/below range |
+| **accepted/step** | — | **1.4061** | — |
+| **MTP draft acceptance** | ~93.5% raw / ~74.1% live (thinking OFF) / ~55.1% (thinking ON) | 55.15% (599/1086) | prompt-specific (high-entropy essay) |
+
+Notes:
+* `avgStepMs` = wall-clock per speculative round; `decodeSeconds` = decode-only wall time (prefill excluded); TTLT = committed / `decodeSeconds`.
+* Wall-clock (curl) for the full request = 50 s ≈ `decodeSeconds` 49.74 s + prefill/TTFT 0.34 s.
+* A single fused kernel (QK RMSNorm + RoPE — 1 of the ~20 planned pinned MSL kernels) moves `avgStepMs` ~151 → ~116.7 ms, `tEvalMs` ~163 → ~104.9 ms, and TTLT ~14.7–17 → ~20.6 tok/s: a real but partial gain, consistent with only Checkpoint 2a done. The full Checkpoint 2 target (~24 ms `tEval` / ~25+ tok/s) still requires the remaining fusions.
+* `mean_mtp_acceptance_rate` (55.15% = accepted/proposed) is prompt-specific for this high-entropy technical essay; the baseline live-chat figures are context-entropy estimates, so this is not a like-for-like regression.
 
 ### Refactor: fast-path extraction out of `Qwen35.swift` (DONE)
 Moved all custom fast-path additions out of `Qwen35.swift` into dedicated files to keep the
