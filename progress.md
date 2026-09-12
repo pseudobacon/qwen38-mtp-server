@@ -62,10 +62,35 @@ re-derives the prologue per call.
   `QWEN_MTP_STEP_TRACE=1` + a 1,024-token request (Checkpoint 3). The full ~163→24 ms recovery
   is expected to need both Checkpoint 1 (this) **and** Checkpoint 2 (20 pinned MSL kernels).
 
-### Checkpoint 2 (NEXT): Pinned MSL attention kernels
-Port `qwen35_attention_qk_rms_rope_bf16_v1` and the remaining pinned `MLXFast.metalKernel`
-attention fusions into `Qwen35Attention.callAsFunction` (QK RMSNorm + RoPE → fused Metal kernel
-when compiled decode is supported), then re-measure `tEvalMs` / TTLT via the step-trace.
+### Checkpoint 2a: Pinned QK RMSNorm + RoPE Metal kernel (`qwen35_attention_qk_rms_rope_bf16_v1`) (DONE)
+Ported the fused Q & K RMSNorm + partial (64-dim) RoPE kernel from the `qwen-mtp-server`
+vendor copy into the active fork:
+
+* **`Qwen35Kernels.swift`:** full MSL shader + `qwen35AttentionQKRMSRoPE` wrapper (reads
+  `[B,L,H,D]` Q/K, writes row-contiguous `[B,H,L,D]` outputs; grid `(totalRows*64,1,1)`,
+  `ensureRowContiguous: false`).
+* **`Qwen35+FastPath.swift`:** new `extension Qwen35Attention { forwardFastPath }` — calls the
+  fused kernel when compiled decode is supported AND the Qwen 3.8-27B geometry applies
+  (`usesFusedQKPreparation`) AND a scalar RoPE offset + `L <= 32` + bf16 Q/K/weights;
+  otherwise the exact eager `projectPreRope` + `applyRotaryPosition` path (bit-identical to
+  the vendor-shaped `callAsFunction`).
+* **`Qwen35.swift`:** 2-line guard hook at the top of `Qwen35Attention.callAsFunction`
+  (`if MLXHardwareInfo.isCompiledDecodeSupported { return forwardFastPath(...) }`) plus stored
+  `usesFusedQKPreparation` / `ropeLog2Base`. Eager path unchanged.
+
+Gate (27B-only): `attentionHeads == 24 && kvHeads == 4 && headDim == 256 && ropeDims == 64
+&& ropeTheta == 10_000_000 && ropeType == "default"` (ropeType from
+`ropeScaling["type"] ?? ["rope_type"]`, default `"default"`).
+
+**Verification (active fork `../mlx-swift-lm`):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean.
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 aggregate acceptance
+  93.46% (1072/1147); logit max-divergence vs target `postNorm: true => 16.25`,
+  `postNorm: false => 14.0` (finite, aligned).
+* Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+Remaining Checkpoint 2 scope: the other pinned attention fusions (beyond QK RMSNorm + RoPE)
+are still to be ported; `tEvalMs` / TTLT step-trace re-measurement remains pending (Checkpoint 3).
 
 ### Refactor: fast-path extraction out of `Qwen35.swift` (DONE)
 Moved all custom fast-path additions out of `Qwen35.swift` into dedicated files to keep the
