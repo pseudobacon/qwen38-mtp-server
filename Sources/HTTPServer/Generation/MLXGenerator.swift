@@ -819,7 +819,7 @@ actor MLXGenerator {
                                 result.tokens.count,
                                 Double(stepNs) / 1e6
                             )
-                            line.withCString { fputs($0, stderr) }
+                            _ = line.withCString { fputs($0, stderr) }
                         }
 
                         if await registry.isCancelled(id) { throw GenerationCancelledError(id: id) }
@@ -912,7 +912,7 @@ actor MLXGenerator {
                             decodeSeconds,
                             emitted
                         )
-                        summary.withCString { fputs($0, stderr) }
+                        _ = summary.withCString { fputs($0, stderr) }
                     }
 
                     if !stoppedByStopSequence {
