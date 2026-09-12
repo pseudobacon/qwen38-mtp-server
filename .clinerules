@@ -3,19 +3,23 @@
 Long-lived Swift 6 / Vapor server exposing an OpenAI-compatible API over an in-process MLX runtime (quantized target model + optional native MTP draft head, no per-request subprocess). Correctness, cancellation, and bounded memory beat endpoint surface area.
 
 ## Project Profile
-* **Build target:** `HTTPServer`
-* **Full-suite test filter:** `swift test --filter HTTPServerTests`
+* **Primary Server Repo:** `qwen38-mtp-server` (`/Users/cwong/ai/qwen38-mtp-server`)
+* **Engine Fork Repo:** `mlx-swift-lm` (`/Users/cwong/ai/mlx-swift-lm`)
+* **Build Target:** `HTTPServer`
+* **Full-suite Test Filter:** `swift test --filter HTTPServerTests`
 * **Docs:** `docs/api-contract.md` (error shape, SSE chunk sequence), `docs/metrics.md` (required metric list) — create before touching response or metrics code
-* **Progress log:** `progress.md` — read before planning, update after every task
+* **Progress Log:** `progress.md` — read before planning, update after every task
 * **Model:** Qwen3.8-27B 4-bit + native MTP head
 * **Hardware:** MacBook M5 Pro, 48GB unified memory
-* **Configured context ceiling:** 262,144 tokens (an upper bound, not a promise — see admission control)
+* **Configured Context Ceiling:** 262,144 tokens (an upper bound, not a promise — see admission control)
 
 ## Commands
-* **Build:** `swift build --target HTTPServer`
+* **Build Server:** `swift build --target HTTPServer`
+* **Build Engine:** `cd ../mlx-swift-lm && swift build --target MLXLLM`
 * **Test (narrow):** `swift test --filter <SpecificClassName>`
+* **Test (engine diagnostics):** `cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests`
 * **Test (full server suite):** `swift test --filter HTTPServerTests`
-* **After every edit batch:** `git diff --check`, then `git diff --stat`
+* **After every edit batch:** `git diff --check`, then `git diff --stat` across modified repositories
 * **Progress audit:** Read `progress.md` before planning; update it after every task
 
 ## Non-Negotiables
@@ -48,7 +52,7 @@ Estimate the budget before editing:
 
 ## Handoff on Context Pressure
 If planning or inspection has consumed substantial context and the patch would exceed Small, stop and record a handoff in `progress.md` instead of editing:
-* Record branch and clean/dirty state, files inspected, exact planned files, accepted invariants, build/test commands, unresolved questions.
+* Record branch and clean/dirty state for both repos, files inspected, exact planned files, accepted invariants, build/test commands, unresolved questions.
 * Implement in a new task.
 
 ## Architecture Invariants
@@ -99,8 +103,15 @@ If planning or inspection has consumed substantial context and the patch would e
 ## Verification and Reporting
 * For each task: inspect existing code and `progress.md` first; build the server target; add or update focused tests where practical; run relevant tests; report changed files, behavior changes, remaining caveats, and exact verification commands; update `progress.md` accurately — compiling does not mean complete.
 
-## Automated Workflow and Git Policy
-* **Branch creation:** At the start of a prompt/task, if on main, cut a new branch: `git checkout -b feature/prompt-<N>`.
-* **Completion criteria:** All server suite tests must pass (`swift test --filter HTTPServerTests`).
-* **Auto-merge rule:** Once all tests pass and `progress.md` is updated, commit the changes, switch to main, merge the feature branch, and delete the feature branch.
-* **Sequential execution:** If given a batch of prompts, proceed directly to the next prompt immediately after merging main.
+## Automated Workflow & Multi-Repo Git Policy
+* **Multi-Repo Tracking:** Modifications span two active git repositories: `qwen38-mtp-server` and `../mlx-swift-lm`.
+* **Paired Branch Creation:** At the start of a prompt/task, if on `main`, cut matching feature branches in both modified repositories: `git checkout -b feature/prompt-<N>`.
+* **Commit Order Dependency:** Always stage, test, and commit changes in the engine fork (`mlx-swift-lm`) **first**, followed by the server repo (`qwen38-mtp-server`) second.
+* **Shell & Zsh Safety:**
+  - Never use unescaped parentheses `()`, brackets `[]`, or subshell operators in inline `git commit -m "..."` flags under zsh. Use plain alphanumeric commit messages or write the commit message to a file (`git commit -F /tmp/commit_msg.txt`).
+  - Always use `git merge --no-edit` for non-fast-forward merges to prevent interactive editor (`vim`/`nvim`) process hangs in automated subshells.
+* **Completion Criteria:** All relevant engine diagnostic tests (`swift test --filter Qwen38MTPDiagnosticTests`) and full server suite tests (`swift test --filter HTTPServerTests`) must pass.
+* **Auto-Merge Rule:** Once all tests pass and `progress.md` is updated:
+  1. Commit and merge engine fork (`mlx-swift-lm`) to `main`, then delete its feature branch.
+  2. Commit and merge server repo (`qwen38-mtp-server`) to `main`, then delete its feature branch.
+* **Sequential Execution:** Proceed directly to the next prompt immediately after both `main` branches are clean and merged.
