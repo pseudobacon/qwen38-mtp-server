@@ -67,6 +67,39 @@ Port `qwen35_attention_qk_rms_rope_bf16_v1` and the remaining pinned `MLXFast.me
 attention fusions into `Qwen35Attention.callAsFunction` (QK RMSNorm + RoPE → fused Metal kernel
 when compiled decode is supported), then re-measure `tEvalMs` / TTLT via the step-trace.
 
+### Refactor: fast-path extraction out of `Qwen35.swift` (DONE)
+Moved all custom fast-path additions out of `Qwen35.swift` into dedicated files to keep the
+vendor-shaped file close to upstream (fork diff shrank from ~676 lines to ~30):
+
+* **New `Libraries/MLXLLM/Models/Qwen35+FastPath.swift`:** the four `compile(shapeless: true)`
+  fusion closures + gated wrappers (`qwen35CompiledFusedSwiGLU`, `qwen35CompiledSigmoidMultiply`,
+  `qwen35CompiledGatedDeltaGBeta`, `qwen35CompiledGatedDeltaPostNorm`), `MLXHardwareInfo` (moved
+  from `MLXLMCommon`), and a `Qwen35GatedDeltaNet` fast-path extension
+  (`postNormGated`, `prefixReplayTape`, `applyReplayTape`, `canReplayPrefix`, `replayPrefix`).
+* **New `Libraries/MLXLLM/Models/Qwen35Kernels.swift`:** designated home for the pinned MSL
+  shaders / `MLXFast.metalKernel` defs. `Qwen35.swift` currently contains no raw MSL shader
+  code (the Checkpoint 2 kernels will be added here), so the file is a documented placeholder.
+* **`Qwen35.swift`:** inline fast-path logic in `forward`/`callAsFunction` replaced with
+  1-line hooks (`qwen35CompiledGatedDeltaGBeta`, `prefixReplayTape(...)`,
+  `postNormGated(out, gate: z, sequence: S)`, `applyReplayTape(replayTape, to: cache)`);
+  fusion section and replay-prefix methods removed; the stored `postNorm` property stays
+  (stored properties cannot live in an extension).
+* **Deleted `Libraries/MLXLMCommon/MLXHardwareInfo.swift`** (content moved to MLXLLM;
+  no other target referenced it).
+
+**Behavior note:** `postNormGated` is now gated by `MLXHardwareInfo.isCompiledDecodeSupported`
+for S>1 (previously the compiled post-norm node ran for S>1 regardless of the
+`MLX_COMPILED_DECODE` env var; the eager `RMSNormGated` fallback is bit-identical, so this
+makes the env-var opt-out complete and consistent with the other three fusions).
+
+**Verification (active fork `../mlx-swift-lm`):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean.
+* `swift test --filter Qwen35GDNDecodeBitwiseTests`: **PASS** (decodeConv bit-pinned).
+* `swift test --filter Qwen35FusedGDNProjection`: 15 tests, 1 skipped, 0 failures
+  (full GDN forward bit-identical for decode/prefill, VLM forward, checkpoint topology).
+* Sanitize / CompiledDecodeLifecycle / MRoPE / DirectExpertReduction suites: 13 tests, 0 failures.
+* Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
 * **Primary Bottleneck Identified:** Step latency (~151 ms) is dominated by standard eager-mode backbone execution in `Qwen35.swift` (1,692 lines).
