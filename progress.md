@@ -31,6 +31,42 @@ A 3-layer speculative decoding server for Qwen 3.8 / 3.5 architectures using App
 
 ---
 
+## v1.1-Performance — Progress Log
+
+### Checkpoint 1: Fused `compile(shapeless:)` activation blocks (DONE)
+Ported the 4 `compile(shapeless: true)` fusion blocks from the legacy 6,088-line `Qwen35.swift`
+into the active fork (`../mlx-swift-lm`), each with an eager fallback gated by
+`MLXHardwareInfo.isCompiledDecodeSupported` (`MLX_COMPILED_DECODE` env override). The shapes are
+small/fixed, so they are immune to the Tahoe Metal JIT zero-result bug that affects whole-model
+compilation.
+
+| Fusion | Eager replacement | Wired into |
+| :--- | :--- | :--- |
+| `qwen35CompiledFusedSwiGLU` | `silu(gate) * up` | `Qwen3NextMLP` (dense MLP + MoE shared expert) |
+| `qwen35CompiledSigmoidMultiply` | `x * sigmoid(gate)` | `Qwen35Attention.mergeHeadsAndProject` + MoE shared-expert gate |
+| `qwen35CompiledGatedDeltaGBeta` | `exp(-exp(A_log)*softplus(a+dt_bias))` + `sigmoid(b)` (previously computed ×2) | `Qwen35GatedDeltaNet` prologue — computed once, reused for the recurrence and the MTP replay tape |
+| `qwen35CompiledGatedDeltaPostNorm` | `preciseSwiGLU` (rmsNorm + silu-gate) | `Qwen35GatedDeltaNet` post-norm (S>1; S==1 keeps `RMSNormGated`) |
+
+Also split `gatedDeltaUpdate` into a prepared-input overload (`g`/`beta`) so the GDN no longer
+re-derives the prologue per call.
+
+**Verification (active fork `../mlx-swift-lm`):**
+* `swift build --target MLXLLM` and `swift build --build-tests --force-resolved-versions`: clean
+  (`git diff --check` clean; 4 files: `Qwen35.swift`, `Qwen3Next.swift`, `GatedDelta.swift`,
+  new `MLXLMCommon/MLXHardwareInfo.swift`).
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 aggregate acceptance
+  **93.46%** (1072/1147); logit max-divergence vs target `postNorm: true => 16.25`,
+  `postNorm: false => 14.0` (finite, aligned). Confirms the `compile(shapeless:)` fusions
+  (incl. `MLXFast.rmsNorm` in the post-norm) are bit-exact at runtime.
+* **tEvalMs / TTLT step-trace measurement: PENDING** — requires launching the server with
+  `QWEN_MTP_STEP_TRACE=1` + a 1,024-token request (Checkpoint 3). The full ~163→24 ms recovery
+  is expected to need both Checkpoint 1 (this) **and** Checkpoint 2 (20 pinned MSL kernels).
+
+### Checkpoint 2 (NEXT): Pinned MSL attention kernels
+Port `qwen35_attention_qk_rms_rope_bf16_v1` and the remaining pinned `MLXFast.metalKernel`
+attention fusions into `Qwen35Attention.callAsFunction` (QK RMSNorm + RoPE → fused Metal kernel
+when compiled decode is supported), then re-measure `tEvalMs` / TTLT via the step-trace.
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
 * **Primary Bottleneck Identified:** Step latency (~151 ms) is dominated by standard eager-mode backbone execution in `Qwen35.swift` (1,692 lines).
