@@ -34,138 +34,125 @@ A 3-layer speculative decoding server for Qwen 3.8 / 3.5 architectures using App
 ## v1.1-Performance — Progress Log
 
 ### Checkpoint 1: Fused `compile(shapeless:)` activation blocks (DONE)
-Ported the 4 `compile(shapeless: true)` fusion blocks from the legacy 6,088-line `Qwen35.swift`
-into the active fork (`../mlx-swift-lm`), each with an eager fallback gated by
-`MLXHardwareInfo.isCompiledDecodeSupported` (`MLX_COMPILED_DECODE` env override). The shapes are
-small/fixed, so they are immune to the Tahoe Metal JIT zero-result bug that affects whole-model
-compilation.
+Ported the 4 `compile(shapeless: true)` fusion blocks from the legacy 6,088-line `Qwen35.swift` into the active fork (`../mlx-swift-lm`), each with an eager fallback gated by `MLXHardwareInfo.isCompiledDecodeSupported` (`MLX_COMPILED_DECODE` env override). The shapes are small/fixed, so they are immune to the Tahoe Metal JIT zero-result bug that affects whole-model compilation.
 
 | Fusion | Eager replacement | Wired into |
 | :--- | :--- | :--- |
 | `qwen35CompiledFusedSwiGLU` | `silu(gate) * up` | `Qwen3NextMLP` (dense MLP + MoE shared expert) |
 | `qwen35CompiledSigmoidMultiply` | `x * sigmoid(gate)` | `Qwen35Attention.mergeHeadsAndProject` + MoE shared-expert gate |
-| `qwen35CompiledGatedDeltaGBeta` | `exp(-exp(A_log)*softplus(a+dt_bias))` + `sigmoid(b)` (previously computed ×2) | `Qwen35GatedDeltaNet` prologue — computed once, reused for the recurrence and the MTP replay tape |
+| `qwen35CompiledGatedDeltaGBeta` | `exp(-exp(A_log)*softplus(a+dt_bias))` + `sigmoid(b)` | `Qwen35GatedDeltaNet` prologue (computed once, reused for recurrence and MTP replay tape) |
 | `qwen35CompiledGatedDeltaPostNorm` | `preciseSwiGLU` (rmsNorm + silu-gate) | `Qwen35GatedDeltaNet` post-norm (S>1; S==1 keeps `RMSNormGated`) |
 
-Also split `gatedDeltaUpdate` into a prepared-input overload (`g`/`beta`) so the GDN no longer
-re-derives the prologue per call.
+Split `gatedDeltaUpdate` into a prepared-input overload (`g`/`beta`) so the GDN no longer re-derives the prologue per call.
 
 **Verification (active fork `../mlx-swift-lm`):**
-* `swift build --target MLXLLM` and `swift build --build-tests --force-resolved-versions`: clean
-  (`git diff --check` clean; 4 files: `Qwen35.swift`, `Qwen3Next.swift`, `GatedDelta.swift`,
-  new `MLXLMCommon/MLXHardwareInfo.swift`).
-* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 aggregate acceptance
-  **93.46%** (1072/1147); logit max-divergence vs target `postNorm: true => 16.25`,
-  `postNorm: false => 14.0` (finite, aligned). Confirms the `compile(shapeless:)` fusions
-  (incl. `MLXFast.rmsNorm` in the post-norm) are bit-exact at runtime.
-* **tEvalMs / TTLT step-trace measurement: PENDING** — requires launching the server with
-  `QWEN_MTP_STEP_TRACE=1` + a 1,024-token request (Checkpoint 3). The full ~163→24 ms recovery
-  is expected to need both Checkpoint 1 (this) **and** Checkpoint 2 (20 pinned MSL kernels).
+* `swift build --target MLXLLM` and `swift build --build-tests --force-resolved-versions`: clean (`git diff --check` clean across `Qwen35.swift`, `Qwen3Next.swift`, `GatedDelta.swift`, `MLXHardwareInfo.swift`).
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 aggregate acceptance **93.46%** (1072/1147); logit max-divergence vs target `postNorm: true => 16.25`, `postNorm: false => 14.0`.
 
-### Checkpoint 2a: Pinned QK RMSNorm + RoPE Metal kernel (`qwen35_attention_qk_rms_rope_bf16_v1`) (DONE)
-Ported the fused Q & K RMSNorm + partial (64-dim) RoPE kernel from the `qwen-mtp-server`
-vendor copy into the active fork:
+---
 
-* **`Qwen35Kernels.swift`:** full MSL shader + `qwen35AttentionQKRMSRoPE` wrapper (reads
-  `[B,L,H,D]` Q/K, writes row-contiguous `[B,H,L,D]` outputs; grid `(totalRows*64,1,1)`,
-  `ensureRowContiguous: false`).
-* **`Qwen35+FastPath.swift`:** new `extension Qwen35Attention { forwardFastPath }` — calls the
-  fused kernel when compiled decode is supported AND the Qwen 3.8-27B geometry applies
-  (`usesFusedQKPreparation`) AND a scalar RoPE offset + `L <= 32` + bf16 Q/K/weights;
-  otherwise the exact eager `projectPreRope` + `applyRotaryPosition` path (bit-identical to
-  the vendor-shaped `callAsFunction`).
-* **`Qwen35.swift`:** 2-line guard hook at the top of `Qwen35Attention.callAsFunction`
-  (`if MLXHardwareInfo.isCompiledDecodeSupported { return forwardFastPath(...) }`) plus stored
-  `usesFusedQKPreparation` / `ropeLog2Base`. Eager path unchanged.
+### Checkpoint 2a: Pinned QK RMSNorm + RoPE Metal kernel (DONE)
+Ported the fused Q & K RMSNorm + partial (64-dim) RoPE kernel (`qwen35_attention_qk_rms_rope_bf16_v1`) from the vendor copy into the active engine fork:
 
-Gate (27B-only): `attentionHeads == 24 && kvHeads == 4 && headDim == 256 && ropeDims == 64
-&& ropeTheta == 10_000_000 && ropeType == "default"` (ropeType from
-`ropeScaling["type"] ?? ["rope_type"]`, default `"default"`).
+* **`Qwen35Kernels.swift`:** MSL shader + `qwen35AttentionQKRMSRoPE` wrapper (reads `[B,L,H,D]` Q/K, writes row-contiguous `[B,H,L,D]` outputs; grid `(totalRows*64,1,1)`, `ensureRowContiguous: false`).
+* **`Qwen35+FastPath.swift`:** `extension Qwen35Attention { forwardFastPath }` — calls the fused kernel when compiled decode is supported AND Qwen 3.8-27B geometry applies (`usesFusedQKPreparation`) AND scalar RoPE offset + `L <= 32` + bf16 Q/K/weights.
+* **`Qwen35.swift`:** Lightweight 2-line guard hook at the top of `Qwen35Attention.callAsFunction` plus stored `usesFusedQKPreparation` / `ropeLog2Base`.
+
+**Gate (27B-only):** `attentionHeads == 24 && kvHeads == 4 && headDim == 256 && ropeDims == 64 && ropeTheta == 10_000_000 && ropeType == "default"`.
 
 **Verification (active fork `../mlx-swift-lm`):**
 * `swift build --target MLXLLM`: clean; `git diff --check`: clean.
-* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 aggregate acceptance
-  93.46% (1072/1147); logit max-divergence vs target `postNorm: true => 16.25`,
-  `postNorm: false => 14.0` (finite, aligned).
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — 93.46% (1072/1147).
 * Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
 
-The step-trace re-measurement for the fused QK RMSNorm + RoPE kernel is complete — see
-Checkpoint 3 below. The remaining pinned attention fusions (beyond QK RMSNorm + RoPE)
-are still to be ported.
-
-### Checkpoint 3: Step-trace benchmark of the fused QK RMSNorm + RoPE kernel (DONE)
-
-Release build of `qwen38-mtp-server` run with `QWEN_MTP_STEP_TRACE=1`, greedy (`temperature: 0.0`),
-`enable_thinking: false`, 1,024-token request (prompt 38 tokens, total 1,062 tokens, `finish_reason: length`).
-The fused `qwen35_attention_qk_rms_rope_bf16_v1` kernel is active (compiled decode on by default).
+## Performance Checkpoint 2a & Diagnostic Metrics
+Release build of `qwen38-mtp-server` evaluated with `QWEN_MTP_STEP_TRACE=1`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token request (prompt: 38 tokens, total completion: 1,024 tokens, `finish_reason: length`).
 
 **MTP-STEP-SUMMARY (per-request, stderr):**
-```
 rounds=426 proposed=1086 accepted=599 acceptedPerStep=1.4061 avgStepMs=116.6788 decodeSeconds=49.7432 committed=1024
-```
 
-**Per-round timing breakdown (426 rounds, `STEP-TRACE`):**
-| Component | avg ms | | :--- | :--- | :--- |
+**Per-round timing breakdown (426 rounds):**
+| Component | avg ms | Notes |
+| :--- | :--- | :--- |
 | `tGraphBuildMs` | 9.98 | Metal graph build per round |
 | `tEvalMs` | **104.92** | Target eval (draft verify + bonus token) |
 | `tHostReadMs` | 0.02 | Host readback |
 | `tCacheStateMs` | 1.63 | KV-cache state mutation |
-| `stepMs` (total) | 116.55 | = sum of the components above |
+| `stepMs` (total) | 116.55 | Sum of components above |
 
-**`/metrics` (post-run):** `mean_mtp_acceptance_rate=0.5516`, `average_ttft_seconds=0.3435`,
-`total_completion_tokens=1024`, `total_prompt_tokens=38`, `total_requests=1`, `cancelled_requests=0`.
-
-**Checkpoint 3 vs v1.0-baseline:**
-| Metric | v1.0-baseline | Checkpoint 3 (fused kernel) | Delta |
+**Checkpoint 2a vs v1.0-baseline:**
+| Metric | v1.0-baseline | Checkpoint 2a (fused QK-RoPE) | Delta |
 | :--- | :--- | :--- | :--- |
 | **Step Latency (`avgStepMs`)** | ~151 ms/round | **116.68 ms/round** | −34.3 ms (−22.7%) |
 | **`tEvalMs`** | ~163 ms (roadmap est.) | **104.92 ms** | −58.1 ms (−35.6%) |
 | **Decoding Throughput (TTLT)** | ~14.7–17.0 tok/s | **~20.6 tok/s** (1024 / 49.74 s) | +3.6–5.9 tok/s (+21–40%) |
-| **TTFT** | ~0.44–0.65 s | 0.3435 s | at/below range |
-| **accepted/step** | — | **1.4061** | — |
-| **MTP draft acceptance** | ~93.5% raw / ~74.1% live (thinking OFF) / ~55.1% (thinking ON) | 55.15% (599/1086) | prompt-specific (high-entropy essay) |
+| **TTFT** | ~0.44–0.65 s | 0.3435 s | at/below baseline range |
+| **Accepted / Step** | — | **1.4061** | — |
+| **MTP Draft Acceptance** | ~93.5% raw / ~74.1% live | 55.15% (599/1086) | Prompt-specific (high-entropy essay) |
 
-Notes:
-* `avgStepMs` = wall-clock per speculative round; `decodeSeconds` = decode-only wall time (prefill excluded); TTLT = committed / `decodeSeconds`.
-* Wall-clock (curl) for the full request = 50 s ≈ `decodeSeconds` 49.74 s + prefill/TTFT 0.34 s.
-* A single fused kernel (QK RMSNorm + RoPE — 1 of the ~20 planned pinned MSL kernels) moves `avgStepMs` ~151 → ~116.7 ms, `tEvalMs` ~163 → ~104.9 ms, and TTLT ~14.7–17 → ~20.6 tok/s: a real but partial gain, consistent with only Checkpoint 2a done. The full Checkpoint 2 target (~24 ms `tEval` / ~25+ tok/s) still requires the remaining fusions.
-* `mean_mtp_acceptance_rate` (55.15% = accepted/proposed) is prompt-specific for this high-entropy technical essay; the baseline live-chat figures are context-entropy estimates, so this is not a like-for-like regression.
+---
 
-### Refactor: fast-path extraction out of `Qwen35.swift` (DONE)
-Moved all custom fast-path additions out of `Qwen35.swift` into dedicated files to keep the
-vendor-shaped file close to upstream (fork diff shrank from ~676 lines to ~30):
+### Checkpoint 2b: Fused residual+RMSNorm + routed wide QMV projection kernels (DONE)
+Ported the remaining fused MSL projection/norm kernels from the legacy `Qwen35.swift` reference into the active engine fork:
 
-* **New `Libraries/MLXLLM/Models/Qwen35+FastPath.swift`:** the four `compile(shapeless: true)`
-  fusion closures + gated wrappers (`qwen35CompiledFusedSwiGLU`, `qwen35CompiledSigmoidMultiply`,
-  `qwen35CompiledGatedDeltaGBeta`, `qwen35CompiledGatedDeltaPostNorm`), `MLXHardwareInfo` (moved
-  from `MLXLMCommon`), and a `Qwen35GatedDeltaNet` fast-path extension
-  (`postNormGated`, `prefixReplayTape`, `applyReplayTape`, `canReplayPrefix`, `replayPrefix`).
-* **New `Libraries/MLXLLM/Models/Qwen35Kernels.swift`:** designated home for the pinned MSL
-  shaders / `MLXFast.metalKernel` defs. `Qwen35.swift` currently contains no raw MSL shader
-  code (the Checkpoint 2 kernels will be added here), so the file is a documented placeholder.
-* **`Qwen35.swift`:** inline fast-path logic in `forward`/`callAsFunction` replaced with
-  1-line hooks (`qwen35CompiledGatedDeltaGBeta`, `prefixReplayTape(...)`,
-  `postNormGated(out, gate: z, sequence: S)`, `applyReplayTape(replayTape, to: cache)`);
-  fusion section and replay-prefix methods removed; the stored `postNorm` property stays
-  (stored properties cannot live in an extension).
-* **Deleted `Libraries/MLXLMCommon/MLXHardwareInfo.swift`** (content moved to MLXLLM;
-  no other target referenced it).
+* **`Qwen35Kernels.swift`:**
+  * Fused residual+RMSNorm MSL shader + 2 kernel factories and the `qwen35FusedResidualRMSNorm` wrapper: one launch writes `residual = r + x` and `normed = rmsnorm(residual, weight)` (grid `(nRows*1024,1,1)`, `ensureRowContiguous: false`).
+  * `qwen35E120QMVSource` MSL: wide (rows-per-SIMD=4) + m-wrapper QMV templates with 4-bit group-64 dequant; 3 kernel factories: affine-4, affine-4-table (`USE_TABLE` template), and the xsums sidecar variant.
+  * `Qwen35CustomQMV` enum, `qwen35RoutedQuantizedMM` dispatcher (routed for M in 2..9, eager `quantizedMM` otherwise), and `qwen35RoutedLinear` (guards: `layer as? QuantizedLinear`, `q.bias == nil`; falls back to `layer(x)`).
+* **`Qwen35+FastPath.swift`:** q/k/v projections routed via `qwen35RoutedLinear`; `mergeHeadsAndProject(…, routed: true)` routes the oProj.
+* **`Qwen35.swift`:** `mergeHeadsAndProject` gained a `routed: Bool = false` parameter; the decoder generic body fuses `r + rmsnorm(x)` via the fused kernel, gated on `isCompiledDecodeSupported` + BF16 + `dim == 5120` + contiguous strides, with the exact eager fallback.
 
-**Behavior note:** `postNormGated` is now gated by `MLXHardwareInfo.isCompiledDecodeSupported`
-for S>1 (previously the compiled post-norm node ran for S>1 regardless of the
-`MLX_COMPILED_DECODE` env var; the eager `RMSNormGated` fallback is bit-identical, so this
-makes the env-var opt-out complete and consistent with the other three fusions).
+**Decode-path activation note:** the wide QMV switch covers M = 2..9, so single-token decode (M = 1) falls back to eager `layer(x)` — the projection routing is active for multi-token shapes; the residual+RMSNorm fusion is active for every decode token (row-parallel kernel).
 
 **Verification (active fork `../mlx-swift-lm`):**
 * `swift build --target MLXLLM`: clean; `git diff --check`: clean.
-* `swift test --filter Qwen35GDNDecodeBitwiseTests`: **PASS** (decodeConv bit-pinned).
-* `swift test --filter Qwen35FusedGDNProjection`: 15 tests, 1 skipped, 0 failures
-  (full GDN forward bit-identical for decode/prefill, VLM forward, checkpoint topology).
-* Sanitize / CompiledDecodeLifecycle / MRoPE / DirectExpertReduction suites: 13 tests, 0 failures.
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 acceptance **93.46%** (1072/1147); logit max-divergence vs target `16.25` / `14.0` (unchanged from 2a).
 * Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+## Performance Checkpoint 2b & Diagnostic Metrics
+Release build of `qwen38-mtp-server` evaluated with `QWEN_MTP_STEP_TRACE=1`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token essay-prompt request (`finish_reason: length`). Two identical runs (greedy ⇒ deterministic; wall 46.40 s / 46.38 s).
+
+**MTP-STEP-SUMMARY (per-request, stderr, run 1):**
+rounds=385 proposed=1042 accepted=641 acceptedPerStep=1.6649 avgStepMs=119.8347 decodeSeconds=46.1632 committed=1024
+
+**Per-round timing breakdown (385 rounds, phase averages over both runs):**
+| Component | Checkpoint 2a | Checkpoint 2b | Delta |
+| :--- | :--- | :--- | :--- |
+| `tGraphBuildMs` | 9.98 | 10.87 | +0.89 |
+| `tEvalMs` | **104.92** | **107.93** | +3.01 |
+| `tHostReadMs` | 0.02 | 0.02 | ~0 |
+| `tCacheStateMs` | 1.63 | 0.89 | −0.74 |
+| `stepMs` (total) | 116.68 | 119.76 | +3.08 |
+
+**Checkpoint 2b vs 2a vs v1.0-baseline:**
+| Metric | v1.0-baseline | Checkpoint 2a (fused QK-RoPE) | Checkpoint 2b (+fused residual, routed QMV) |
+| :--- | :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | ~151 ms/round | 116.68 ms/round | **119.80 ms/round** (+3.12 vs 2a) |
+| **`tEvalMs`** | ~163 ms (roadmap est.) | 104.92 ms | **107.93 ms** |
+| **Decoding Throughput (TTLT)** | ~14.7–17.0 tok/s | ~20.6 tok/s | **~22.2 tok/s** (1024 / 46.15 s) |
+| **Accepted / Step** | — | 1.4061 | **1.6649** (prompt-specific) |
+
+**Caveats:**
+* The +3.1 ms step regression vs 2a is one extra Metal kernel op in the decode graph (fused residual+RMSNorm launch: `tEval` +3.0 ms, `tGraphBuild` +0.9 ms).
+* TTLT improved +7.7% because this prompt yields a higher accepted-per-step (1.66 vs 1.41) — prompt-entropy dependent, not kernel-attributable.
+* Wide QMV routing is inactive at M = 1, so the 2b delta over 2a is effectively the fused residual+RMSNorm fusion only.
+* The ~24 ms `tEvalMs` target still requires attention-layer kernels and an M = 1 QMV dispatch (decode is the dominant shape).
+
+---
+
+### Refactor: Fast-path extraction out of `Qwen35.swift` (DONE)
+Extracted custom fast-path additions out of `Qwen35.swift` into modular files to minimize vendor drift (fork diff reduced from ~676 lines to ~30):
+
+* **`Qwen35+FastPath.swift`:** 4 `compile(shapeless: true)` closures, `MLXHardwareInfo`, and `Qwen35GatedDeltaNet` fast-path extension (`postNormGated`, `prefixReplayTape`, `applyReplayTape`, `canReplayPrefix`, `replayPrefix`).
+* **`Qwen35Kernels.swift`:** MSL shader definitions and `MLXFast.metalKernel` wrappers.
+* **`Qwen35.swift`:** Restored close to stock vendor shape, using 1-line hooks delegating to fast-path extensions.
+
+**Behavior Note:** `postNormGated` is now consistently gated by `MLXHardwareInfo.isCompiledDecodeSupported` for $S > 1$.
+
+---
 
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
-* **Primary Bottleneck Identified:** Step latency (~151 ms) is dominated by standard eager-mode backbone execution in `Qwen35.swift` (1,692 lines).
-* **Target Optimization:** Port the legacy fused backbone (6,088 lines) containing 20 pinned MSL kernels (`qwen35_attention_qk_rms_rope_bf16_v1`) and 4 `compile(shapeless:)` fusion blocks into `mlx-swift-lm`.
-* **Expected Recovery:** Reduce `tEval` from ~163 ms to ~24 ms, restoring target decoding throughput to **~25+ tok/sec**.
+* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), and the structural refactor completed. Step latency reduced from ~151 ms to 119.80 ms; TTLT ~22.2 tok/s.
+* **Pending Scope (Checkpoint 2c):** Attention-layer fused kernels and an M = 1 wide QMV dispatch so the projection path applies to single-token decode (the dominant shape).
+* **Target Milestone:** Reduce `tEvalMs` from 107.93 ms to ~24 ms, achieving decoding throughput of **~30+ tok/sec**.
