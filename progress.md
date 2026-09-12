@@ -151,8 +151,45 @@ Extracted custom fast-path additions out of `Qwen35.swift` into modular files to
 
 ---
 
+### Checkpoint 2b-fix: QMV dispatch fixes + fast-path extraction completion (DONE)
+Fixed five defects in the wide QMV dispatch in `Qwen35Kernels.swift` and completed the fast-path extraction into `Qwen35+FastPath.swift`:
+
+**`Qwen35Kernels.swift` — five QMV dispatch fixes:**
+1. **Dtype guard:** `weight.dtype == .uint32` (was `.bfloat16`) — 4-bit packed weights are `uint32`.
+2. **Dimension check:** `scales.dim(1) * 64 == x.dim(1)`, `x.dim(1) == weight.dim(1) * 8`, and `k = x.dim(1)` (original feature dim; was `weight.dim(1)`, the packed k/4).
+3. **Array count/order:** no-table dispatch passes exactly `[weight, scales, z, x]` (4 arrays); table dispatch passes `[weight, scales, z, x, xsums]` (5 arrays). The spurious `out` input was removed (`out` belongs in `outputShapes`/`outputDTypes`), and the `template:` argument was removed from the no-table kernel.
+4. **Row-tile offset:** `qmv_out_row = int(qmv_tid.y) * 32 + int(qmv_sgid)` (was `* 8 + * 4` — a 4× offset into the output rows).
+5. **Grid:** per-M `ipg(for:)` SIMD-group width (2→2, 3→3, 4→4, 5→5, 6→3, 7→4, 8→4, 9→3); grid = `((m + ipg - 1) / ipg, n / 32, 1)` — the old uniform tile was OOB for M = 5.
+
+`qwen35CustomAffine4QMVTableKernel` visibility changed from `private` to internal for test access.
+
+**Fast-path extraction completion (`Qwen35.swift` → `Qwen35+FastPath.swift`):**
+* GDN `hasFusedInputProjection`, `prepareFusedInputProjection`, `projectInputs` moved into `extension Qwen35GatedDeltaNet`.
+* Attention `projectPreRope` and `mergeHeadsAndProject` moved into `extension Qwen35Attention`.
+* DecoderLayer fused-residual eligibility moved into `extension Qwen35DecoderLayer.applyResidualNorm`, backed by a `Qwen35FastPathFlags` cache (`rmsNormIsBF16`, `fusedResidualEligible`) resolved once per layer on first use. The stored `cachedFastPathFlags` property is declared in the class body because extensions in a separate file cannot add stored properties.
+
+**Decisions:**
+* No M ≥ 2 gate on `applyResidualNorm`: the residual+RMSNorm kernel accepts any row count (M = 1 decode included); the xsums sidecar gates its own per-M xsums arm independently (`Qwen35CustomQMV.widths.contains(rows) && tablePays(m:)`).
+* `Qwen35FastPathFlags` is a 2-field per-layer struct rather than the planned 4-field model-level struct: the Attention `usesFusedQKPreparation` gate is already an init-time `let` (pure config geometry), layers have no back-reference to the model, and the only per-token invariant re-check worth caching is the decoder-layer residual gate.
+* M = 1 wide QMV dispatch remains a gap (checkpoint 2c); single-token decode falls back to eager `layer(x)`.
+
+**Root-cause note:** the +3.1 ms step regression vs checkpoint 2a is the fused residual+RMSNorm kernel launch itself (`tEval` +3.0 ms, `tGraphBuild` +0.9 ms), not the QMV dispatch; the five QMV fixes restore correctness of the wide path (active for M = 2..9 verify shapes) but do not remove that delta.
+
+**Verification (active fork `../mlx-swift-lm` + server):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean (engine: 3 files, +195/−126).
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 acceptance **93.46%** (1072/1147); logit max-divergence vs target `16.25` / `14.0` (unchanged from 2a).
+* `swift test --filter Qwen35FusedGDNProjectionTests`: **15 passed, 1 skipped, 0 failures** (exercises the relocated GDN projection methods).
+* `swift build --target HTTPServer`: clean; full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+**Step-trace benchmark (release build, 1024 tokens, `QWEN_MTP_STEP_TRACE=1`, 437 decode rounds):**
+* `stepAvg = 115.21 ms`, `tEvalAvg = 104.21 ms`, `tGraphBuildAvg = 9.73 ms`, `tCacheStateAvg = 1.25 ms`, `tHostReadAvg = 0.019 ms`; greedy T=0 acceptance **93.46%**.
+* vs checkpoint 2b baseline (119.83 ms / 107.93 ms / 10.42 ms / 1.30 ms): step **-4.62 ms**, tEval **-3.72 ms** — the +3.1 ms regression is resolved (and the step is now below the clean 117.6 ms baseline as well).
+* Wall clock: 50.71 s for 1024 tokens (~20.2 tok/s).
+
+---
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
-* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), and the structural refactor completed. Step latency reduced from ~151 ms to 119.80 ms; TTLT ~22.2 tok/s.
+* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), and the structural refactor completed. Step latency reduced from ~151 ms to 115.21 ms (benchmark: tEvalAvg 104.21 ms, stepAvg 115.21 ms over 437 rounds, greedy T=0); TTLT ~20.2 tok/s (1024 tokens in 50.71 s wall).
 * **Pending Scope (Checkpoint 2c):** Attention-layer fused kernels and an M = 1 wide QMV dispatch so the projection path applies to single-token decode (the dominant shape).
 * **Target Milestone:** Reduce `tEvalMs` from 107.93 ms to ~24 ms, achieving decoding throughput of **~30+ tok/sec**.
