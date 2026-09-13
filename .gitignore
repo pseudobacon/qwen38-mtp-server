@@ -17,3 +17,7 @@ default.metallib
 # Benchmark / Trace Logs
 *.log
 *.json
+
+# DeepSeek Harness
+.dsh/
+.tmp/
