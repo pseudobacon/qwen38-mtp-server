@@ -64,7 +64,17 @@ Both packed projections live in main via the `FusedQuantizedLinearProjection` ma
   - `essay-1024.txt` (38 prompt tokens) — SHA-256 `7ed683f87be0835c751505e2ee7dfc18fd922b93bcc32fad05d86c158cfb040e`; greedy stream 599/1086 over 426 rounds, acceptedPerStep 1.4061, stream hash `949b9423…`.
   - `specdec-800.txt` (62 prompt tokens) — stream 645/1008 over 380 rounds, acceptedPerStep 1.6974, stream hash `139acb9d…`.
 - **Determinism gate**: greedy (temperature 0.0), `enable_thinking: false`, `max_tokens: 1024`, `finish_reason: length`; every cell must reproduce the fixture's accepted counts and stream hash, else the run is discarded as a correctness/protocol failure, not reported as a performance delta.
-- **Session discipline**: fresh server per cell (port 18099), `QWEN_MTP_STEP_TRACE=1`, rep 1 discarded as warmup, 5 measured reps, interleaved cell order so thermal drift hits cells evenly, no parallel builds/tests during timing. **Cross-session absolute latencies are not comparable** (observed 116–124 ms vs 135–165 ms bands for identical code under different thermal conditions) — only in-session deltas are valid. Fusion engagement is verified from the load-time summary (`backbone swiGLU 64/64 qkv 16/16 gdn 48/48; head …`), not from RSS.
+- **Session discipline**: fresh server per cell (port 18099), `QWEN_MTP_STEP_TRACE=1`, rep 1 discarded as warmup, 5 measured reps, interleaved cell order so thermal drift hits cells evenly, no parallel builds/tests during timing, per-rep thermal state logged (pmset -g therm, wired into benchmarks/run_phase3.sh). 
+- **Cross-session absolute latencies are not comparable** (observed 116–124 ms vs 135–165 ms bands for identical code under different thermal conditions) — only in-session deltas are valid. Fusion engagement is verified from the load-time summary (`backbone swiGLU 64/64 qkv 16/16 gdn 48/48; head …`), not from RSS.
+- **Binary and repo provenance**: every cell's JSONL record carries
+  `binary_sha256` (the release binary actually launched), `binary_mtime`,
+  `server_head`, `engine_head`, and `server_dirty` / `engine_dirty` flags,
+  emitted by `benchmarks/run_cell.sh`. All cells in one matrix must share a
+  single `binary_sha256` — a mismatch means the binary changed mid-matrix and
+  the run is discarded. Before any timing: force-recompile changed engine
+  modules (SwiftPM incremental state may not invalidate them — the Phase 3
+  stale-binary trap, `03231f16…` vs `88e27643…`), and headline runs require
+  both worktrees `clean`.
 - **Result artifacts**: `benchmarks/results/*.jsonl`, `benchmarks/FUSION_REPORT.md`.
 
 ### Headline throughput (conditions-labeled — not cross-comparable)

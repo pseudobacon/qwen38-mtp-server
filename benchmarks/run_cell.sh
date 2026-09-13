@@ -22,6 +22,22 @@ esac
 
 FIXTURE_HASH=$(shasum -a 256 "$PROMPT_FILE" | awk '{print $1}')
 
+# --- provenance: the binary actually launched + repo HEADs -----------------
+ENGINE=/Users/cwong/ai/mlx-swift-lm
+SERVER_BIN=$SERVER/.build/release/qwen38-mtp-server
+
+BIN_SHA256=$(shasum -a 256 "$SERVER_BIN" 2>/dev/null | awk '{print $1}')
+BIN_MTIME=$(stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%S' "$SERVER_BIN" 2>/dev/null)
+SERVER_HEAD=$(git -C "$SERVER" rev-parse --short HEAD 2>/dev/null)
+ENGINE_HEAD=$(git -C "$ENGINE" rev-parse --short HEAD 2>/dev/null)
+SERVER_DIRTY=$([ -z "$(git -C "$SERVER" status --porcelain 2>/dev/null)" ] && echo clean || echo dirty)
+ENGINE_DIRTY=$([ -z "$(git -C "$ENGINE" status --porcelain 2>/dev/null)" ] && echo clean || echo dirty)
+
+if [ -z "$BIN_SHA256" ]; then
+  echo "{\"error\":\"release binary missing at $SERVER_BIN — build before benchmarking\"}"
+  exit 1
+fi
+
 STDERR_LOG=/tmp/mtp-bench-$TAG.stderr
 STDOUT_LOG=/tmp/mtp-bench-$TAG.stdout
 RESPONSE=/tmp/mtp-bench-$TAG.response.json
@@ -36,7 +52,7 @@ sleep 1
 ENV_PREFIX="QWEN_MTP_STEP_TRACE=1"
 for kv in $ENVSPEC; do ENV_PREFIX="$ENV_PREFIX $kv"; done
 
-env $ENV_PREFIX ./.build/release/qwen38-mtp-server serve --port "$PORT" --model ./weights \
+env $ENV_PREFIX "$SERVER_BIN" serve --port "$PORT" --model ./weights \
   > "$STDOUT_LOG" 2> "$STDERR_LOG" &
 SRV=$!
 
@@ -45,7 +61,7 @@ for i in $(seq 1 150); do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/readyz" 2>/dev/null)
   if [ "$CODE" = "200" ]; then break; fi
   if ! kill -0 $SRV 2>/dev/null; then
-    echo "{"error":"SERVER DIED during load"}"
+    echo '{"error":"SERVER DIED during load"}'
     exit 1
   fi
   sleep 2
@@ -82,11 +98,22 @@ kill $SRV 2>/dev/null
 pkill -f "qwen38-mtp-server serve --port $PORT" 2>/dev/null
 wait $SRV 2>/dev/null
 
-/tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" <<'PYEOF'
+/tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" \
+  "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" <<'PYEOF'
 import json, sys, hashlib
 
-tag, stderr_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:9]
-out = {"tag": tag, "fixture_hash": fixture_hash}
+tag, stderr_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:8]
+bin_sha256, bin_mtime, server_head, engine_head, server_dirty, engine_dirty = sys.argv[8:14]
+out = {
+    "tag": tag,
+    "fixture_hash": fixture_hash,
+    "binary_sha256": bin_sha256,
+    "binary_mtime": bin_mtime,
+    "server_head": server_head,
+    "engine_head": engine_head,
+    "server_dirty": server_dirty,
+    "engine_dirty": engine_dirty,
+}
 
 try:
     wall_seconds = float(wall_seconds)
@@ -104,10 +131,10 @@ except Exception:
 
 # tokenization with the model's HF tokenizer (same tokenizer.json the server uses)
 from tokenizers import Tokenizer
-tok = Tokenizer.from_file("/Users/cwong/ai/qwen-mtp-server/weights/tokenizer.json")
+tok = Tokenizer.from_file("/Users/cwong/ai/qwen38-mtp-server/weights/tokenizer.json")
 try:
     from jinja2 import Template
-    tmpl = Template(open("/Users/cwong/ai/qwen-mtp-server/weights/chat_template.jinja").read())
+    tmpl = Template(open("/Users/cwong/ai/qwen38-mtp-server/weights/chat_template.jinja").read())
     rendered = tmpl.render(
         messages=req["messages"],
         enable_thinking=False,
