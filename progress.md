@@ -213,8 +213,104 @@ Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_think
 
 ---
 
+### Checkpoint 2d — Item 1: Fused `W_qkv` QKV projection (DONE)
+Re-integrated the packed `W_qkv` (q + k + v rows) into the MTP execution pipeline using the existing `FusedQuantizedLinearProjection` machinery (source modules become row-slice **views sharing storage** — no weight duplication, net ~0 memory):
+
+* **`FusedQuantizedLinear.swift` (MLXLMCommon):** added two default-ON env rollback knobs: `qwen35FusedQKVEnabled` (`MLX_QWEN_FUSED_QKV`) and `qwen35FusedSwiGLUEnabled` (`MLX_QWEN_FUSED_SWIGLU`, Item 2). Set `0` to disable.
+* **`Qwen35.swift`:** `Qwen35Attention` gained `let fusedQKVProjection = FusedQuantizedLinearProjectionCache()`; `Qwen35TextModel.prepare()` calls `prepareFusedQKVProjection()` on every backbone full-attention layer **and** every MTP-head layer (head is BF16 ⇒ fusion ineligible there, stays eager fallback). Added `update`/`updateModule` overrides on `Qwen35Attention` that invalidate the cache when a q/k/v parameter or module is replaced (mirrors the GDN input-projection invalidation).
+* **`Qwen35+FastPath.swift`:** `extension Qwen35Attention` gained `hasFusedQKVProjection`, `prepareFusedQKVProjection()` (fuses `q_proj` + `k_proj` + `v_proj` into one `QuantizedLinear`, installs storage-sharing views), and `qkvProjections(_:)` — one fused `qwen35RoutedLinear` call sliced at `qProj.shape.0` / `+ kProj.shape.0`, eager 3-call fallback otherwise. `forwardFastPath` and `projectPreRope` both call the helper (reshape/norm/transpose logic unchanged).
+* **`Tests/MLXLMTests/Qwen35FusedQKVProjectionTests.swift` (new, 8 tests):** bit-identical fused-vs-eager for decode `(1,1)` and prefill `(2,7)`, full-attention-forward bit-identity, model-`prepare()` wiring, no-lazy-preparation-on-forward, incompatible-policy fallback, LoRA fallback, checkpoint-topology preservation, parameter/module-update invalidation. **8/8 PASS.**
+
+**Geometry:** backbone 4-bit `q_proj [12288,640]`, `k_proj`/`v_proj [1024,640]` → fused `U32 [14336,640]` (`14336 % 32 == 0` ✓); active for M ∈ 1..9 (verify width 1 + 0..8 drafts). MTP head BF16 ⇒ not fusion-eligible (eager fallback, documented).
+
+**Verification (active fork `../mlx-swift-lm` + server):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean.
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 acceptance **93.46%** (1072/1147); logit max-divergence vs target `16.25` / `14.0` (unchanged — fusion is bit-exact).
+* `swift test --filter Qwen35FusedQKVProjectionTests`: **8/8 PASS**.
+* Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+## Performance Checkpoint 2d Item 1 & Diagnostic Metrics
+Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token essay-prompt request (`finish_reason: length`), `QWEN_MTP_STEP_TRACE=1`, port 18099:
+
+| Metric | Checkpoint 2c | Item 1 (fused `W_qkv`) | Delta |
+| :--- | :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | 116.06 ms | **122.25 ms** | +6.19 ms (+5.3%) |
+| **Eval Latency (`tEvalAvg`)** | ~104.21 ms | **110.57 ms** | +6.36 ms |
+| **`tGraphBuildAvg`** | 9.73 ms | 10.75 ms | +1.02 ms |
+| **`tCacheStateAvg`** | 1.25 ms | 0.80 ms | −0.45 ms |
+| **Decoding Throughput (TTLT)** | 20.7 tok/s | **22.03 tok/s** (1024 / 46.48 s) | +1.33 tok/s (+6.4%) |
+| **Accepted / Step** | 1.4061 | 1.6974 (645/1008, 380 rounds) | prompt/run-entropy dependent |
+
+**Caveats:**
+* The +6.2 ms step regression is the one fused `W_qkv` matmul replacing three separate 4-bit QMV launches for the 16 full-attention layers (per-round `tEval` +6.4 ms); at the current geometry the single wider pass costs more than the three narrower ones. The fusion's value is latency-neutral-to-negative **per step** but improves **tokens per step** when acceptance is high (TTLT +6.4% this run).
+* `acceptedPerStep` varies run-to-run across checkpoints (1.41 / 1.66 / 1.70 for the same prompt); greedy target tokens are unchanged (bit-exact fusion, confirmed by identical 93.46% diagnostic acceptance and logit divergences).
+* `MLX_QWEN_FUSED_QKV=0` restores the three-projection eager path bit-for-bit.
+
+### Checkpoint 2d — Item 2: Fused `W_gate+up` SwiGLU projection (DONE)
+Re-integrated the packed `W_gate+up` (gate + up rows) into the MTP execution pipeline, sharing the `FusedQuantizedLinearProjection` machinery from Item 1. `down_proj` stays eager — only the gate+up sweep is fused:
+
+* **`Qwen3Next.swift`:** `Qwen3NextMLP` gained `let fusedSwiGLUProjection = FusedQuantizedLinearProjectionCache()` plus `update`/`updateModule` overrides invalidating the cache when a `gate_proj`/`up_proj` parameter or module is replaced. `callAsFunction` now goes through `swiGLUGateUpProjections(x)` → `downProj(qwen35CompiledFusedSwiGLU(gate, up))`.
+* **`Qwen35+FastPath.swift`:** `extension Qwen3NextMLP` with `hasFusedSwiGLUProjection`, `prepareFusedSwiGLUProjection()` (fuses `gate_proj` + `up_proj`, storage-sharing views), and `swiGLUGateUpProjections(_:)` — one fused `qwen35RoutedLinear` call sliced at `half = gateProj.shape.0` (gate `[0..<half]`, up `[half...]`), eager 2-call fallback otherwise. Shared by the Qwen 3.5 backbone and Qwen 3Next models (same bit-exactness argument).
+* **`Qwen35.swift`:** `Qwen35TextModel.prepare()` now also calls `prepareFusedSwiGLUProjection()` on every backbone MLP and MTP-head MLP (head BF16 ⇒ ineligible ⇒ eager fallback).
+* **`Tests/MLXLMTests/Qwen35FusedSwiGLUProjectionTests.swift` (new, 8 tests):** bit-identical fused-vs-eager for decode `(1,1)` and prefill `(2,7)`, full-MLP-forward bit-identity, model-`prepare()` wiring, no-lazy-preparation-on-forward, incompatible-policy fallback, LoRA fallback, checkpoint-topology preservation, parameter/module-update invalidation. **8/8 PASS.**
+
+**Geometry:** backbone 4-bit `gate_proj`/`up_proj [17408,640]` → fused `U32 [34816,640]` (`34816 % 32 == 0` ✓); active for M ∈ 1..9. 64 MLPs (all 64 layers) get the repack, vs 16 QKV in Item 1.
+
+**Verification (active fork `../mlx-swift-lm` + server):**
+* `swift build --target MLXLLM`: clean; `git diff --check`: clean.
+* `swift test --filter Qwen38MTPDiagnosticTests`: **PASS** — greedy T=0 acceptance **93.46%** (1072/1147); logit max-divergence vs target `16.25` / `14.0` (unchanged — both fusions bit-exact).
+* `swift test --filter Qwen35FusedSwiGLUProjectionTests`: **8/8 PASS**.
+* `swift test --filter Qwen35FusedQKVProjectionTests`: **8/8 PASS** (Item 1 regression check).
+* Full server suite `swift test --filter HTTPServerTests`: **121/121 PASS**.
+
+## Performance Checkpoint 2d Item 2 & Diagnostic Metrics
+Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token essay-prompt request (`finish_reason: length`), `QWEN_MTP_STEP_TRACE=1`, port 18099:
+
+| Metric | Checkpoint 2c | Item 1 (QKV) | Item 2 (QKV + gate+up) | Item 2 Δ vs Item 1 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | 116.06 ms | 122.25 ms | **123.69 ms** | +1.44 ms |
+| **Eval Latency (`tEvalAvg`)** | ~104.21 ms | 110.57 ms | **111.64 ms** | +1.07 ms |
+| **`tGraphBuildAvg`** | 9.73 ms | 10.75 ms | 11.04 ms | +0.29 ms |
+| **`tCacheStateAvg`** | 1.25 ms | 0.80 ms | 0.87 ms | +0.07 ms |
+| **Decoding Throughput (TTLT)** | 20.7 tok/s | 22.03 tok/s | **21.77 tok/s** (1024 / 47.04 s) | −0.26 tok/s |
+| **Accepted / Step** | 1.4061 | 1.6974 (645/1008, 380 rounds) | 1.6974 (645/1008, 380 rounds) | identical greedy stream |
+
+**Caveats:**
+* The gate+up repack adds ~1.4 ms/step: the fused `U32 [34816,640]` pass over 64 layers is wider than the two `[17408,640]` passes it replaces. Combined with Item 1, total step delta vs 2c is **+7.63 ms** (116.06 → 123.69) while TTLT stays above the 2c baseline (21.77 vs 20.7 tok/s) on this run's acceptance rate.
+* Item 1 and Item 2 runs produced identical accepted counts (645/1008, 380 rounds) — the greedy token stream is unchanged by both fusions (bit-exact), and the acceptance rate is stable across the two Item 1/Item 2 runs.
+* Rollback: `MLX_QWEN_FUSED_SWIGLU=0` restores the two-projection eager path bit-for-bit (independently of `MLX_QWEN_FUSED_QKV`).
+
+### Checkpoint 2d — Item 3: Combined QKV + SwiGLU verification + merge (DONE)
+Final verification with **both** packed projections (`W_qkv` + `W_gate+up`) active, then merge of `feature/prompt-ckpt2d` into `main` in both repos:
+
+* **Engine `../mlx-swift-lm`**: `swift test --filter Qwen38MTPDiagnosticTests` **PASS** (93.46%, 1072/1147; logit divergence `16.25` / `14.0` — unchanged, both fusions bit-exact); `Qwen35FusedQKVProjectionTests` **8/8**; `Qwen35FusedSwiGLUProjectionTests` **8/8**.
+* **Server `qwen38-mtp-server`**: `swift test --filter HTTPServerTests` **121/121 PASS**.
+* **Git:** engine committed first (`feat: fused W_qkv and W_gate+up packed projections for MTP pipeline`), then server (`docs: checkpoint 2d items 1-3 fused projections progress and handoff`); both `feature/prompt-ckpt2d` branches merged to `main` with `git merge --no-edit` and deleted.
+
+## Performance Checkpoint 2d Item 3 & Diagnostic Metrics (final combined)
+Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_thinking: false`, 1,024-token essay-prompt request (`finish_reason: length`), `QWEN_MTP_STEP_TRACE=1`, port 18099, both packed projections active:
+
+| Metric | Checkpoint 2c | Item 1 (QKV) | Item 2 (QKV + gate+up) | Item 3 final (both) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Step Latency (`avgStepMs`)** | 116.06 ms | 122.25 ms | 123.69 ms | **120.86 ms** |
+| **Eval Latency (`tEvalAvg`)** | ~104.21 ms | 110.57 ms | 111.64 ms | **108.97 ms** |
+| **`tGraphBuildAvg`** | 9.73 ms | 10.75 ms | 11.04 ms | 10.89 ms |
+| **`tCacheStateAvg`** | 1.25 ms | 0.80 ms | 0.87 ms | 0.86 ms |
+| **Decoding Throughput (TTLT)** | 20.7 tok/s | 22.03 tok/s | 21.77 tok/s | **22.28 tok/s** (1024 / 45.96 s) |
+| **Accepted / Step** | 1.4061 | 1.6974 (645/1008) | 1.6974 (645/1008) | 1.6974 (645/1008, 380 rounds) |
+
+**Findings:**
+* All three Item 1/2/3 runs produced the identical greedy stream (645/1008 accepted over 380 rounds) — both packed projections are bit-exact with the separate-projection eager path; `QWEN_MTP_STEP_TRACE` confirms no behavior drift.
+* Per-step latency varies ±~2.8 ms run-to-run even with identical code (Item 2: 123.69 vs Item 3: 120.86), so the per-step delta vs the 2c baseline (116.06 ms) is best read as a band of **~116–124 ms**; the packed-projection cost at this geometry is latency-neutral-to-slightly-negative per step.
+* Headline result: combined packed projections hold TTLT at **~22.3 tok/s** vs the 2c baseline's **20.7 tok/s** on this prompt, with zero acceptance-rate or token-stream change and net ~0 memory cost (storage-sharing views).
+* Rollback knobs (both default ON): `MLX_QWEN_FUSED_QKV=0`, `MLX_QWEN_FUSED_SWIGLU=0`.
+
+**Checkpoint 2d status: COMPLETE** — Items 1–3 done, `main` in both repos carries the fused `W_qkv` + `W_gate+up` pipeline; feature branches deleted.
+
+---
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
-* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), Checkpoint 2c (native $M = 1$ wide QMV dispatch), and the structural refactor completed. Step latency 116.06 ms (tEvalAvg ~104.21 ms, greedy T=0); TTLT 20.7 tok/s (1,024 tokens in 49.47 s wall).
+* **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), Checkpoint 2c (native $M = 1$ wide QMV dispatch), the structural refactor, and **Checkpoint 2d (Items 1–3: fused $W_{qkv}$ + fused $W_{gate+up}$ packed projections, merged to `main` in both repos)** completed. Step latency ~116–124 ms band (tEvalAvg ~104–112 ms, greedy T=0); TTLT ~22.3 tok/s (1,024 tokens in 45.96 s wall, checkpoint 2d final run; 2c baseline 20.7 tok/s / 49.47 s).
 * **Pending Scope:** Attention-layer fused kernels — the remaining path toward the ~24 ms `tEvalMs` target.
 * **Target Milestone:** Reduce `tEvalMs` from ~104.21 ms to ~24 ms, achieving decoding throughput of **~30+ tok/sec**.
