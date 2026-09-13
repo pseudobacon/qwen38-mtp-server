@@ -99,6 +99,22 @@ $ ./scripts/agent-checkpoint.sh                 # fresh checkpoint — see resul
 
 ## Fresh checkpoint
 
-- `./scripts/agent-checkpoint.sh` result: see appended result below (recorded at session end).
+Fresh-checkpoint procedure completed successfully (2026-09-13 17:40 BST):
 
-</parameter>
+```
+# Repository checkpoint (server)
+- Repository: /Users/cwong/ai/qwen38-mtp-server
+- Branch: main
+- HEAD: d071300
+- Git status: ?? .tmp/  (untracked transient logs only)
+- Latest commit: d071300 feat: fusion diagnosis benchmark harness and final report; correct Item A provenance
+
+# Repository checkpoint (engine)
+- Repository: /Users/cwong/ai/mlx-swift-lm
+- Branch: main
+- HEAD: f730e87
+- Git status: ?? .tmp/  ?? docs/  (untracked transient logs + unfilled template only)
+- Latest commit: f730e87 fix: QMV dispatch grid and E120 lane decode; add fused SwiGLU layout gate and load-time fusion diagnostics; add qmvbench microbenchmark target
+```
+
+Both worktrees clean of tracked changes; feature branches merged and deleted in both repos.
