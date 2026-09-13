@@ -9,7 +9,7 @@ A speculative-decoding server for Qwen 3.8 / 3.5 architectures on Apple Silicon 
 ## Architecture baseline (v1.0)
 
 - **Verified features**: OpenAI SSE streaming fully compliant; parameter handling (temperature, max_tokens, `enable_thinking`); per-request KV-cache and tokenizer-cache isolation; MTP draft/verification alignment matching engine distributions (93.5% raw-token acceptance on the diagnostic benchmark).
-- **Test suites**: 121/121 `HTTPServerTests`, `MLXLMTests` MTP diagnostic suites, all green.
+- **Test suites**: `HTTPServerTests` 107/107 (the previously recorded 108 was a grep artifact — the `testRecoveryPolicyBypassedWhenDisabled` name contains "passed"), `MLXLMTests` MTP diagnostic suites, all green.
 - **v1.0 diagnostic step-latency profile** (eager upstream backbone, per decode round): `avgStepMs` 151 ms, `tEvalMs` ~163 ms (roadmap estimate), TTLT 14.7–17.0 tok/s. Superseded absolute values — see the benchmarking-history note below.
 
 ## v1.1-performance progress log
@@ -52,9 +52,9 @@ Both packed projections live in main via the `FusedQuantizedLinearProjection` ma
 
 **Performance verdict (authoritative, in-session fusion matrix — see Benchmarking):** both fusions are **latency-neutral** at this geometry (dense 17408×5120 MLPs, GQA 12288/1024/1024): QKV +0.26 ms, gate+up −0.08 ms, both +2.39 ms against a ~143 ms step, inside the run's noise band. Retained default-ON: bit-exact, net-0 memory, fewer dispatches, with working rollback knobs. The interim cross-run comparisons that suggested a QKV regression were confounded (see Benchmarking history) and are retracted.
 
-### Item C — env-gated interleaved gate+up layout (DONE, rejected)
+### Item C — env-gated interleaved gate+up layout (DONE — implemented, measured, rejected, removed)
 
-`MLX_QWEN_SWIGLU_LAYOUT=interleaved` (default `global`) builds per-expert-block interleaved fused weights via row-gather materialized copies. Bit-exact end-to-end, but latency-neutral at both the micro and end-to-end level, at a cost of ~100.8 MB per gate/up layer pair (~6.5 GB over 64 layers). **Verdict: strictly worse than global — do not use; candidate for removal.**
+`MLX_QWEN_SWIGLU_LAYOUT=interleaved` (default `global`) built per-expert-block interleaved fused weights via row-gather materialized copies. Bit-exact end-to-end, but latency-neutral at both the micro and end-to-end level, at a cost of ~100.8 MB per gate/up layer pair (~6.5 GB over 64 layers). **Verdict: no gain, +6.5 GB → rejected; the gate, layout plumbing, fuse path, and interleaved tests were removed from the engine in `901d2ca` (2026-09-13).** Historical Item C data remains in `benchmarks/FUSION_REPORT.md` and `benchmarks/results/itemC.jsonl`.
 
 ## Authoritative benchmark results
 
@@ -74,7 +74,7 @@ Both packed projections live in main via the `FusedQuantizedLinearProjection` ma
 | **22.28 tok/s** (1024 tok / 45.96 s, 120.86 ms steps) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), cooler session | 2d Item 3 final run — **pre-QMV-grid-fix binary**; the routed kernel never executed in that run |
 | 16.55–16.89 tok/s (143.0–145.4 ms steps) | `essay-1024` fixture, acceptance 1.4061 (2.41 tok/round), sustained thermal load | Item A clean fusion matrix — current fixed binary, fusion engaged |
 
-The gap decomposes exactly: acceptance ratio (2.41/2.70, −10.8%) × step-time ratio (120.9/145.4 ms, −16.9%) ≈ ×0.74, and 22.28 × 0.74 ≈ 16.5. **Neither number is wrong; they are different prompt × thermal-session conditions.** Note also that the current binary has **not** been benchmarked on the `specdec-800` fixture at all — and it now routes M=1 decode through the routed kernel (≈5% slower per projection at M=1 per `qmvbench`), so the true headline on current main is unmeasured and may land below 22.28 even in a cool session. The standing action is the dual-fixture re-baseline below.
+The gap decomposes exactly: acceptance ratio (2.41/2.70, −10.8%) × step-time ratio (120.9/145.4 ms, −16.9%) ≈ ×0.74, and 22.28 × 0.74 ≈ 16.5. **Neither number is wrong; they are different prompt × thermal-session conditions.** Note also that the current binary has **not** been *measured* on the `specdec-800` fixture under the pinned protocol — its first run on the current (post-QMV-fix) binary was the 2026-09-13 determinism verify cell (`benchmarks/results/verify.jsonl`, fusion-off): 645/1008/380, stream hash `139acb9d…` reproduced, ~124.8 ms mean step in a single uncontaminated cell. It now routes M=1 decode through the routed kernel (≈5% slower per projection at M=1 per `qmvbench`), so the true headline on current main is unmeasured and may land below 22.28 even in a cool session. The standing action is the dual-fixture re-baseline below.
 
 ### Fusion matrix (2×2, in-session, fusion-engaged binary, essay-1024 fixture)
 
@@ -106,12 +106,12 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, rejected), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix.
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix.
 
 **Decisions on record:**
 
 - Fused W_qkv and W_gate+up: keep, default ON (latency-neutral, bit-exact, net-0 memory, rollback knobs `MLX_QWEN_FUSED_QKV` / `MLX_QWEN_FUSED_SWIGLU`).
-- Interleaved gate+up layout: rejected; candidate for code removal.
+- Interleaved gate+up layout: rejected (no gain, +6.5 GB row-gather copies); removed from the engine in `901d2ca` (2026-09-13). Historical data in `benchmarks/FUSION_REPORT.md` and `benchmarks/results/itemC.jsonl`.
 
 **Open items (in priority order):**
 

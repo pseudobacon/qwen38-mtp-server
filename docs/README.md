@@ -32,15 +32,14 @@ swift build --configuration release --product qwen38-mtp-server
 
 # Tests (current counts)
 swift test --filter Qwen38MTPDiagnosticTests         # 1/1 (~151 s) — bit-exactness + acceptance (93.46%)
-swift test --filter Qwen35FusedSwiGLUProjectionTests  # 11/11
+swift test --filter Qwen35FusedSwiGLUProjectionTests  # 8/8
 swift test --filter Qwen35FusedQKVProjectionTests     # 8/8
 swift test --filter Qwen35FusedGDNProjectionTests    # 14/14
-swift test --filter HTTPServerTests                  # 108 passed, 0 failed
+swift test --filter HTTPServerTests                  # 107 passed, 0 failed
 
 # Benchmark matrix
-bash benchmarks/run_matrix.sh verify   # §0 fixture provenance check
+bash benchmarks/run_matrix.sh verify   # §0 fixture provenance check (both pinned fixtures)
 bash benchmarks/run_matrix.sh itemA    # 2×2 fusion matrix
-bash benchmarks/run_matrix.sh itemC    # layout comparison
 ```
 
 ## Runtime knobs
@@ -49,7 +48,6 @@ bash benchmarks/run_matrix.sh itemC    # layout comparison
 |---|---|---|
 | `MLX_QWEN_FUSED_QKV` | ON | Fused W_qkv packed projection (rollback: `0`) |
 | `MLX_QWEN_FUSED_SWIGLU` | ON | Fused W_gate+up packed projection (rollback: `0`) |
-| `MLX_QWEN_SWIGLU_LAYOUT` | `global` | `interleaved` variant implemented but REJECTED — do not enable |
 | `MLX_QWEN_FOUR_GDN` | ON | GDN 4-projection input fusion |
 | `MLX_COMPILED_DECODE` | ON | `compile(shapeless: true)` activation micro-fusions (opt-out for the Tahoe Metal JIT bug) |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |

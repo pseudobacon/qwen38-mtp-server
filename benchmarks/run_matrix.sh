@@ -1,10 +1,10 @@
 #!/bin/bash
-# Driver for the fusion-diagnosis benchmark (Items A and C) and the §0
+# Driver for the fusion-diagnosis benchmark (Item A) and the §0
 # verification/resolution runs. Every run goes through run_cell.sh, which reads
 # the prompt from a fixture file at request time. Results are appended as JSONL
 # under benchmarks/results/<phase>.jsonl (truncated at phase start).
 #
-# usage: run_matrix.sh <verify|resolve|itemA|itemC>
+# usage: run_matrix.sh <verify|resolve|itemA>
 set -u
 PHASE=${1:-}
 DIR=/Users/cwong/ai/qwen38-mtp-server/benchmarks
@@ -32,11 +32,13 @@ OFF="MLX_QWEN_FUSED_QKV=0 MLX_QWEN_FUSED_SWIGLU=0"
 QKV1="MLX_QWEN_FUSED_QKV=1 MLX_QWEN_FUSED_SWIGLU=0"
 SW1="MLX_QWEN_FUSED_QKV=0 MLX_QWEN_FUSED_SWIGLU=1"
 BOTH="MLX_QWEN_FUSED_QKV=1 MLX_QWEN_FUSED_SWIGLU=1"
-INT="MLX_QWEN_FUSED_QKV=0 MLX_QWEN_FUSED_SWIGLU=1 MLX_QWEN_SWIGLU_LAYOUT=interleaved"
 
 case "$PHASE" in
   verify)
+    # §0 provenance check on both pinned fixtures, all-fusion-off env
+    # (fusion is bit-exact, so the hashes hold under any fusion setting).
     run_cell verify-essay-off "$OFF" "$ESSAY"
+    run_cell verify-specdec-off "$OFF" "$SPECDEC"
     ;;
   resolve)
     run_cell resolve-specdec-off "$OFF" "$SPECDEC"
@@ -50,15 +52,8 @@ case "$PHASE" in
       run_cell A2-r$rep "$SW1" "$ESSAY"
     done
     ;;
-  itemC)
-    # 6 reps of the interleaved order C-global, C-int; first rep per cell is warmup
-    for rep in 1 2 3 4 5 6; do
-      run_cell Cglobal-r$rep "$SW1" "$ESSAY"
-      run_cell Cint-r$rep "$INT" "$ESSAY"
-    done
-    ;;
   *)
-    echo "unknown phase: $PHASE (want verify|resolve|itemA|itemC)" >&2
+    echo "unknown phase: $PHASE (want verify|resolve|itemA)" >&2
     exit 2
     ;;
 esac
