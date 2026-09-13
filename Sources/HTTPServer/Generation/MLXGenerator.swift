@@ -902,15 +902,22 @@ actor MLXGenerator {
                     decodeSeconds = Double(decodeElapsed.components.seconds) + Double(decodeElapsed.components.attoseconds) / 1e18
 
                     if stepTrace && rounds > 0 {
+                        // Item D: append whitespace-free QMV verify dispatch
+                        // counters (cumulative process lifetime) so the cell
+                        // runner can parse engagement per run. Empty
+                        // histograms render "-".
+                        let qmvTokens = Qwen35QMVVerifyDispatch
+                            .summaryTokens().joined(separator: " ")
                         let summary = String(format:
-                            "MTP-STEP-SUMMARY rounds=%d proposed=%d accepted=%d acceptedPerStep=%.4f avgStepMs=%.4f decodeSeconds=%.4f committed=%d\n",
+                            "MTP-STEP-SUMMARY rounds=%d proposed=%d accepted=%d acceptedPerStep=%.4f avgStepMs=%.4f decodeSeconds=%.4f committed=%d %s\n",
                             rounds,
                             proposedDraftTokens,
                             acceptedDraftTokens,
                             Double(acceptedDraftTokens) / Double(rounds),
                             stepLatencyTotalMs / Double(rounds),
                             decodeSeconds,
-                            emitted
+                            emitted,
+                            qmvTokens
                         )
                         _ = summary.withCString { fputs($0, stderr) }
                     }

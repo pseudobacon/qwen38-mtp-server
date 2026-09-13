@@ -1,6 +1,7 @@
 import Vapor
 import Logging
 import MLX
+import MLXLLM
 
 @main
 struct QwenServer {
@@ -181,6 +182,11 @@ struct ModelShutdownHandler: LifecycleHandler {
     let scheduler: GenerationScheduler?
 
     func shutdownAsync(_ application: Application) async {
+        // Item D: final cumulative QMV verify dispatch counters for the run
+        // (shutdown-time output is allowed; per-call output is not). The
+        // per-request step summary already carries the same counters.
+        application.logger.info(
+            "QMV verify dispatch (Item D): \(Qwen35QMVVerifyDispatch.summary())")
         _ = await runtimeState.transition(to: .draining)
         application.logger.info("Model runtime draining; waiting for active generation.")
         if let scheduler {
