@@ -4,6 +4,25 @@
 > This is a task-state checkpoint, not a complete conversation transcript.
 > Verify all claims against the working tree before acting.
 
+## Prior task — Phase 3 dual-fixture re-baseline + compiled-path ablation (COMPLETE, 2026-09-13)
+
+Objective: first valid headline tok/s for the current codebase (the 22.28 tok/s record was the pre-QMV-fix binary on the specdec fixture), plus the combined in-session contribution of Checkpoint 1 + 2a + the compiled fast paths. Three cells, one session, thermal discipline:
+
+| Cell | Fixture | Config | Purpose |
+|---|---|---|---|
+| B1 | `essay-1024.txt` | default (fusions ON, `MLX_COMPILED_DECODE` default ON) | re-baseline, comparable to A0 |
+| B2 | `specdec-800.txt` | default | first-ever specdec measurement on the current binary |
+| B3 | `essay-1024.txt` | `MLX_COMPILED_DECODE=0` | ablation: compiled micro-fusions + QK-RoPE fast path + compiled decode segments OFF |
+
+Protocol as pinned: release build, port 18099, greedy (temp 0, `enable_thinking: false`, `max_tokens: 1024`, `finish_reason: length`), prompt from the pinned fixture, `QWEN_MTP_STEP_TRACE=1`, fresh server per cell, 6 reps per cell with rep 1 discarded (5 measured), interleaved B1→B2→B3 across reps, no parallel builds/tests, no mid-matrix rebuild. `pmset -g therm` logged before every rep; per-rep determinism gate enforced (essay 599/1086/426 `949b9423…`; specdec 645/1008/380 `139acb9d…`).
+
+- **All 18 reps bit-exact** — zero gate failures. Fusion engaged in every cell (`backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head 0/0`).
+- **Headlines (1024 / wall-seconds, mean over reps 2–6):** B1 essay **17.55 tok/s** (136.559 ms steps); B2 specdec **18.92 tok/s** (141.623 ms steps); B3 ablation **16.64 tok/s** (143.909 ms steps).
+- **Ablation verdict (B3 − B1, in-session):** **+7.350 ms/step (+5.38%)**, **−0.914 tok/s (−5.21%)** — the combined controlled contribution of everything gated by `MLX_COMPILED_DECODE` (Checkpoint 1 micro-fusions + Checkpoint 2a QK-RoPE kernel + fused residual+RMSNorm). Packed fusions and routed QMV are ungated and active in both cells — not part of the delta.
+- **B2 vs 22.28:** acceptance identical (same stream hash); the entire gap is step time (+17.2%) — session thermal state + M=1 routed-QMV dispatch (≈5%/projection at M=1 per `qmvbench`), consistent with the cross-session non-comparability decision.
+- **Stale-binary trap resolved:** the 18:38 release binary predated engine `901d2ca` and SwiftPM had not invalidated the two changed engine modules. Forced recompile of `FusedQuantizedLinear.swift` + `Qwen35+FastPath.swift` + relink produced a **different** binary (SHA-256 `88e27643…` vs `03231f16…`); that is the binary the matrix ran on. Lesson: force-recompile changed engine modules (or compare relink hashes) before benchmarking.
+- Artifacts: `benchmarks/results/rebaseline-essay.jsonl`, `rebaseline-specdec.jsonl`, `ablation-compiled-off.jsonl` (6 per-rep records each, thermal line merged); driver `benchmarks/run_phase3.sh`; stats `benchmarks/phase3_report.py`; run/thermal logs `.tmp/phase3-run.log`, `.tmp/phase3-thermal.log`.
+
 ## Prior task — interleaved gate+up layout removal (COMPLETE, 2026-09-13)
 
 Objective: remove the rejected interleaved gate+up layout (Item C of the fusion diagnosis) from the engine, then re-verify with a dual-fixture re-baseline gate. **All acceptance criteria met.**
@@ -48,8 +67,8 @@ Engine: `Qwen35FusedSwiGLUProjectionTests` 8/8, `Qwen35FusedQKVProjectionTests` 
 
 ## Goal (next task)
 
-- Objective: **dual-fixture re-baseline on current main** — run the pinned-protocol benchmark on both fixtures (`essay-1024.txt`, `specdec-800.txt`) with the default fusion configuration on the current binary in one thermally-controlled session, producing the first valid headline tok/s for the current codebase (the 22.28 tok/s record is from the pre-QMV-fix binary and the specdec fixture; current main has never been *measured* on specdec under the pinned protocol — its first run was the 2026-09-13 §0 verify cell: 645/1008/380, hash `139acb9d…` reproduced). Optionally follow with **Item D** — verify-pass reshape to 2-D `[M, K]` so the routed QMV kernel handles M ∈ 2…9 (see progress.md open items).
-- Acceptance criteria: both fixtures reproduce their recorded streams exactly (essay: 599/1086/426, hash `949b9423…`; specdec: 645/1008/380, hash `139acb9d…`); 5 clean measured reps per fixture, interleaved order, no parallel builds/tests; thermal state logged per rep (`pmset -g therm`); results appended to `benchmarks/results/` and the headline-throughput table in `progress.md` updated with the measured numbers.
+- Objective: **Item D — route the verify pass through the candidate QMV kernel.** The `ndim == 2` guard currently sends verify (3-D batched `x`, the dominant `tEvalAvg` share) to incumbent `quantizedMM`; a free reshape to `[M, K]` would dispatch it through the routed kernel at M ∈ 2…9, where the microbench says it is ~15–20% faster. Gate on an end-to-end A/B win, not the microbench alone (the A2 null result is the cautionary precedent).
+- Acceptance criteria: bit-exact greedy streams on both fixtures (essay 599/1086/426 `949b9423…`; specdec 645/1008/380 `139acb9d…`); in-session A/B (default vs Item D ON) on at least one fixture, 5 measured reps per cell, via the Phase 3 harness pattern; keep only on an end-to-end win.
 - Constraints / non-goals: same standing rules — no parallel builds/tests during timing cells; no `print()` in hot paths (load-time prints allowed); engine commits before server; `git merge --no-edit`; no python/sed source edits.
 
 ## Repository checkpoint
@@ -69,10 +88,10 @@ Engine: `Qwen35FusedSwiGLUProjectionTests` 8/8, `Qwen35FusedQKVProjectionTests` 
 
 ## Current state
 
-- Completed: fusion diagnosis (see above); interleaved layout removal (engine `901d2ca`, server docs `7d04ecf`); dual-fixture §0 verify on the post-removal binary (both hashes reproduced — first specdec run on the post-QMV-fix binary); docs housekeeping.
+- Completed: fusion diagnosis (see above); interleaved layout removal (engine `901d2ca`); dual-fixture §0 verify on the post-removal binary; docs housekeeping; **Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13)** — first valid headline tok/s measured on current main (B1 essay 17.55, B2 specdec 18.92, B3 ablation 16.64 tok/s; ablation delta +7.35 ms/step / −5.21% for the `MLX_COMPILED_DECODE`-gated fast paths; all 18 reps bit-exact; per-rep thermal logged).
 - In progress: none.
-- Not started: dual-fixture re-baseline (the measured headline numbers); Item D (verify-pass QMV routing); `qmvbench` throughput mode (N calls per sync); thermal logging wiring.
-- Current hypothesis / diagnosis: current main may land **below** 22.28 tok/s on the specdec fixture even in a cool session — M=1 decode now dispatches through the routed kernel, which `qmvbench` measures ~5% slower per projection at M=1.
+- Not started: Item D (verify-pass QMV routing); `qmvbench` throughput mode (N calls per sync); thermal cooldowns between run blocks.
+- Current hypothesis / diagnosis: the B2 (18.92 tok/s) vs pre-fix 22.28 gap is purely step-time (+17.2%, acceptance identical) — the unseparated sum of session thermal state and the M=1 routed-QMV dispatch (≈5%/projection at M=1 per `qmvbench`). "Current main may land below 22.28" is confirmed in-session; cross-session comparability remains open (standing decision).
 
 ## Important files
 
@@ -85,6 +104,9 @@ Engine: `Qwen35FusedSwiGLUProjectionTests` 8/8, `Qwen35FusedQKVProjectionTests` 
 | `benchmarks/prompts/specdec-800.txt` | Pinned fixture, stream 645/1008/380, hash `139acb9d…` | Committed |
 | `benchmarks/results/itemA.jsonl` / `itemC.jsonl` / `resolve.jsonl` | Authoritative runs + provenance resolution | Committed |
 | `benchmarks/results/verify.jsonl` | Dual-fixture §0 verify on the post-removal binary (both hashes reproduced) | Committed (`7d04ecf`) |
+| `benchmarks/results/rebaseline-essay.jsonl` / `rebaseline-specdec.jsonl` / `ablation-compiled-off.jsonl` | Phase 3 per-rep records (6 each, thermal line merged, all bit-exact) | Committed (Phase 3) |
+| `benchmarks/run_phase3.sh` | Phase 3 driver: 3 cells × 6 reps interleaved, per-rep `pmset -g therm` snapshot + determinism gate | Committed (Phase 3) |
+| `benchmarks/phase3_report.py` | Phase 3 post-processing: thermal merge into JSONL + mean/min/max over measured reps 2–6 | Committed (Phase 3) |
 | `progress.md` | Task log, authoritative tables, open items | Committed |
 | `../mlx-swift-lm/Libraries/MLXLLM/Models/Qwen35.swift` | Load-time fusion engagement summary print | Committed (f730e87) |
 | `../mlx-swift-lm/Libraries/MLXLLM/Models/Qwen35Kernels.swift` | QMV dispatch grid fix + E120 lane-decode fixes | Committed (f730e87) |
@@ -115,6 +137,8 @@ $ swift test --filter Qwen35FusedQKVProjectionTests             # 8/8
 $ swift test --filter Qwen35FusedGDNProjectionTests             # 14/14
 $ swift test --filter Qwen38MTPDiagnosticTests                 # 1/1 (acceptance 93.46%, logit divergence 16.25/14.0)
 $ bash benchmarks/run_matrix.sh verify                         # essay 599/1086/426 hash 949b9423...; specdec 645/1008/380 hash 139acb9d... (both reproduced)
+$ bash benchmarks/run_phase3.sh                                # Phase 3: 18 reps, all determinism gates PASS
+$ /tmp/benchvenv/bin/python benchmarks/phase3_report.py <cell.jsonl> <B1|B2|B3> ...   # thermal merge + per-cell mean/min/max
 $ ./scripts/agent-checkpoint.sh                                # fresh checkpoint for this file (run per repo)
 $ git log -1 --oneline                                         # engine 901d2ca, server 7d04ecf
 ```
@@ -125,13 +149,14 @@ Useful artifacts: `benchmarks/results/*.jsonl`; `.tmp/itemA-clean.log`, `.tmp/it
 
 - Known issue: cross-session absolute step latencies not comparable (thermal/system state); only in-session Δs are valid.
 - Resolved (2026-09-13): specdec-800's first run on the current (post-QMV-fix, post-layout-removal) binary was the §0 verify cell — it reproduced 645/1008/380 with stream hash `139acb9d…`, so the correctness signal is green.
+- Resolved (2026-09-13, Phase 3): stale-binary trap — the 18:38 release binary predated engine `901d2ca` and SwiftPM had not invalidated the two changed engine modules; a forced recompile + relink produced a different binary (SHA-256 `88e27643…` vs `03231f16…`), which the matrix ran on. **Before benchmarking: force-recompile changed engine modules (delete their `.o` files or compare relink hashes) so the binary provably matches engine HEAD.**
 - Environment: `/tmp/benchvenv` does not survive a reboot — recreate before computing stream hashes if missing.
 - Do not rerun / stateful: no parallel builds/tests during `run_matrix.sh` timing cells; do not rebuild the server binary mid-matrix; no git operations inside the workspace directory.
 
 ## Exact next step
 
-1. Run the dual-fixture re-baseline on current main: 5 measured reps per fixture (`essay-1024.txt`, `specdec-800.txt`), default fusion configuration, interleaved cell order, thermal state logged per rep (`pmset -g therm`), no parallel builds/tests. Confirm both fixtures still reproduce their recorded streams (`bash benchmarks/run_matrix.sh verify`) before any timing.
-2. Update the headline-throughput table in `progress.md` with the measured numbers, and refresh this handoff with the results before any context reset.
+1. Item D: relax the `ndim == 2` guard in the Qwen 3.5/3.8 verify path so the 3-D batched `x` is reshaped to `[M, K]` and dispatched through the routed QMV kernel at M ∈ 2…9 (free reshape; bit-exact tests first). Then run an in-session A/B (default vs Item D ON) on at least one fixture with the Phase 3 harness pattern (fresh server per cell, 6 reps interleaved, rep 1 warmup, per-rep thermal + determinism gate); keep only on an end-to-end win.
+2. Before any timing: confirm the pinned streams on the freshly rebuilt binary (`bash benchmarks/run_matrix.sh verify`), and force-recompile changed engine modules before benchmarking (stale-binary trap — see Phase 3 section).
 
 ## Fresh checkpoint
 

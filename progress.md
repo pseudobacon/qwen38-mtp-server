@@ -69,12 +69,17 @@ Both packed projections live in main via the `FusedQuantizedLinearProjection` ma
 
 ### Headline throughput (conditions-labeled — not cross-comparable)
 
+Phase 3 TTLT uses the pinned definition 1024 / wall-seconds (the 22.28 row is 1024 / decode-seconds, as originally recorded).
+
 | Number | Conditions | Provenance |
 |---|---|---|
-| **22.28 tok/s** (1024 tok / 45.96 s, 120.86 ms steps) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), cooler session | 2d Item 3 final run — **pre-QMV-grid-fix binary**; the routed kernel never executed in that run |
+| **18.92 tok/s** (1024 / 54.20 s wall, 141.62 ms mean step) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), in-session thermal ramp | Phase 3 B2 — **first valid specdec headline on current main** (post-QMV-fix, post-layout-removal binary) |
+| **17.55 tok/s** (1024 / 58.48 s wall, 136.56 ms mean step) | `essay-1024` fixture, acceptance 1.4061 (2.41 tok/round) | Phase 3 B1 — current-main re-baseline, comparable to A0 |
+| 16.64 tok/s (1024 / 61.66 s wall, 143.91 ms mean step) | `essay-1024` fixture, `MLX_COMPILED_DECODE=0` (compiled fast paths OFF) | Phase 3 B3 — ablation cell |
+| 22.28 tok/s (1024 tok / 45.96 s decode, 120.86 ms steps) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), cooler session | 2d Item 3 final run — **pre-QMV-grid-fix binary**; the routed kernel never executed in that run |
 | 16.55–16.89 tok/s (143.0–145.4 ms steps) | `essay-1024` fixture, acceptance 1.4061 (2.41 tok/round), sustained thermal load | Item A clean fusion matrix — current fixed binary, fusion engaged |
 
-The gap decomposes exactly: acceptance ratio (2.41/2.70, −10.8%) × step-time ratio (120.9/145.4 ms, −16.9%) ≈ ×0.74, and 22.28 × 0.74 ≈ 16.5. **Neither number is wrong; they are different prompt × thermal-session conditions.** Note also that the current binary has **not** been *measured* on the `specdec-800` fixture under the pinned protocol — its first run on the current (post-QMV-fix) binary was the 2026-09-13 determinism verify cell (`benchmarks/results/verify.jsonl`, fusion-off): 645/1008/380, stream hash `139acb9d…` reproduced, ~124.8 ms mean step in a single uncontaminated cell. It now routes M=1 decode through the routed kernel (≈5% slower per projection at M=1 per `qmvbench`), so the true headline on current main is unmeasured and may land below 22.28 even in a cool session. The standing action is the dual-fixture re-baseline below.
+The old essay-vs-specdec gap decomposed as acceptance × step-time (×0.74). The new **B2-vs-22.28** gap is purely step time: acceptance is identical (645/1008/380, same stream hash `139acb9d…` in both), so 22.28 × (120.86/141.62) ≈ 19.0 ≈ B2's measured 19.05 (1024/decode-seconds: 19.046). That +17.2% step-time delta is the unseparated sum of this session's thermal state and the M=1 routed-QMV dispatch (≈5% slower per projection at M=1 per `qmvbench`) — consistent with the standing decision that cross-session absolute latencies are not comparable.
 
 ### Fusion matrix (2×2, in-session, fusion-engaged binary, essay-1024 fixture)
 
@@ -86,6 +91,24 @@ All 24 cells bit-identical (599/1086/426, hash `949b9423…`).
 | A1 | 1 | 0 | 143.304 | +0.262 ms | 16.81 |
 | A2 | 0 | 1 | 142.967 | −0.076 ms | 16.81 |
 | A3 | 1 | 1 | 145.429 | +2.387 ms | 16.55 |
+
+### Phase 3 — dual-fixture re-baseline + compiled-path ablation (2026-09-13)
+
+One session, release build (server `83f82ab` / engine `901d2ca`), port 18099, greedy (`temperature: 0`, `enable_thinking: false`, `max_tokens: 1024`, `finish_reason: length`), `QWEN_MTP_STEP_TRACE=1`, fresh server per cell, 6 reps per cell interleaved B1→B2→B3, rep 1 discarded as warmup (5 measured), `pmset -g therm` logged before every rep, no parallel builds/tests, no mid-matrix rebuild. All 18 reps reproduced the pinned streams exactly (B1/B3: 599/1086/426 hash `949b9423…`; B2: 645/1008/380 hash `139acb9d…`) — zero gate failures. Fusion engagement confirmed at load time in every cell (`backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head 0/0` — BF16 head ineligible by design).
+
+Raw per-rep records (with the pre-rep thermal line): `benchmarks/results/rebaseline-essay.jsonl` (B1), `rebaseline-specdec.jsonl` (B2), `ablation-compiled-off.jsonl` (B3). Driver: `benchmarks/run_phase3.sh`; stats/merge: `benchmarks/phase3_report.py`; run log: `.tmp/phase3-run.log`, thermal log: `.tmp/phase3-thermal.log`.
+
+| Cell | Fixture | Config | avgStepMs (m/mn/MX) | tEvalAvg | tGraphBuildAvg | tCacheStateAvg | tHostReadAvg | wall s | TTLT 1024/wall |
+|---|---|---|---|---|---|---|---|---|---|
+| B1 | essay-1024 | default (fusions ON, compiled decode ON) | 136.559 / 124.108 / 142.341 | 124.627 / 112.447 / 130.310 | 10.310 / 10.049 / 10.438 | 1.533 / 1.511 / 1.553 | 0.012 / 0.011 / 0.013 | 58.483 / 53.121 / 60.893 | 17.553 / 16.816 / 19.277 |
+| B2 | specdec-800 | default | 141.623 / 131.800 / 145.854 | 129.618 / 120.185 / 133.487 | 11.132 / 10.815 / 11.475 | 0.772 / 0.720 / 0.844 | 0.014 / 0.009 / 0.019 | 54.202 / 50.358 / 55.834 | 18.921 / 18.340 / 20.334 |
+| B3 | essay-1024 | `MLX_COMPILED_DECODE=0` | 143.909 / 134.182 / 153.648 | 131.516 / 122.357 / 140.433 | 10.658 / 10.242 / 11.236 | 1.619 / 1.493 / 1.830 | 0.015 / 0.010 / 0.022 | 61.657 / 57.423 / 65.733 | 16.639 / 15.578 / 17.832 |
+
+Accepted/proposed/rounds are constant across all reps of a cell (B1: 599/1086/426, B2: 645/1008/380, B3: 599/1086/426). m/mn/MX = mean/min/max over the 5 measured reps (2–6). The session shows an in-session thermal ramp (mean steps rise ~15–20 ms from rep 1 to rep 6 in every cell); the interleaved order spreads that drift evenly across cells, so only in-session deltas are valid.
+
+**Ablation verdict (in-session, B3 − B1):** compiled decode OFF costs **+7.350 ms/step (+5.38%)** and **−0.914 tok/s (−5.21%)** on the essay fixture. This is the combined controlled contribution of every component gated by `MLX_COMPILED_DECODE` — Checkpoint 1's compiled activation micro-fusions, Checkpoint 2a's QK-RoPE fused kernel, and the fused residual+RMSNorm kernel — measured in an otherwise identical session. The packed W_qkv / W_gate+up fusions (separate env knobs, default ON) and the routed QMV kernels (ungated) are active in both cells, so they are not part of this delta.
+
+**Binary-provenance note:** the release binary on disk (built 18:38) predated engine commit `901d2ca`; SwiftPM's incremental state had not invalidated the two changed engine modules. A forced recompile of `FusedQuantizedLinear.swift` + `Qwen35+FastPath.swift` plus relink produced a **different** binary (SHA-256 `88e27643…` vs `03231f16…`), and that is the binary this matrix ran on. The stale-binary risk flagged in the handoff is closed: the headline numbers above are from the current codebase.
 
 ### QMV microbenchmark (`qmvbench`)
 
@@ -106,7 +129,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix.
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13 — first valid headline tok/s measured on current main, plus per-rep thermal logging wired into the harness).
 
 **Decisions on record:**
 
@@ -115,8 +138,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 **Open items (in priority order):**
 
-1. **Dual-fixture re-baseline on current main.** Run the pinned-protocol matrix (or at minimum the default-config cell) on **both** `essay-1024` and `specdec-800` fixtures with the current binary in one thermally-controlled session, so the headline tok/s is a measured number for the current codebase rather than a cross-session artifact. Expected spread: acceptance factor alone spans ~2.41→2.70 tok/round between fixtures.
-2. **Item D — route the verify pass through the candidate QMV kernel.** The `ndim == 2` guard currently sends verify (3-D batched `x`, the dominant `tEvalAvg` share) to incumbent `quantizedMM`; a free reshape to `[M, K]` would dispatch it through the routed kernel at M ∈ 2…9, where the microbench says it is ~15–20% faster. Go in with tempered expectations (see the A2 null result) and gate on an end-to-end A/B win, not the microbench alone.
-3. **`qmvbench` throughput mode** — batch N calls per sync so per-kernel numbers reflect async pipeline conditions; required before trusting any future per-kernel delta.
-4. **Thermal control for benchmarks** — log thermal state per run (`pmset -g therm`), shorter run blocks, or cooldowns, so absolute numbers become comparable across sessions.
-5. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
+1. **Item D — route the verify pass through the candidate QMV kernel.** The `ndim == 2` guard currently sends verify (3-D batched `x`, the dominant `tEvalAvg` share) to incumbent `quantizedMM`; a free reshape to `[M, K]` would dispatch it through the routed kernel at M ∈ 2…9, where the microbench says it is ~15–20% faster. Go in with tempered expectations (see the A2 null result) and gate on an end-to-end A/B win, not the microbench alone.
+2. **`qmvbench` throughput mode** — batch N calls per sync so per-kernel numbers reflect async pipeline conditions; required before trusting any future per-kernel delta.
+3. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is now wired (`benchmarks/run_phase3.sh`); shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
+4. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
