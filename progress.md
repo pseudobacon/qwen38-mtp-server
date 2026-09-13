@@ -309,6 +309,88 @@ Release build of `qwen38-mtp-server`, greedy (`temperature: 0.0`), `enable_think
 
 ---
 
+## Prompt-Fixture Provenance (§0, prompt rev 2) — RESOLVED
+
+The committed fixture `benchmarks/prompts/essay-1024.txt` (SHA-256 `7ed683f87be0835c751505e2ee7dfc18fd922b93bcc32fad05d86c158cfb040e`) is **not** the prompt behind the recorded 645/1008/380 (hash `139acb9d…`) numbers. Provenance, established with the rolled-back (all-fusion-off) build:
+
+* `essay-1024.txt` → **38 prompt tokens**, stream `599/1086/426` (1.4061), hash `949b9423bd851233…` — this is the 2a/2c prompt.
+* `specdec-800.txt` → **62 prompt tokens**, stream `645/1008/380`, hash `139acb9d30fee4749c873aaa42142481d888f53537a729e630c68ca8dcf49cac` — **exact match** to the recorded Item 1/2/3 numbers.
+
+Consequences: the prior Item-1-vs-2c step comparison (+6.19 ms, 116.06 → 122.25) is **cross-prompt (confounded)**. The all-fusion matrix in the pinned 38-token essay prompt is the authoritative same-prompt comparison. All matrix cells used the pinned essay fixture, read from file at request time; greedy (temp 0, `enable_thinking: false`, `max_tokens: 1024`, `finish_reason: length`); port 18099; `QWEN_MTP_STEP_TRACE=1`; rep 1 discarded as warmup, reps 2–6 measured; interleaved cell order A0,A3,A1,A2.
+
+### Item A — 2×2 same-session fusion matrix (COMPLETE, 24/24 cells)
+
+Cells: A0 = QKV off / gate+up off (0,0); A1 = QKV on / gate+up off (1,0); A2 = QKV off / gate+up on (0,1); A3 = both (1,1). **All 24 cells bit-identical**: 599/1086 accepted (426 rounds, 1.4061/step), stream hash `949b9423bd851233…`, `finish_reason: length`. Determinism: **confirmed**.
+
+Measured reps r2–r6 (r1 discarded), `avgStepMs` per cell:
+
+| cell | fusion | mean | min | max | Δ vs A0 (mean) |
+| :--- | :--- | ---: | ---: | ---: | ---: |
+| A0 | off/off | 138.554 | 136.545 | 140.892 | — |
+| A3 | QKV + gate+up | 137.662 | 134.949 | 138.698 | **−0.892** |
+| A1 | QKV only | 137.902 | 134.210 | 141.213 | **−0.652** |
+| A2 | gate+up only | 138.825 | 135.489 | 142.370 | **+0.271** |
+
+Per-rep Δ vs A0 (ms): A3 −1.60, −0.23, −0.22, −0.11, −2.30; A1 −2.34, −1.15, −0.12, +2.40, −2.06; A2 −1.06, −0.68, +1.16, +3.56, −1.62. `tEvalAvg` means: A0 126.459, A3 125.637, A1 125.885, A2 126.610. `tGraphBuildAvg` ≈ 10.25–10.44, `tCacheStateAvg` ≈ 1.57–1.67, `tHostReadAvg` ≈ 0.015–0.020. TTLT means: A0 17.341, A3 17.455, A1 17.427, A2 17.310 tok/s.
+
+**Caveats:**
+* Sustained-run thermal drift across the 24-cell run raised absolute step latency from ~123.9 ms (rep 1) to ~140.3 ms (rep 5); interleaved cell order keeps per-cell Δ within ±3.6 ms, and the per-rep Δs above are the correct read. Cross-session absolute values (e.g. 2c's 116.06 ms) are **not comparable** to this run's ~138–140 ms band.
+* In-session verdict: no fusion shows a net step regression; gate+up alone (A2) is neutral (+0.27 ms mean) and both-fusion (A3) is slightly negative (−0.89 ms). The prior +6.19 ms Item-1 regression does not reproduce in-session.
+
+**Binary-vintage correction (IMPORTANT):** the original Item A matrix ran on the 02:41 release binary, which **predates the QMV dispatch fix** (working-tree fix 13:43, `grid: ((m+ipg-1)/ipg*32, n/32*8, 1)` vs the committed `((m+ipg-1)/ipg, n/32, 1)`) and the fusion merge (`0514b11`, 02:49). With the buggy dispatch, any fused decode through the routed QMV kernel would have written only a fraction of each 32-col output tile and produced a divergent token stream; since **all 24 cells produced the known-correct greedy hash `949b9423…`**, the fused kernel never ran in that binary — every Item A cell was the eager path (env gates were no-ops). The Δs above are therefore eager-vs-eager noise, not fusion effects.
+
+**Re-run history (2026-09-13):**
+1. First re-run on the verified fusion-engaged binary (job bash-58, `benchmarks/results/itemA.jsonl` superseded): 24/24 cells bit-exact (599/1086/426, hash `949b9423…`), but the timing was **contaminated** — engine/server test suites ran in parallel during the matrix (the 151 s `Qwen38MTPDiagnosticTests` run loaded the full model and generated in overlap with the final cells), producing spikes A2-r5 239.58 ms, A0-r6 196.10 ms, A2-r3 178.87 ms and per-rep Δ swings of −9…+33 ms. Its numbers are discarded.
+2. Clean re-run (job bash-59, `.tmp/itemA-clean.log`) with **no parallel builds/tests**: **COMPLETE, 24/24 cells bit-exact** (599/1086/426, hash `949b9423…`). Reps 2–6 means: A0 143.042 ms (134.790–164.483), A1 143.304 (+0.262), A2 142.967 (−0.076), A3 145.429 (+2.387); stepAvg means 142.943/143.194/142.854/145.300; tEvalAvg 131.1/131.3/130.8/133.1 ms; TTLT 16.89/16.81/16.81/16.55 tok/s. Per-rep Δ swings −21.8…+15.2 ms. **Final verdict (fusion engaged): both fusions latency-neutral in-session; no net win, no regression.** These numbers supersede the earlier Item A table in this file and are the authoritative Item A data for `benchmarks/FUSION_REPORT.md`.
+
+### Item B — Standalone QMV microbenchmark `qmvbench` (COMPLETE)
+
+New executable target `QmvBench` in the engine fork (`Libraries/QmvBench/main.swift`, product `qmvbench` in `../mlx-swift-lm/Package.swift`). Calls `qwen35RoutedLinear` / `qwen35RoutedQuantizedMM` directly (no reimplementation) on one real gate/up pair (layer 3 of Qwen 3.8-27B-4bit): narrow `N = 17408, K = 5120` (packed K = 640 uint32, scales/biases [N,80] bf16); fused wide `N = 34816` in `global` and `interleaved` row layouts (32-row kernel tiles); M ∈ {1,4}; one shard CPU-loaded. Protocol: 100 warmup + 1000 timed iterations per condition, randomized interleaved order, 3 whole blocks (3000 samples), `ContinuousClock` with device sync per call.
+
+**Correctness:** all guards pass by construction; at both M values every routed condition is **bit-identical** to the incumbent `QuantizedLinear`/`quantizedMM`, the wide outputs split back to the exact narrow outputs, and the interleaved fused tensor is a verified row permutation of the global fused tensor.
+
+M = 1 (µs per iteration, mean / min / p50 / std, GB/s at mean):
+
+| condition | mean | min | p50 | std | GB/s |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| narrow_gate_routed | 384.92 | 312 | 380 | 30.15 | 130.36 |
+| narrow_up_routed | 385.63 | 311 | 380 | 35.88 | 130.13 |
+| wide_global_routed | 572.60 | 491 | 563 | 47.81 | 175.25 |
+| wide_interleaved_routed | 571.56 | 491 | 564 | 35.38 | 175.57 |
+| narrow_gate_fallback | 366.63 | 303 | 361 | 33.65 | 136.87 |
+| narrow_up_fallback | 366.01 | 303 | 361 | 29.34 | 137.10 |
+| wide_global_fallback | 553.31 | 480 | 545 | 63.59 | 181.36 |
+
+M = 4 (µs per iteration, mean / min / p50 / std, GB/s at mean):
+
+| condition | mean | min | p50 | std | GB/s |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| narrow_gate_routed | 464.06 | 379 | 458 | 29.38 | 108.42 |
+| narrow_up_routed | 464.25 | 381 | 458 | 29.20 | 108.38 |
+| wide_global_routed | 724.89 | 628 | 713 | 41.35 | 138.77 |
+| wide_interleaved_routed | 726.65 | 635 | 713 | 87.33 | 138.43 |
+| narrow_gate_fallback | 545.38 | 471 | 541 | 37.16 | 92.26 |
+| narrow_up_fallback | 546.43 | 465 | 542 | 34.04 | 92.08 |
+| wide_global_fallback | 904.30 | 824 | 898 | 38.67 | 111.23 |
+
+**Root-cause note (kernel dispatch bug, FIXED):** the routed QMV kernel previously produced garbage (only cols 0–3 of each 32-col tile written) because `MLXFast.metalKernel` dispatch in `Source/C/metal/custom_kernel.cpp` treats the `grid` argument as the **total thread count** and clamps the threadgroup to `min(threadGroup, grid)` — the old dispatch passed the threadgroup count as `grid`, so only `grid.x` lanes per threadgroup ran. Confirmed with a trivial `MLXFast.metalKernel` probe (2 of 512 slots written pre-fix). Fixed both arms in `Qwen35Kernels.swift` to `grid: ((m + ipg - 1) / ipg * 32, n / 32 * 8, 1), threadGroup: (32, 8, 1)` (codebase convention: grid = total threads, e.g. `(nRows*1024,1,1)` / `(1024,1,1)`). Also fixed the same pass: interpolation leak `case \\(m):`, missing semicolon, `*4` in `qmv_out_row`, and MLX 4-bit nibble/x-scaling convention (`& 0x0f/0xf0/0xf00/0xf000`, `/16,/256,/4096`).
+
+**Note:** before this session the custom QMV kernel was dead code in-model (no engine test exercised it; in-model decode reaches it only via 2-D `x`, 3-D batched `x` falls back to `quantizedMM` by the `ndim == 2` guard — bit-identical either way); `qmvbench` is the first consumer.
+
+### Item C — env-gated `MLX_QWEN_SWIGLU_LAYOUT` (COMPLETE: code + matrix)
+
+`FusedQuantizedLinear.swift` (MLXLMCommon): new `MLX_QWEN_SWIGLU_LAYOUT ∈ {global (default), interleaved}` read at prepare time only via `qwen35SwiGLULayout()`; the interleaved fuse builds per-expert `[2I, K]` adjacent 32-row-block row-gather views on the fused weight/scales/biases (`take(idx, axis: 0)`) — materialized copies, ≈ +100.8 MB per gate/up layer pair (≈ 6.5 GB over 64 layers; fits 48 GB). `Qwen35+FastPath.swift`: `prepareFusedSwiGLUProjection()` takes the layout, logs a loud load-time fallback when fusion falls back, and `swiGLUGateUpProjections(_:)` splits the output tensor on the stored layout (`.global`: slice at `half`; `.interleaved`: `[blocks, 64]` reshape, slice `[0..<32]`/`[32..<64]`). Guard: interleaved requires N % 32 == 0, else eager fallback (loud log).
+
+**Verification:** `Qwen35FusedSwiGLUProjectionTests` **8/8 PASS** (incl. `testInterleavedLayoutIsBitIdentical`, `testInterleavedFusePermutationAndViewIdentity`, `testInterleavedLayoutRejectsNonTileMultiple`); `Qwen38MTPDiagnosticTests` PASS (52.8 s).
+
+**Build note (relink resolution):** `swift build --target HTTPServer` compiles the target's objects only — the release **executable** is produced by `swift build --configuration release --product qwen38-mtp-server` (the `--target` form never re-runs the product link, so a `rm` of the binary leaves it absent despite "Build complete"). After the product build, `strings .build/release/qwen38-mtp-server | grep -c MLX_QWEN_SWIGLU_LAYOUT` = 1.
+
+**Matrix results (COMPLETE, 12/12 cells bit-exact):** `benchmarks/run_matrix.sh itemC` (6 reps × Cglobal/Cint, shared Item-A protocol, beside A2): every cell 599/1086/426, hash `949b9423…`, `finish_reason: length`. `avgStepMs` (reps 2–6): Cglobal mean 150.578 (min 126.864, max 166.173; tEvalAvg 137.48, TTLT 16.10 tok/s); Cint mean 152.187 (min 133.479, max 160.276; tEvalAvg 138.87, TTLT 15.85 tok/s). Δ mean **+1.609 ms (+1.1 %)**; per-rep Δ +6.61, +8.48, +1.35, −2.50, −5.90 ms — inside the run's thermal noise band (Cglobal spans 126.9–166.2 ms across reps). Verdict: interleaved layout is bit-exact end-to-end and **latency-neutral in-session**.
+
+**Fusion engagement verified (resolves the earlier "fell back" alarm):** the one-shot server load logs exactly ONE fallback line — from the **MTP head layer only** (the head tree is BF16, `mtp-head/model.safetensors` `layers.0.mlp.gate_proj.weight BF16 [17408, 5120]`; fusion ineligible there by design). The new load-time summary in `Qwen35TextModel.prepare()` prints: `MLXLM: fusion prepare summary: backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head swiGLU 0 qkv 0` — i.e. **gate+up fusion engaged in all 64 backbone layers, QKV fusion in all 16 full-attention layers, GDN input-projection fusion in all 48 GDN layers**, on the current binary (both global and interleaved layouts). Consequence: Item C cells (15:29+ binary) exercised the fused path; the earlier suspicion that all cells ran eager was wrong. (RSS was discarded as an engagement probe — Metal shared-heap memory is not faithfully reflected in RSS.)
+
+---
+
 ## Technical Debt & Performance Roadmap (`v1.1-performance`)
 
 * **Current Status:** Checkpoint 1 (`compile()` closures), Checkpoint 2a (QK RMSNorm + RoPE kernel), Checkpoint 2b (fused residual+RMSNorm + routed wide QMV projection kernels), Checkpoint 2b-fix (five QMV dispatch defects fixed + fast-path extraction completed), Checkpoint 2c (native $M = 1$ wide QMV dispatch), the structural refactor, and **Checkpoint 2d (Items 1–3: fused $W_{qkv}$ + fused $W_{gate+up}$ packed projections, merged to `main` in both repos)** completed. Step latency ~116–124 ms band (tEvalAvg ~104–112 ms, greedy T=0); TTLT ~22.3 tok/s (1,024 tokens in 45.96 s wall, checkpoint 2d final run; 2c baseline 20.7 tok/s / 49.47 s).

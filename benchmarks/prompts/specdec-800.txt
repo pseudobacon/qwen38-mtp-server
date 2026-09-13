@@ -1,0 +1,1 @@
+Write a detailed technical explanation of how speculative decoding works in large language model serving. Cover draft models, the verify step, acceptance criteria, latency impact, and how it interacts with KV caching. Be thorough and write at least 800 words.

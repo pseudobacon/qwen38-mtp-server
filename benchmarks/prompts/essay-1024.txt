@@ -1,0 +1,1 @@
+Write a 1000 word technical essay explaining unified memory architectures on Apple Silicon, memory bandwidth limits, and cache hierarchy.
