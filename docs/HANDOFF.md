@@ -23,6 +23,17 @@ Protocol as pinned: release build, port 18099, greedy (temp 0, `enable_thinking:
 - **Stale-binary trap resolved:** the 18:38 release binary predated engine `901d2ca` and SwiftPM had not invalidated the two changed engine modules. Forced recompile of `FusedQuantizedLinear.swift` + `Qwen35+FastPath.swift` + relink produced a **different** binary (SHA-256 `88e27643…` vs `03231f16…`); that is the binary the matrix ran on. Lesson: force-recompile changed engine modules (or compare relink hashes) before benchmarking.
 - Artifacts: `benchmarks/results/rebaseline-essay.jsonl`, `rebaseline-specdec.jsonl`, `ablation-compiled-off.jsonl` (6 per-rep records each, thermal line merged); driver `benchmarks/run_phase3.sh`; stats `benchmarks/phase3_report.py`; run/thermal logs `.tmp/phase3-run.log`, `.tmp/phase3-thermal.log`.
 
+## Prior task — Phase 4 report + handoff refresh (COMPLETE, 2026-09-13)
+
+Objective: write the Phase 3 report into `progress.md` and refresh this handoff. Docs-only task (no code, no benchmarking, no engine changes). **All acceptance criteria met.**
+
+- **Headline (conditions-labeled, in-session, 1024 / wall-seconds, reps 2–6):** B1 essay **17.55 tok/s** (136.559 ms steps); B2 specdec **18.92 tok/s** (141.623 ms steps); B3 ablation **16.64 tok/s** (143.909 ms steps). The prior "current-binary headline pending re-baseline" caveat is replaced by these measured numbers.
+- **B2 vs 22.28:** labeled cross-session reference only (invalid for conclusions) — acceptance identical (same stream hash `139acb9d…`); the entire gap is step time (+17.2%) = this session's thermal state + the M=1 routed-QMV dispatch (≈5%/projection at M=1 per `qmvbench`). Current main routing M=1 decode through the routed kernel is expected to land below 22.28 — **not** a regression finding.
+- **Ablation (in-session, B3 − B1):** **+7.350 ms/step (+5.38%) / −0.914 tok/s (−5.21%)** = combined contribution of the `MLX_COMPILED_DECODE`-gated family (Checkpoint 1 micro-fusions + 2a QK-RoPE kernel + fused residual+RMSNorm). **Verdict: measured out as a *material* lever toward the 24 ms `tEvalMs` target** — a real but small (~5–6%) confirmed win; the path to 24 ms is the attention/acceptance work.
+- **Acceptance-determinism:** all 18 reps bit-exact (B1/B3 599/1086/426 hash `949b9423…`; B2 645/1008/380 hash `139acb9d…`) — zero gate failures across every rep.
+- **Open items:** dual-fixture re-baseline closed; Item D (verify-pass QMV routing), `qmvbench` throughput mode, thermal methodology, and attention/acceptance work remain.
+- **Note:** a pre-existing uncommitted deletion of the stale legacy root `handoff.md` (Checkpoint 2d era, fully superseded by this `docs/HANDOFF.md`) was left untouched (out of Phase 4 scope); it is reflected in the fresh checkpoint below.
+
 ## Prior task — interleaved gate+up layout removal (COMPLETE, 2026-09-13)
 
 Objective: remove the rejected interleaved gate+up layout (Item C of the fusion diagnosis) from the engine, then re-verify with a dual-fixture re-baseline gate. **All acceptance criteria met.**
@@ -88,10 +99,10 @@ Engine: `Qwen35FusedSwiGLUProjectionTests` 8/8, `Qwen35FusedQKVProjectionTests` 
 
 ## Current state
 
-- Completed: fusion diagnosis (see above); interleaved layout removal (engine `901d2ca`); dual-fixture §0 verify on the post-removal binary; docs housekeeping; **Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13)** — first valid headline tok/s measured on current main (B1 essay 17.55, B2 specdec 18.92, B3 ablation 16.64 tok/s; ablation delta +7.35 ms/step / −5.21% for the `MLX_COMPILED_DECODE`-gated fast paths; all 18 reps bit-exact; per-rep thermal logged).
+- Completed: fusion diagnosis (see above); interleaved layout removal (engine `901d2ca`); dual-fixture §0 verify on the post-removal binary; docs housekeeping; **Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13)** — first valid headline tok/s measured on current main (B1 essay 17.55, B2 specdec 18.92, B3 ablation 16.64 tok/s; ablation delta +7.35 ms/step / −5.21% for the `MLX_COMPILED_DECODE`-gated fast paths; all 18 reps bit-exact; per-rep thermal logged); **Phase 4 report + handoff refresh (2026-09-13)** — Phase 3 report finalized in `progress.md` (24 ms `tEvalMs` verdict stated), this handoff refreshed with a fresh checkpoint.
 - In progress: none.
 - Not started: Item D (verify-pass QMV routing); `qmvbench` throughput mode (N calls per sync); thermal cooldowns between run blocks.
-- Current hypothesis / diagnosis: the B2 (18.92 tok/s) vs pre-fix 22.28 gap is purely step-time (+17.2%, acceptance identical) — the unseparated sum of session thermal state and the M=1 routed-QMV dispatch (≈5%/projection at M=1 per `qmvbench`). "Current main may land below 22.28" is confirmed in-session; cross-session comparability remains open (standing decision).
+- Current hypothesis / diagnosis: settled. The B2 (18.92 tok/s) vs pre-fix 22.28 gap is purely step-time (+17.2%, acceptance identical) — the unseparated sum of session thermal state and the M=1 routed-QMV dispatch (≈5%/projection at M=1 per `qmvbench`). Current main landing below 22.28 is confirmed and expected, and is labeled a cross-session reference (invalid for conclusions, **not** a regression finding); cross-session comparability remains open (standing decision).
 
 ## Important files
 
