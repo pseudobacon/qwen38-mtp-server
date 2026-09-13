@@ -84,9 +84,9 @@ Engine: `Qwen35FusedSwiGLUProjectionTests` 8/8, `Qwen35FusedQKVProjectionTests` 
 
 ## Repository checkpoint
 
-- Last verified 2026-09-13 20:23 BST — fresh checkpoint output in the Fresh checkpoint section below.
-- Branches: server `main` at `4fb92ca` (Phase 3 merged fast-forward; `feature/prompt-phase3` deleted); engine `../mlx-swift-lm` `main` at `901d2ca` (unchanged in this task).
-- Worktrees: clean in both repos; the template-only `mlx-swift-lm/docs/` was deleted during docs housekeeping.
+- Last verified 2026-09-13 21:03 BST — fresh checkpoint output in the Fresh checkpoint section below.
+- Branches: server `main` at `6fd7c27` (Phase 4 report commit; `69d601f` was the prior Phase 3 checkpoint refresh); engine `../mlx-swift-lm` `main` at `901d2ca` (unchanged in this task).
+- Worktrees: engine clean; server has one **pre-existing uncommitted deletion** of the stale legacy root `handoff.md` (Checkpoint 2d era, superseded by this `docs/HANDOFF.md`), left untouched as out of Phase 4 scope. The template-only `mlx-swift-lm/docs/` was deleted during docs housekeeping.
 - Environment: port 18099; `QWEN_MTP_STEP_TRACE=1`; weights in `weights/` + `mtp-head/`; venv `/tmp/benchvenv` (HF tokenizer for stream hashes — recreate if missing, `/tmp` is wiped on reboot).
 - Required services: none (benchmark server is started and pkill'd per cell by `benchmarks/run_cell.sh`).
 - Workspace: `qwen38-mlx-server/` is a **non-repo DSH workspace** containing symlinks to both repos. Run all git and benchmark operations inside the real repos (`/Users/cwong/ai/qwen38-mtp-server`, `/Users/cwong/ai/mlx-swift-lm`); never `git init` or commit inside the workspace. Keep both symlinks at the same level (the engine is referenced as `../mlx-swift-lm`).
@@ -151,7 +151,7 @@ $ bash benchmarks/run_matrix.sh verify                         # essay 599/1086/
 $ bash benchmarks/run_phase3.sh                                # Phase 3: 18 reps, all determinism gates PASS
 $ /tmp/benchvenv/bin/python benchmarks/phase3_report.py <cell.jsonl> <B1|B2|B3> ...   # thermal merge + per-cell mean/min/max
 $ ./scripts/agent-checkpoint.sh                                # fresh checkpoint for this file (run per repo)
-$ git log -1 --oneline                                         # engine 901d2ca, server 4fb92ca
+$ git log -1 --oneline                                         # engine 901d2ca, server 6fd7c27
 ```
 
 Useful artifacts: `benchmarks/results/*.jsonl` (Phase 3: `rebaseline-essay.jsonl`, `rebaseline-specdec.jsonl`, `ablation-compiled-off.jsonl`); `.tmp/phase3-run.log`, `.tmp/phase3-thermal.log` (per-rep thermal + gate results); `.tmp/itemA-clean.log`, `.tmp/itemA-rerun.log` (contaminated, kept as evidence), `.tmp/probe-summary.log` (engagement summary line).
@@ -171,15 +171,15 @@ Useful artifacts: `benchmarks/results/*.jsonl` (Phase 3: `rebaseline-essay.jsonl
 
 ## Fresh checkpoint
 
-Fresh-checkpoint procedure completed successfully (2026-09-13 20:23 BST):
+Fresh-checkpoint procedure completed successfully (2026-09-13 21:03 BST):
 
 ```
 # Repository checkpoint (server)
 - Repository: /Users/cwong/ai/qwen38-mtp-server
 - Branch: main
-- HEAD: 4fb92ca
-- Git status: clean
-- Latest commit: 4fb92ca feat: phase 3 dual-fixture rebaseline + compiled-path ablation
+- HEAD: 6fd7c27
+- Git status: pending deletion of root `handoff.md` (stale legacy file, out of Phase 4 scope; see note)
+- Latest commit: 6fd7c27 docs: phase 4 report compiled-path family vs 24ms tEval target and handoff content
 
 # Repository checkpoint (engine)
 - Repository: /Users/cwong/ai/mlx-swift-lm
@@ -189,4 +189,4 @@ Fresh-checkpoint procedure completed successfully (2026-09-13 20:23 BST):
 - Latest commit: 901d2ca refactor: remove rejected interleaved gate+up layout
 ```
 
-Both worktrees clean of tracked and untracked changes (`.tmp/` transient logs are gitignored); feature branch `feature/prompt-phase3` merged and deleted in the server repo; no engine changes this task. _(Regenerate via `scripts/agent-checkpoint.sh` — run inside each repo — at the start of the next session.)_
+Engine worktree clean; server worktree has one **pre-existing, uncommitted deletion** of the stale legacy root `handoff.md` (Checkpoint 2d era, fully superseded by this `docs/HANDOFF.md`) — left untouched as out of Phase 4 scope, and reflected in the server checkpoint above. (`.tmp/` transient logs are gitignored.) _(Regenerate via `scripts/agent-checkpoint.sh` — run inside each repo — at the start of the next session.)_
