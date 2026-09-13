@@ -906,19 +906,24 @@ actor MLXGenerator {
                         // counters (cumulative process lifetime) so the cell
                         // runner can parse engagement per run. Empty
                         // histograms render "-".
+                        // Item D: append whitespace-free QMV verify dispatch
+                        // counters (cumulative process lifetime) so the cell
+                        // runner can parse engagement per run. Empty
+                        // histograms render "-". Appended via concatenation —
+                        // String(format:) %s expects a C string, not a Swift
+                        // String.
                         let qmvTokens = Qwen35QMVVerifyDispatch
                             .summaryTokens().joined(separator: " ")
                         let summary = String(format:
-                            "MTP-STEP-SUMMARY rounds=%d proposed=%d accepted=%d acceptedPerStep=%.4f avgStepMs=%.4f decodeSeconds=%.4f committed=%d %s\n",
+                            "MTP-STEP-SUMMARY rounds=%d proposed=%d accepted=%d acceptedPerStep=%.4f avgStepMs=%.4f decodeSeconds=%.4f committed=%d",
                             rounds,
                             proposedDraftTokens,
                             acceptedDraftTokens,
                             Double(acceptedDraftTokens) / Double(rounds),
                             stepLatencyTotalMs / Double(rounds),
                             decodeSeconds,
-                            emitted,
-                            qmvTokens
-                        )
+                            emitted
+                        ) + " " + qmvTokens + "\n"
                         _ = summary.withCString { fputs($0, stderr) }
                     }
 
