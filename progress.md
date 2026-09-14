@@ -729,7 +729,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** **K=2 round decomposition** (DONE 2026-09-14 — non-backbone overhead of the pinned k = 2 round decomposed to ~90% real GPU work (2 extra verify rows + 3-row head flush + 1 chain step) and ~10% host tape build; eval-window utilization 98.4% at 256 ctx, no reclaimable host gap; FullBench per-rep first-decode penalty root-caused as a bench artifact and retracted as a model property; deliverable `benchmarks/PROFILE-K2.md`; detail: K=2 decomposition section at the end of this file), Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 0 harness hardening** (DONE 2026-09-14 — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section), **Phases 2+3 headline re-measure + k=2 evaluation** (DONE 2026-09-14 — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22; detail: Phase 2+3 section), **Phase 4 Bug B fix** (DONE 2026-09-14 — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay now serial-identical (`949b9423…`), headline hashes invariant; detail: Phase 4 section), **Phase 5 head-structure decision** (DONE 2026-09-14 — **CLOSE the head-structure workstream**; q4 head stays as-is; `QWEN_MTP_DRAFT_K=2` recommended for this fixture class; detail: Phase 5 section), **k = 2 default flip + final headline** (DONE 2026-09-14 — production default draft depth pinned k = 2, engine `609e0d5`; diagnostic tests pin their session policy to the offered verify width; server load-time `MTP draft depth: k=…` log line + help-text fixes; `QWEN_MTP_DRAFT_K=3` rollback knob verified bit-exact; post-flip gate 4/4 cells PASS; final headline 21.89 essay / 23.29 specdec tok/s, 12/12 headline cells deterministic, single binary `e448b2e2…`; stale-claim sweep across progress/PROFILE/README/HANDOFF; detail: headline table + this task's entry below).
+**Done:** **K=2 round decomposition** (DONE 2026-09-14 — non-backbone overhead of the pinned k = 2 round decomposed to ~90% real GPU work (2 extra verify rows + 3-row head flush + 1 chain step) and ~10% host tape build; eval-window utilization 98.4% at 256 ctx, no reclaimable host gap; FullBench per-rep first-decode penalty root-caused as a bench artifact and retracted as a model property; deliverable `benchmarks/PROFILE-K2.md`; detail: K=2 decomposition section at the end of this file), Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 0 harness hardening** (DONE 2026-09-14 — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section), **Phases 2+3 headline re-measure + k=2 evaluation** (DONE 2026-09-14 — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22; detail: Phase 2+3 section), **Phase 4 Bug B fix** (DONE 2026-09-14 — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay now serial-identical (`949b9423…`), headline hashes invariant; detail: Phase 4 section), **Phase 5 head-structure decision** (DONE 2026-09-14 — **CLOSE the head-structure workstream**; q4 head stays as-is; `QWEN_MTP_DRAFT_K=2` recommended for this fixture class; detail: Phase 5 section), **k = 2 default flip + final headline** (DONE 2026-09-14 — production default draft depth pinned k = 2, engine `609e0d5`; diagnostic tests pin their session policy to the offered verify width; server load-time `MTP draft depth: k=…` log line + help-text fixes; `QWEN_MTP_DRAFT_K=3` rollback knob verified bit-exact; post-flip gate 4/4 cells PASS; final headline 21.89 essay / 23.29 specdec tok/s, 12/12 headline cells deterministic, single binary `e448b2e2…`; stale-claim sweep across progress/PROFILE/README/HANDOFF; detail: headline table + this task's entry below), **Verify tape profile** (DONE 2026-09-14, negative result — the 71.60 ms verify tape profiled at command-buffer granularity: 48 GDN layers 54.66 ms (74.5 %), 16 full-attention layers 16.93 ms (23.1 %), lm_head 3.94 ms (5.4 %), inter-CB gaps 1.32 ms (1.8 %); bottleneck is DRAM-bound 4-bit weight streaming at 205–257 GB/s ≈ machine peak; all four candidate branches dead (layout not bit-exact / in prebuilt MLX, row-batching already done, norm fusion already done, graph caching saves 0 ms of the eval window); no ≥8 ms lever in this checkout; deliverable `benchmarks/PROFILE-K2.md` §9; detail: Verify tape profile section at the end of this file).
 
 **Decisions on record:**
 
@@ -849,4 +849,65 @@ verify tape (71.60 ms, backbone 4-bit weight streaming) — the separate
 workstream that owns the eval window.
 
 **Files.** Server: `benchmarks/PROFILE-K2.md` §8 (new), this section,
+`docs/HANDOFF.md`. No source changes in either repo; no new binaries.
+## Verify tape profile (2026-09-14, negative result)
+
+**Objective.** Reduce the k = 2 verify tape (71.60 ms, 85 % of the 84.19 ms
+round) by ≥ 10 ms via backbone 4-bit weight-streaming / kernel optimization,
+bit-exact. **Verdict: NO WIN — no ≥8 ms lever exists in this checkout.** The
+tape is DRAM-bound on the fixed ~15 GB 4-bit weight set at 205–257 GB/s
+effective (≈ machine peak); every candidate branch is dead.
+
+**Profile (command-buffer granularity, the finest the Metal System Trace
+capture offers — per-shader intervals were not recorded; 18 steady rounds,
+binary `e448b2e2…`, 256 ctx, same capture as PROFILE-K2 §3/§8):**
+
+- Structure: one fused CB per layer (64 total) + lm_head CB + 3 small CBs.
+  The entire layer (QKV + attention/GDN + MLP + norms) is a single CB — no
+  norm/elementwise CBs exist in the tape (fusion already maximal:
+  swiGLU 64/64, qkv 16/64, gdn 48/64).
+- Per-layer-type bucket (medians): 48 GDN layers 1138.7 µs each = 54.66 ms
+  (74.5 %); 16 full-attention layers 1058.3 µs each = 16.93 ms (23.1 %);
+  lm_head (M=3, 635.7 MB 4-bit) 3935.7 µs = 3.94 ms (5.4 %); inter-CB gaps
+  1.32 ms (1.8 %); 3 small CBs 0.05 ms (0.1 %). CB-measured tape busy median
+  73.35 ms — consistent with the registered 71.60 ms within window-edge
+  noise. FA layers are *cheaper* per layer than GDN layers at 256 ctx
+  (attention over 3 queries × ~258 KV is trivial; GDN conv+scan costs more).
+- Bottleneck: memory bandwidth. Per-layer effective BW ~205 GB/s (GDN),
+  ~209 GB/s (FA), uniform across all 64 layers; M=1 in-pipeline 257 GB/s
+  (FullBench serial 269 GB/s) is the practical peak; M=1 flat across ctx
+  256→3072 (bandwidth-bound, not compute); tape = 58.30 (M=1 base) + 2 × 6.65
+  (marginal rows), the marginal 6.65 ms/row being real row compute.
+
+**Kill analysis of the candidate branches.** (1) Weight layout: dead — the
+layout is the MLX quantized format consumed by prebuilt kernels; any change
+alters fp32 accumulation order → breaks bit-exactness; the kernels are in
+prebuilt MLX (not this checkout). (2) Row batching (M=3 as one dispatch):
+already done — the tape is M=3 batched, one fused CB per layer. (3) Norm
+fusion into matmul: already done — no norm/elementwise CBs in the tape.
+(4) Graph caching: saves 0 ms of the eval window — the host build (2.97 ms)
+is already hidden behind head GPU; the inter-CB gaps are 1.32 ms/round, not
+graph build.
+
+The only sub-8 ms inefficiency found: 1.32 ms/round inter-CB gaps + 0.05 ms
+small CBs (total ~1.4 ms, ~2 % of the tape) — below the 8 ms bar by a factor
+of ~6. The QMV M=3 effective-BW gap (205 vs 257 GB/s) is in prebuilt MLX and
+is already accounted for in the 13.30 ms marginal-row cost.
+
+**Next levers (all outside this checkout).** (a) Model-level: a 2-token
+native head or draft-vocabulary lm_head (removes ~12.1 ms/round — the head +
+one verify row, not the tape). (b) Model-level: smaller/denser backbone
+quantization (fewer bytes streamed per forward). (c) MLX upstream: a faster
+M=3 QMV kernel (close the 205→257 GB/s gap). (d) Draft-depth policy:
+k=2→1 removes 12.1 ms/round at −1.22 tokens/round (a policy change, not a
+kernel change).
+
+**Baseline re-verification (this session).** One k = 2 cell (6 reps,
+`--spec-draft-n-max 3`, essay, single stream) on binary `e448b2e2…`:
+6/6 bit-exact `949b9423…`, 6/6 phaseSumOK, tEvalAvg 79.93 / 82.67 / 81.19 /
+84.06 / 83.17 / 84.81 ms, avgStepMs 84.29 / 87.05 / 85.48 / 88.47 / 87.55 /
+89.03 ms — rep 1 (cold) reproduces the registered 79.87 / 84.19; the rise is
+thermal drift (no thermal warning level recorded).
+
+**Files.** Server: `benchmarks/PROFILE-K2.md` §9 (new), this section,
 `docs/HANDOFF.md`. No source changes in either repo; no new binaries.

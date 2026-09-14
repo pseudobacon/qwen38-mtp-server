@@ -245,3 +245,159 @@ step+proj1+verify row (≈ 12.1 ms/round) — a model change, not an engine chan
 ~1.22 tokens/round on this fixture). (c) The verify tape itself (71.60 ms,
 backbone 4-bit weight streaming amortized over 3 rows) is the separate
 workstream that actually owns the eval window.
+
+## 9. Verify tape profile breakdown (2026-09-14, negative result)
+
+Goal: reduce the 71.60 ms verify tape by ≥10 ms (weight-streaming / kernel
+optimization). Profiled at command-buffer (CB) granularity — the finest the
+capture offers (per-shader intervals were not recorded in the Metal System
+Trace run) — bucketed by layer type via the known 64-layer pattern (48 GDN
++ 16 full-attention, full-attention every 4th layer per config.json).
+
+**Data**: k2trace capture (binary e448b2e2…, 256 ctx, 110 rounds, same
+session as §3/§8), 18 steady rounds bucketed. One fused CB per layer: the
+entire layer (QKV + attention/GDN + MLP + norms) is a single CB; no
+norm/elementwise CBs exist in the tape (fusion already maximal:
+swiGLU 64/64, qkv 16/64, gdn 48/64).
+
+### Per-layer-type bucket (medians, n=18 rounds)
+
+| component | per unit | per round | share |
+|---|---|---|---|
+| 48 GDN layers (fused CB) | 1138.7 µs | 54.66 ms | 71.1 % |
+| 16 full-attention layers (fused CB) | 1058.3 µs | 16.93 ms | 22.0 % |
+| lm_head (M=3, 635.7 MB 4-bit) | 3935.7 µs | 3.94 ms | 5.1 % |
+| inter-CB gaps (63.7/round, median 0.71 µs) | — | 1.32 ms | 1.7 % |
+| 3 small CBs (identity unconfirmed; ~18 µs each) | — | 0.05 ms | 0.1 % |
+| **total** | | **76.90 ms** | 100 % |
+
+(CB-measured tape busy median 73.35 ms; the sum-of-medians total 76.90 ms
+exceeds it because per-component medians come from different rounds.
+Consistent with the registered 71.60 ms within window-edge noise.)
+
+Per-layer uniformity: GDN 1138.7 µs (min 105, max 1618), FA 1058.3 µs
+(min 154, max 1354). The full-attention layers are *cheaper* per layer than
+the GDN layers at 256 ctx (attention over 3 queries × ~258 KV is trivial;
+GDN conv+scan costs more per layer).
+
+### Bottleneck verdict: memory bandwidth (weight streaming)
+
+- per-layer effective BW: ~234 MB avg / 1138.7 µs = **205 GB/s** (GDN),
+  ~209 GB/s (FA) — uniform across all 64 layers
+- M=1 in-pipeline: 15 GB / 58.30 ms = **257 GB/s** (FullBench serial:
+  269 GB/s) — the practical peak of this machine
+- M=1 flat across ctx 256→3072 (55.77→56.80 ms) — bandwidth-bound, not
+  compute
+- tape = 58.30 (M=1 base) + 2 × 6.65 (marginal rows) = 71.60 ms; the
+  marginal 6.65 ms/row is real row compute (MLP + attention for 2 rows),
+  not inefficiency
+- 98.4 % GPU util in the eval window; inter-tape-CB gaps 1.32 ms/round
+  (1.7 %)
+
+### Kill analysis of the candidate branches
+
+| branch | verdict |
+|---|---|
+| weight layout (interleave, alignment) | dead: layout is the MLX quantized format consumed by prebuilt kernels; any change alters fp32 accumulation order → breaks bit-exactness; kernels are in prebuilt MLX (not this checkout) |
+| row batching (M=3 as one dispatch) | already done: tape is M=3 batched, one fused CB per layer |
+| norm fusion into matmul | already done: no norm/elementwise CBs in the tape (swiGLU 64/64, qkv 16/64, gdn 48/64) |
+| graph caching | saves 0 ms of the eval window: host build (2.97 ms) is already hidden behind head GPU; inter-CB gaps 1.32 ms/round, not graph build |
+
+### Verdict
+
+No ≥8 ms lever exists in this checkout. The tape is DRAM-bound on the fixed
+~15 GB 4-bit weight set at 205–257 GB/s effective (≈ machine peak). The
+only sub-8 ms inefficiency found is 1.32 ms/round of inter-CB gaps +
+0.05 ms of small CBs (total ~1.4 ms, ~2 % of the tape) — below the bar by
+a factor of ~6. The QMV M=3 kernel's effective BW (205 GB/s) vs M=1
+quantizedMM (257 GB/s) difference is in prebuilt MLX and is already
+accounted for in the 13.30 ms marginal-row cost.
+
+**Next levers (all outside this checkout)**:
+
+1. Model-level: a 2-token native head or draft-vocabulary lm_head removes
+   ~12.1 ms/round (the head + one verify row, not the tape).
+2. Model-level: smaller/denser backbone quantization reduces the ~15 GB
+   weight set (fewer bytes streamed per forward).
+3. MLX upstream: a faster M=3 QMV kernel (close the 205→257 GB/s gap) —
+   in prebuilt MLX C++/Metal, not this checkout.
+4. Draft-depth policy: k=2→1 removes 12.1 ms/round at −1.22 tokens/round
+   (a policy change, not a kernel change).
+
+## 9. Verify tape profile breakdown (2026-09-14, negative result)
+
+Goal: reduce the 71.60 ms verify tape by ≥10 ms (weight-streaming / kernel
+optimization). Profiled at command-buffer (CB) granularity — the finest the
+capture offers (per-shader intervals were not recorded in the Metal System
+Trace run) — bucketed by layer type via the known 64-layer pattern (48 GDN
++ 16 full-attention, full-attention every 4th layer per config.json).
+
+**Data**: k2trace capture (binary e448b2e2…, 256 ctx, 110 rounds, same
+session as §3/§8), 18 steady rounds bucketed. One fused CB per layer: the
+entire layer (QKV + attention/GDN + MLP + norms) is a single CB; no
+norm/elementwise CBs exist in the tape (fusion already maximal:
+swiGLU 64/64, qkv 16/64, gdn 48/64).
+
+### Per-layer-type bucket (medians, n=18 rounds)
+
+| component | per unit | per round | share |
+|---|---|---|---|
+| 48 GDN layers (fused CB) | 1138.7 µs | 54.66 ms | 71.1 % |
+| 16 full-attention layers (fused CB) | 1058.3 µs | 16.93 ms | 22.0 % |
+| lm_head (M=3, 635.7 MB 4-bit) | 3935.7 µs | 3.94 ms | 5.1 % |
+| inter-CB gaps (63.7/round, median 0.71 µs) | — | 1.32 ms | 1.7 % |
+| 3 small CBs (identity unconfirmed; ~18 µs each) | — | 0.05 ms | 0.1 % |
+| **total** | | **76.90 ms** | 100 % |
+
+(CB-measured tape busy median 73.35 ms; the sum-of-medians total 76.90 ms
+exceeds it because per-component medians come from different rounds.
+Consistent with the registered 71.60 ms within window-edge noise.)
+
+Per-layer uniformity: GDN 1138.7 µs (min 105, max 1618), FA 1058.3 µs
+(min 154, max 1354). The full-attention layers are *cheaper* per layer than
+the GDN layers at 256 ctx (attention over 3 queries × ~258 KV is trivial;
+GDN conv+scan costs more per layer).
+
+### Bottleneck verdict: memory bandwidth (weight streaming)
+
+- per-layer effective BW: ~234 MB avg / 1138.7 µs = **205 GB/s** (GDN),
+  ~209 GB/s (FA) — uniform across all 64 layers
+- M=1 in-pipeline: 15 GB / 58.30 ms = **257 GB/s** (FullBench serial:
+  269 GB/s) — the practical peak of this machine
+- M=1 flat across ctx 256→3072 (55.77→56.80 ms) — bandwidth-bound, not
+  compute
+- tape = 58.30 (M=1 base) + 2 × 6.65 (marginal rows) = 71.60 ms; the
+  marginal 6.65 ms/row is real row compute (MLP + attention for 2 rows),
+  not inefficiency
+- 98.4 % GPU util in the eval window; inter-tape-CB gaps 1.32 ms/round
+  (1.7 %)
+
+### Kill analysis of the candidate branches
+
+| branch | verdict |
+|---|---|
+| weight layout (interleave, alignment) | dead: layout is the MLX quantized format consumed by prebuilt kernels; any change alters fp32 accumulation order → breaks bit-exactness; kernels are in prebuilt MLX (not this checkout) |
+| row batching (M=3 as one dispatch) | already done: tape is M=3 batched, one fused CB per layer |
+| norm fusion into matmul | already done: no norm/elementwise CBs in the tape (swiGLU 64/64, qkv 16/64, gdn 48/64) |
+| graph caching | saves 0 ms of the eval window: host build (2.97 ms) is already hidden behind head GPU; inter-CB gaps 1.32 ms/round, not graph build |
+
+### Verdict
+
+No ≥8 ms lever exists in this checkout. The tape is DRAM-bound on the fixed
+~15 GB 4-bit weight set at 205–257 GB/s effective (≈ machine peak). The
+only sub-8 ms inefficiency found is 1.32 ms/round of inter-CB gaps +
+0.05 ms of small CBs (total ~1.4 ms, ~2 % of the tape) — below the bar by
+a factor of ~6. The QMV M=3 kernel's effective BW (205 GB/s) vs M=1
+quantizedMM (257 GB/s) difference is in prebuilt MLX and is already
+accounted for in the 13.30 ms marginal-row cost.
+
+**Next levers (all outside this checkout)**:
+
+1. Model-level: a 2-token native head or draft-vocabulary lm_head removes
+   ~12.1 ms/round (the head + one verify row, not the tape).
+2. Model-level: smaller/denser backbone quantization reduces the ~15 GB
+   weight set (fewer bytes streamed per forward).
+3. MLX upstream: a faster M=3 QMV kernel (close the 205→257 GB/s gap) —
+   in prebuilt MLX C++/Metal, not this checkout.
+4. Draft-depth policy: k=2→1 removes 12.1 ms/round at −1.22 tokens/round
+   (a policy change, not a kernel change).

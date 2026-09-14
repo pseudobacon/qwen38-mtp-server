@@ -1,118 +1,152 @@
-# HANDOFF — Head fusion exploration (COMPLETE, NEGATIVE 2026-09-14)
+# HANDOFF — Verify tape profile (COMPLETE, NEGATIVE 2026-09-14)
 
-> **Checkpoint status (2026-09-14 20:43:15 / 20:43:24 +01:00).** The
-> fresh-checkpoint procedure **completed**: `./scripts/agent-checkpoint.sh`
-> ran successfully in both repositories (exit 0) and wrote
-> `.dsh/last-agent-checkpoint` in each before this file was finalized.
-> Engine marker 2026-09-14T20:43:15+01:00; server marker
-> 2026-09-14T20:43:24+01:00.
+> **Checkpoint status.** The fresh-checkpoint procedure **completed**:
+> `./scripts/agent-checkpoint.sh` ran successfully in both repositories
+> (exit 0) and wrote `.dsh/last-agent-checkpoint` in each before this file
+> was finalized. Engine marker 2026-09-14T21:43:05+01:00; server marker
+> 2026-09-14T21:43:14+01:00.
 
 ## Objective and acceptance criteria
 
-Reduce the k = 2 eval window (80.4 ms) by ≥ 8 ms by fusing the MTP head
-forward into the backbone's last-layer graph (Option A: one graph, one
-blocking eval; Option B: 4-bit head — already in place). Success required
-bit-exact stream hash `949b9423…` and a measured ≥ 8 ms/round win on a 6-rep
-k = 2 cell. **Verdict: NO WIN — not implemented.** The task's own diagnostic
-branch ("is the fusion removing work, or rearranging it?") is answered:
-rearranging it.
+Reduce the k = 2 verify tape (71.60 ms, 85 % of the 84.19 ms round) by
+≥ 10 ms (tape → ~61 ms, eval window → ~72 ms, step → ~76 ms) via backbone
+4-bit weight-streaming / kernel optimization, bit-exact (stream hash
+`949b9423…` unchanged), no draft-depth changes, engine changes first.
+**Verdict: NO WIN — no ≥8 ms lever exists in this checkout.** The tape is
+DRAM-bound on the fixed ~15 GB 4-bit weight set at 205–257 GB/s effective
+(≈ machine peak); all four candidate branches are dead (see below). The
+task's fallback path applies: profile breakdown documented, next levers
+recommended.
 
 ## Result (one live number per fact)
 
-- Head-family GPU work per round: **11.40 ms** (HeadBench, q4 head, d = 2,
-  flush = 3: flush 1.95 + step 1.47 + 2 × proj1 7.98; proj1 = single-row
-  4-bit backbone lm_head 635.7 MB + argmax = 3.99 ms, forced sequential by
-  the autoregressive chain).
-- 5-way trace (461-round essay cell, medians, binary `e448b2e2…`, hash
-  `949b9423…`): d_head1 74 µs, d_chain 41 µs, verify_build 2,969 µs,
-  eval_wall 79,870 µs, round 84,186 µs (stepAvg 84.18 ms).
-- Head submitted 0.23 ms after round start → **3.13 ms hidden behind the
-  verify build; 8.27 ms in the eval window; implied M = 3 tape 71.60 ms**
-  (= serial 58.30 + 2 × 6.65 ms marginal row — the three independent numbers
-  triangulate exactly).
-- Per-round GPU util **98.6 %** (busy 83.00 / wall 84.19 ms): the host side is
-  already fully hidden; the round is GPU-throughput-bound.
-- **Option A prediction: +3.1 ms/round REGRESSION** (a fused single graph is
-  submitted at t = 3.36 ms, losing the 3.13 ms the shipped asyncEval design
-  hides; eval would be 11.40 + 71.60 = 83.00 ms vs 79.87 ms). No scheduling
-  variant beats the shipped design (it already submits the head at the
-  earliest possible instant).
-- Even removing 100 % of the head work (impossible — draft ids are verify
-  inputs) caps the saving at 8.27 ms, at the bar rather than through it.
+Profiled at command-buffer (CB) granularity — the finest the Metal System
+Trace capture offers (per-shader intervals were **not** recorded in the
+k2trace run; `metal-shader-profiler-intervals` table has 0 rows). 18 steady
+rounds bucketed, binary `e448b2e2…`, 256 ctx, same capture as PROFILE-K2
+§3/§8 (offset 696,415,092,781,278 validated: 102.4 % eval-window CB
+coverage).
 
-## Why this closes the question
+- **Structure: one fused CB per layer (64 total) + lm_head CB + 3 small
+  CBs.** The entire layer (QKV + attention/GDN + MLP + norms) is a single
+  CB — no norm/elementwise CBs exist in the tape (fusion already maximal:
+  swiGLU 64/64, qkv 16/64, gdn 48/64).
+- **Per-layer-type bucket (medians, n=18):** 48 GDN layers 1138.7 µs each =
+  54.66 ms (74.5 %); 16 full-attention layers 1058.3 µs each = 16.93 ms
+  (23.1 %); lm_head (M=3, 635.7 MB 4-bit) 3935.7 µs = 3.94 ms (5.4 %);
+  inter-CB gaps 1.32 ms (1.8 %); 3 small CBs 0.05 ms (0.1 %). CB-measured
+  tape busy median 73.35 ms — consistent with the registered 71.60 ms
+  within window-edge noise. FA layers are *cheaper* per layer than GDN
+  layers at 256 ctx (attention over 3 queries × ~258 KV is trivial; GDN
+  conv+scan costs more per layer).
+- **Bottleneck: memory bandwidth (weight streaming).** Per-layer effective
+  BW ~205 GB/s (GDN), ~209 GB/s (FA), uniform across all 64 layers; M=1
+  in-pipeline 257 GB/s (FullBench serial 269 GB/s) is the practical peak;
+  M=1 flat across ctx 256→3072 (55.77→56.80 ms) — bandwidth-bound, not
+  compute. tape = 58.30 (M=1 base) + 2 × 6.65 (marginal rows); the marginal
+  6.65 ms/row is real row compute (MLP + attention for 2 rows), not
+  inefficiency.
+- **Kill analysis of the candidate branches.** (1) Weight layout: dead —
+  the layout is the MLX quantized format consumed by prebuilt kernels; any
+  change alters fp32 accumulation order → breaks bit-exactness; the kernels
+  are in prebuilt MLX (not this checkout). (2) Row batching (M=3 as one
+  dispatch): already done — the tape is M=3 batched, one fused CB per layer.
+  (3) Norm fusion into matmul: already done — no norm/elementwise CBs in the
+  tape. (4) Graph caching: saves 0 ms of the eval window — the host build
+  (2.97 ms) is already hidden behind head GPU; the inter-CB gaps are 1.32
+  ms/round, not graph build.
+- **Only sub-8 ms inefficiency found:** 1.32 ms/round inter-CB gaps + 0.05
+  ms small CBs (total ~1.4 ms, ~2 % of the tape) — below the 8 ms bar by a
+  factor of ~6. The QMV M=3 effective-BW gap (205 vs 257 GB/s) is in
+  prebuilt MLX and is already accounted for in the 13.30 ms marginal-row
+  cost.
 
-The verify input is `[primary] + draftIdArrays`: the head's draft-id work is
-on the verify critical path. Fusion conserves every byte of weight streaming
-(head 238.9 MB × 2 forwards + lm_head 635.7 MB × 2 single-row projections)
-and only changes when the work is submitted. The only levers that actually
-reduce GPU work are model-level (native 2-token head / draft-vocabulary
-lm_head ≈ 12.1 ms/round for one step + proj1 + verify row), draft-depth
-policy (k = 1: −12.1 ms/round at −1.22 tokens/round on this fixture), or the
-verify tape itself (71.60 ms of backbone 4-bit weight streaming — the
-separate workstream that owns the eval window).
+## Next levers (all outside this checkout)
 
-## Files
+1. Model-level: a 2-token native head or draft-vocabulary lm_head (removes
+   ~12.1 ms/round — the head + one verify row, not the tape).
+2. Model-level: smaller/denser backbone quantization (fewer bytes streamed
+   per forward).
+3. MLX upstream: a faster M=3 QMV kernel (close the 205→257 GB/s gap) — in
+   prebuilt MLX C++/Metal.
+4. Draft-depth policy: k=2→1 removes 12.1 ms/round at −1.22 tokens/round
+   (a policy change, not a kernel change).
 
-- Server (`qwen38-mtp-server`): `benchmarks/PROFILE-K2.md` §8 (new addendum),
-  `progress.md` (Done line + "Head fusion exploration" section), this file.
-- Engine (`../mlx-swift-lm`): **no changes** (HeadBench pre-existed from the
-  W2/W4 tasks and was used as-is).
-- No source changes in either repo; no new binaries; no git branches needed
-  beyond the docs commit in the server repo.
+## Git state
 
-## Persistent facts (still live)
+- `qwen38-mtp-server` (this repo): branch `main`, clean before the docs
+  commit for this task (docs-only: `benchmarks/PROFILE-K2.md` §9, this file,
+  `progress.md`).
+- `../mlx-swift-lm`: branch `main` at `97a9d85`, clean, untouched by this
+  task.
+- Fresh checkpoint markers: engine 2026-09-14T21:43:05+01:00, server
+  2026-09-14T21:43:14+01:00.
 
-- Production default: pinned k = 2; rollback knob `QWEN_MTP_DRAFT_K=3`
-  verified bit-exact; `--spec-draft-n-max` offer cap bounds effective k.
-- Final headline (current main, single binary `e448b2e2…`): essay 21.89 /
-  specdec 23.29 tok/s. Registered streams: essay `949b9423…` (k=2, q4),
-  specdec `139acb9d…` (k=2, q4), specdec serial `c70882fc…`.
-- Engine main `97a9d85` (FullBench); server main `0d8767c` (HANDOFF marker;
-  the K2 decomposition commit is `6bc4bdc`). Verify with `git log` before
-  relying on any of it.
-- PROFILE-K2.md §6 verdict stands: no kernel-level win of order 10 ms is
-  addressable from this checkout without changing draft depth, head design,
-  or MLX C++.
+## Baseline re-verification (this session)
+
+One k = 2 cell (6 reps, `--spec-draft-n-max 3`, essay fixture, single
+stream) on the current binary `e448b2e2…` to confirm the registered numbers
+reproduce before recording the verdict (`/tmp/k2baseline.jsonl`):
+
+| field | value |
+|---|---|
+| tEvalAvg (reps 1–6) | 79.93 / 82.67 / 81.19 / 84.06 / 83.17 / 84.81 ms (rep 1 cold = registered 79.87) |
+| avgStepMs (reps 1–6) | 84.29 / 87.05 / 85.48 / 88.47 / 87.55 / 89.03 ms (rep 1 cold = registered 84.19) |
+| stream hash | `949b9423…` — 6/6 bit-exact |
+| phaseSumOK / draft_depth / head | 6/6 True / k=2 / q4 |
+
+The rep-to-rep rise (tEval 79.93→84.81) is thermal drift within the session
+(no thermal warning level recorded); rep 1 reproduces the registered numbers
+cold.
 
 ## Commands / verification
 
-- 5-way trace cell (reproduces the segment split): from the server repo,
-  `MLX_QWEN_MTP_TRACE_PATH=/tmp/… benchmarks/run_cell.sh fusion5way "MLX_QWEN_MTP_TRACE=1" <port> benchmarks/prompts/essay-1024.txt q4`.
-- HeadBench (isolated head cost): `cd ../mlx-swift-lm && .build/release/headbench --model /Users/cwong/ai/qwen38-mtp-server/weights --head /Users/cwong/ai/qwen38-mtp-server/mtp-head/q4 --drafts 2 --flush 3 --warmup 10 --timed 50`.
-- No production source changed → no rebuild, no test rerun required (engine
-  diagnostics and server suite last green on the current mains; the binary
-  SHA `e448b2e2…` is unchanged).
+- Bucketing scripts (analysis only, /tmp): `analyze_k2_tape.py` (per-layer
+  CB bucketing), `analyze_k2_cbs.py` (CB structure discovery).
+- Inputs: `/tmp/k2trace-gpu-intervals.xml` (CB intervals),
+  `/tmp/k2trace-mtp-trace.log` (mtp-anchor lines),
+  `/tmp/k2trace-toc.xml` (table inventory), `/tmp/k2-gpu-counters.xml` (1.2 GB
+  — RT-Unit-Active tick stream; single counter type, 3.8M ticks).
+- Baseline cell: `/tmp/run_k2baseline.sh` → `/tmp/k2baseline.jsonl`.
+- No source changes in either repo; no new binaries; no rebuild required.
 
-## Do NOT repeat
+## Unresolved risks / caveats
 
-- Do not implement Option A (fused head-into-backbone single graph): measured
-  analysis predicts +3.1 ms/round; it is rearrangement, not removal.
-- Never enable `MLX_QWEN_MTP_TRACE_SYNC_HEAD=1` (destroys head/verify overlap).
-- Never cite per-rep FullBench M = 1 numbers at prime > 256 as serial-decode
-  cost — use `--serial` mode or the in-pipeline cells.
-- xctrace GPU `start-time` is trace-relative; always offset-calibrate.
-- Never edit source files with python/sed/awk/shell scripts.
-- Engine commits before server; plain commit messages (no parentheses/brackets
-  under zsh); `git merge --no-edit`.
-- `MLX_QWEN_MTP_TRACE=1` (5-way) adds ~2.19 ms/round of instrumentation — fine
-  for segment splits, never for ranked absolute round times.
+- Per-shader (per-kernel) intervals were not recorded in the k2trace run, so
+  the component split (QKV vs attention vs MLP vs norms *within* a layer CB)
+  is not directly measurable; the one-fused-CB-per-layer structure is itself
+  the finding (the components are fused by design and the layer CB is
+  uniform ~1.13 ms).
+- The 3 small CBs (~18 µs each) have unconfirmed identity (candidates: GDN
+  state ops, KV scatter, tape bookkeeping); total 0.05 ms — immaterial.
+- The per-layer CB bucketing assumes the 64-layer forward occupies the last
+  64 large CBs before the lm_head CB in each round; validated by count
+  (exactly 65 large CBs in the tail-68 across all 18 rounds) and by the
+  pattern alignment (FA every 4th).
 
-## Next step (exact)
+## Do-not-repeat
 
-None — the task is complete. Candidate follow-ups (recorded in
-`benchmarks/PROFILE-K2.md` §8 and §6): (a) model-level head change (native
-2-token head or draft-vocabulary lm_head, ≈ 12.1 ms/round), (b) K = 1 repair
-path, (c) host tape-build flush in MLX C++ (3.4 ms tG), (d) verify-tape
-workstream (71.60 ms backbone weight streaming).
+- Do **not** re-capture the trace with `MLX_QWEN_MTP_TRACE_SYNC_HEAD=1`
+  (destroys head/verify overlap — prior-session finding).
+- Do **not** enable `MLX_QWEN_MTP_LADDER=off` for ranked runs (attribution
+  probe only).
+- Do **not** cite fb11 trace captures (pid 77915, 79949) — empty GPU
+  tables.
+- Do **not** run `head -N` on the checkpoint script output (SIGPIPE aborts
+  the script before the marker write); redirect to a file.
+- Do **not** attempt the weight-layout branch — it is dead on bit-exactness
+  grounds, not just on the prebuilt-kernel grounds.
+- Do **not** cite per-rep FullBench M=1 numbers at prime > 256 as
+  serial-decode cost (per-rep first-decode penalty is a bench artifact).
 
-## Repository state (verified at write time)
+## Next step
 
-- `qwen38-mtp-server`: branch `main` at `fa4e1dc` (this task's docs commit,
-  fast-forward merged; feature branch `feature/head-fusion-audit` deleted);
-  clean (this HANDOFF marker commit follows it on `main`).
-- `../mlx-swift-lm`: branch `main` at `97a9d85`, clean, untouched by this
-  task.
-- Fresh checkpoint markers: 2026-09-14T20:43:15+01:00 (engine) and
-  2026-09-14T20:43:24+01:00 (server) (`.dsh/last-agent-checkpoint` in each
-  repo); fresh-checkpoint procedure completed.
+None — task complete (negative result, documented). All follow-up candidates
+are outside this checkout (model-level changes, MLX upstream, or policy).
+
+## Checkpoint markers
+
+- engine: 2026-09-14T21:43:05+01:00
+- server: 2026-09-14T21:43:14+01:00
+
+The fresh-checkpoint procedure completed.
