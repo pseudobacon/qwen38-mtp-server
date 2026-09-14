@@ -1,4 +1,4 @@
-# HANDOFF — K=2 round decomposition (IN PROGRESS at write time; measurement complete, commits pending)
+# HANDOFF — K=2 round decomposition (COMPLETE 2026-09-14)
 
 > **Checkpoint status (2026-09-14 20:02:33+01:00).** The fresh-checkpoint
 > procedure **completed**: `./scripts/agent-checkpoint.sh` ran successfully in
@@ -24,9 +24,14 @@ speculative round and close with a kernel-addressability verdict in
       model property.
 - [x] `benchmarks/PROFILE-K2.md` written (server repo).
 - [x] progress.md updated (Done line + K=2 decomposition section).
-- [ ] Commit engine first (FullBench + Package.swift), then server
-      (PROFILE-K2.md + drivers + results + progress.md + this file); merge
-      both to main; delete feature branches.
+- [x] Engine committed `97a9d85` (FullBench + Package.swift) and merged to
+      main; branch deleted. Server committed `6bc4bdc` (PROFILE-K2.md +
+      drivers + results + progress.md + this file) and merged to main;
+      branch deleted.
+- [x] Completion criteria: engine diagnostics 2/2 PASS (observed on the
+      feature branch before merge); server suite 121/121 PASS (observed
+      before merge); fresh checkpoints written in both repos 2026-09-14
+      20:02:33+01:00.
 
 ## Result (one live number per fact)
 
@@ -129,28 +134,21 @@ gdn 48/64, qkv 16/64).
 
 ## Next step (exact)
 
-1. Run `./scripts/agent-checkpoint.sh` (both repos) and confirm success.
-2. Engine first: commit `Libraries/FullBench/` + `Package.swift` on
-   `feature/k2-decomposition` (message: `Add FullBench diagnostic tool for the
-   k2 round decomposition`), then `git checkout main && git merge
-   --no-edit feature/k2-decomposition && git branch -d feature/k2-decomposition`.
-3. Server: commit `benchmarks/PROFILE-K2.md`, `benchmarks/run_k2decomp.sh`,
-   `benchmarks/run_k2trace.sh`, `benchmarks/results/k2decomp*.jsonl`,
-   `progress.md`, `docs/HANDOFF.md` (message: `K2 round decomposition profile
-   and drivers`), merge to main, delete branch.
-4. Checkpoint marker already updated in this file (completed 2026-09-14
-   20:02:33+01:00, both repos).
+None — the task is complete. Both repos are on `main` with all work merged
+and branches deleted. Any successor task starts from this handoff, the
+`progress.md` roadmap, and `benchmarks/PROFILE-K2.md`. Candidate follow-ups
+recorded in the profile: (a) K=1 repair path (`rollbackCheckpoints` write),
+(b) host tape-build flush in MLX C++ (3.4 ms tG), (c) in-pipeline trace at a
+real server context (2–8k) to confirm the no-host-gap finding at depth.
 
 ## Repository state (verified at write time)
 
-- `qwen38-mtp-server`: branch `feature/k2-decomposition` (main at `f6ac7bc`
-  + HANDOFF marker), untracked: `benchmarks/run_k2decomp.sh`,
-  `benchmarks/run_k2trace.sh`, `benchmarks/results/k2decomp.jsonl`,
-  `benchmarks/results/k2decomp-ab.jsonl`; modified: `progress.md`,
-  `docs/HANDOFF.md`; new: `benchmarks/PROFILE-K2.md` (verify with
-  `git status --short` before editing).
-- `../mlx-swift-lm`: branch `feature/k2-decomposition` (main at `609e0d5`),
-  modified: `Package.swift`; untracked: `Libraries/FullBench/`.
+- `qwen38-mtp-server`: branch `main` at `6bc4bdc` (the K2 decomposition
+  commit), clean (this HANDOFF marker commit follows it on `main`); feature
+  branch deleted.
+- `../mlx-swift-lm`: branch `main` at `97a9d85` (FullBench), clean; feature
+  branch deleted. (Local main is ahead of `origin/main` — push is a
+  separate, unrequested operation.)
 - Fresh checkpoint marker: written 2026-09-14T20:02:33+01:00 in both
   repositories (`.dsh/last-agent-checkpoint`); fresh-checkpoint procedure
   completed.
