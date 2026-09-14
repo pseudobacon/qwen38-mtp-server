@@ -48,6 +48,7 @@ bash benchmarks/run_matrix.sh itemA    # 2×2 fusion matrix
 |---|---|---|
 | `MLX_QWEN_FUSED_QKV` | ON | Fused W_qkv packed projection (rollback: `0`) |
 | `MLX_QWEN_FUSED_SWIGLU` | ON | Fused W_gate+up packed projection (rollback: `0`) |
+| `MLX_QWEN_QMV_VERIFY` | ON | Routed QMV kernel on the verify pass (`B·L ∈ 2..9`, 3-D verify reshaped to `[B·L, K]`); M = 1 falls back to the incumbent (rollback: `0`) |
 | `MLX_QWEN_FOUR_GDN` | ON | GDN 4-projection input fusion |
 | `MLX_COMPILED_DECODE` | ON | `compile(shapeless: true)` activation micro-fusions (opt-out for the Tahoe Metal JIT bug) |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |
