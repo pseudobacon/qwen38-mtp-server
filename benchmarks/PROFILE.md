@@ -1,8 +1,10 @@
 # tEval profile — W2 (2026-09-14)
 
 Scope: bucket the ~105–125 ms/step `tEval` of the default-config greedy MTP
-server (QMV verify ON, fusions ON, compiled decode ON, adaptive draft depth,
-code default 3), answer (a) draft-head forward + draft-logits cost per round,
+server (QMV verify ON, fusions ON, compiled decode ON, adaptive draft depth —
+the pre-flip production default; since the post-W4 flip the production
+default is pinned k = 2, engine `Qwen38MTPBlockSession.defaultDraftDepth`),
+answer (a) draft-head forward + draft-logits cost per round,
 (b) verify-logits-head cost per round, (c) where the next fused-kernel work
 should go, and provide the W4 trigger measurement. In-session evidence only;
 cross-session absolutes are labels, not conclusions.
@@ -148,9 +150,11 @@ forward is 16.38 ms (849 MB bf16; raw-matmul floor 7.36 ms at ~115 GB/s + ~9 ms
 layer-structure estimate).
 
 **(b) Verify-logits-head cost per round** — measured, §2: 4.33 ms (M=2) to
-7.94 ms (M=5); grows ~1.2 ms per extra verify row. The `lm_head` is already
-4-bit in the checkpoint (635.7 MB payload, group 64) — there is **no further
-quantization headroom** on the logits path; report-only per the W4 scope.
+7.94 ms (M=5); grows ~1.2 ms per extra verify row (the §2 headbench method is
+flush-contaminated — isolated per-call sync — so treat these as upper bounds
+on in-pipeline cost, §7). The `lm_head` is already 4-bit in the checkpoint
+(635.7 MB payload, group 64) — there is **no further quantization headroom**
+on the logits path; report-only per the W4 scope.
 
 **(c) Where the fused-kernel work should go next**, in lever size order:
 1. **4-bit quantize the MTP head (W4).** The head's matmul floor is 7.36 ms
@@ -170,7 +174,11 @@ quantization headroom** on the logits path; report-only per the W4 scope.
 gate/up/silu/mul/down chain (5 ops) and its QKV the unfused projections.
    Fusing them removes launches and one matmul; expected gain is small
    (launch-level, not bandwidth-level) but it is the same pattern already
-   proven bit-exact on the backbone.
+   proven bit-exact on the backbone. — **Superseded (W4, 2026-09-14):** the 4-bit
+   q4 head uses stock `QuantizedLinear`s, which are fusion-eligible, so the
+   head's SwiGLU/QKV fusions engage automatically (`head swiGLU 1 qkv 1` in
+   every q4 load summary); the `head swiGLU 0 qkv 0` observation applied to
+   the BF16 head only (eager fallback by design).
 3. **Backbone 4-bit bandwidth headroom.** Implied in-pipeline bandwidth is
    200–273 GB/s vs qmvbench's sustained 310–355 GB/s at the same shapes — a
    possible ~10–20 % on the backbone share, but it requires kernel work on the
@@ -186,12 +194,17 @@ factor of 5–9×.** W4 (4-bit MTP head, group 64, A/B vs the BF16 head) is
 cleared to proceed. `lm_head` remains report-only (already 4-bit; quantizing
 it further would change committed tokens and requires explicit sign-off).
 
-**Safety note for W4:** the MTP head emits only draft proposals; the target's
-greedy verify commits, so head precision affects acceptance rate, not the
-committed stream (the W3 sweep's k=1..4 bit-exactness under different draft
-depths is the evidence that the committed stream is invariant to draft
-quality). The W4 A/B gates on (i) acceptance rate, (ii) tok/s, and
-(iii) the committed-stream hash staying `949b9423…` / `139acb9d…`.
+**Safety note for W4 (corrected 2026-09-14 by the Phase 1 registry policy):**
+the MTP head emits only draft proposals and the target's greedy verify
+commits, so head precision affects acceptance rate far more than the
+committed stream — but the committed stream is **not invariant to head
+quality or draft depth in exact arithmetic**: each (fixture, config) pair has
+its own registered stream hash (the Phase 1 registry), and knife-edge flips
+can separate configs (the W3 bf16 k=2 stream `06882d85…` diverged from the
+others; the W4 q4 k=1..4 streams coincide by observation, not by
+invariance). The W4 A/B gates on (i) acceptance rate, (ii) tok/s, and
+(iii) the per-config committed-stream hashes (`949b9423…` essay /
+`139acb9d…` specdec at the k=3 q4 cell).
 
 ## 7. Post-W4 amendment — head-family numbers are flush-contaminated upper bounds (2026-09-14)
 

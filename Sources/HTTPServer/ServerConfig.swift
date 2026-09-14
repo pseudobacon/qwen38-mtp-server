@@ -305,7 +305,12 @@ struct ServerConfig: Sendable {
             --frequency-penalty <float>     Frequency penalty (default: 0.0)
 
         MTP & MEMORY OPTIONS:
-            --spec-draft-n-max <int>        Max speculative draft depth (default: 8, 0 = disabled)
+            --spec-draft-n-max <int>        Max speculative draft depth offered per round
+                                            (default: 3, 0 = disabled). The per-round
+                                            draft depth itself defaults to the pinned
+                                            k = 2 (post-W4 queue, 2026-09-14); override
+                                            it with QWEN_MTP_DRAFT_K (k = 3 is the
+                                            rollback knob for the pre-flip default).
             --prefill-chunk-size <int>      Max tokens per prefill forward pass (default: 512,
                                             0 = single-pass prefill)
             --cache-type-k, -ctk <type>     KV cache K type: f16, f32, q8_0, q4_0, q4_1, q2_0,
@@ -338,6 +343,9 @@ struct ServerConfig: Sendable {
             QWEN_MEMORY_LIMIT_GB, QWEN_MAX_QUEUE_DEPTH, QWEN_PREFILL_CHUNK_SIZE,
             QWEN_KV_SCHEME, QWEN_KV_GROUP_SIZE, QWEN_KV_BITS, QWEN_KV_TAIL_SIZE,
             LLAMA_ARG_CACHE_TYPE_K, LLAMA_ARG_CACHE_TYPE_V,
+            QWEN_MTP_DRAFT_K          (pin the per-round draft depth to min(offer, k);
+                                        overrides the pinned k = 2 default;
+                                        k = 3 is the rollback knob)
             MLX_QWEN_MTP_HEAD_QUANT   (1/true/on force the 4-bit draft head
                                        <QWEN_MTP_HEAD>/q4; 0/false/off the
                                        pinned BF16 head (explicit rollback);

@@ -157,6 +157,7 @@ except Exception:
 summary = None
 head_selected = None
 fusion_summary = None
+draft_depth = None
 # The step trace/summary go to stderr; the load-time prints (head selection,
 # fusion prepare summary) go to stdout — scan both.
 for path in (stderr_log, stdout_log):
@@ -166,6 +167,10 @@ for path in (stderr_log, stdout_log):
         if "MLXLM: MTP head selected:" in line:
             # W4 provenance: which head tree this cell actually loaded.
             head_selected = line.split("MLXLM: MTP head selected:", 1)[1].strip()
+        if "MLXLM: MTP draft depth:" in line:
+            # Post-W4 queue provenance: the active draft depth this cell ran
+            # (default pinned k = 2, or QWEN_MTP_DRAFT_K-forced).
+            draft_depth = line.split("MLXLM: MTP draft depth:", 1)[1].strip()
         if "MLXLM: fusion prepare summary:" in line:
             # W4 engagement proof: packed-fusion counts per model family.
             fusion_summary = line.split("MLXLM: fusion prepare summary:", 1)[1].strip()
@@ -208,6 +213,8 @@ for line in open(stderr_log, errors="replace"):
     fi("acc", accs)
 if head_selected:
     out["head_selected"] = head_selected
+if draft_depth:
+    out["draft_depth"] = draft_depth
 if fusion_summary:
     out["fusion_summary"] = fusion_summary
 

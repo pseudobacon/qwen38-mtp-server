@@ -1,153 +1,167 @@
-# HANDOFF — 2026-09-14 (post-W4 queue complete)
+# HANDOFF — k=2 default flip, final headline, and stale-claim sweep (COMPLETE 2026-09-14)
 
-## Objective
+> **Fresh checkpoint state (2026-09-14).** The fresh-checkpoint procedure
+> **completed**: `./scripts/agent-checkpoint.sh` ran successfully and wrote
+> `.dsh/last-agent-checkpoint` (gitignored in both repos) before this file was
+> finalized.
 
-The six-phase post-W4 queue is **complete** (Phases 0–5 all done 2026-09-14).
+## Objective and acceptance criteria (met)
 
-| phase | acceptance criterion | result |
-|---|---|---|
-| 0 | harness hardening | DONE — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label |
-| 1 | Bug A verdict | DONE — **precision family, not a logic bug**; per-(fixture, config) stream-hash gate policy now binding; no fix |
-| 2+3 | headline re-measure + k=2 | DONE — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22 |
-| 4 | Bug B fix | DONE — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay serial-identical, headline hashes invariant |
-| 5 | head-structure decision | DONE — **CLOSE the head-structure workstream**; q4 head stays as-is; k=2 recommended operating point |
+Part A: flip the production default draft depth from the adaptive cost model to
+pinned k = 2 (engine `Qwen38MTPBlockSession.draftPolicy`), prove the rollback
+knob (`QWEN_MTP_DRAFT_K=3`) still works, run post-flip correctness gates
+(default ≡ k=2 registered streams; k3 ≡ k3 registered streams; rollback
+functional; load-time log line states the active depth), execute the final
+headline benchmark run (6 reps × 2 fixtures, full Phase 3 protocol), and update
+the headline table with one live row per fixture plus docs (README, progress.md,
+HANDOFF). Part B: grep-driven stale-claim sweep over progress.md, PROFILE.md,
+README, and this file.
 
-## Branch / commit / uncommitted state (verify independently before editing)
+All acceptance criteria met:
 
-- Engine `/Users/cwong/ai/mlx-swift-lm`: `main` @ `126591a` (Bug B fix + regression tests),
-  clean. `feature/postw4-queue` merged (fast-forward) and deleted.
-- Server `/Users/cwong/ai/qwen38-mtp-server`: `main` (HEAD = this HANDOFF finalization
-  commit on top of `4a5c9d9` queue results, drivers, docs), clean.
-  `feature/postw4-queue` merged (fast-forward) and deleted.
-- If this file's state disagrees with `git status` / `git log`, Git wins — update this
-  file first, then proceed.
+- Post-flip gate: 4/4 one-shot cells PASS (default k=2 and rollback k=3, both
+  fixtures; registered hashes; `head_gate PASS (q4)`; `phaseSumOK` true;
+  `draft_depth` field records the active depth).
+- Final headline: 12/12 cells deterministic, single binary `e448b2e2…`, per-rep
+  thermal snapshots clean (12/12, no warnings).
+- Rollback knob verified bit-exact: `QWEN_MTP_DRAFT_K=3` reproduces the
+  registered k=3 streams (`949b9423…` / `139acb9d…`) on both fixtures.
+- Engine and server tests green; both repos merged to main; branches deleted.
 
-## Important files
+## Final headline (one live row per fixture — current main)
 
-- Engine `Libraries/MLXLMCommon/AttentionUtils.swift` — the Bug B fix: SDPA exactness
-  chunk (gate: L ∈ 6..9, `L·gqa > 32`, head_dim 256, `5·gqa ≤ 32`, `offset > 0`,
-  symbolic `.causal`; 5-row + (L−5)-row vector-kernel calls with incremental KV scatter
-  updates). Index-slice style: `arr[.ellipsis, s..<e, 0...]` (the fork's
-  `arr[range, axis:]` is deprecated; double `.ellipsis` index lists are rejected).
-- Engine `Tests/MLXLMTests/Qwen38SDPAExactnessTests.swift` — unit regression
-  (bit-exact vs promoted-windows reference, L ∈ {6,7,8,9} × offset ∈ {13,29,41,57,250},
-  live cache state equality; negative controls L=5 / offset=0 / `.array` mask stay on
-  the legacy single call). Merge-safe, permanent.
-- Engine `Tests/MLXLMTests/Qwen38MTPDiagnosticTests.swift` — added
-  `testWideVerifyStaysInSerialFamily` (serial vs depth-5 width-6 streams, 256 tokens,
-  greedy: 256/256 match, no divergence; asserts `firstDivergence >= 16` and
-  `matchRate >= 0.85`).
-- Engine `Tests/MLXLMTests/Qwen38BugADiscriminatorTests.swift` — **removed** (throwaway
-  Phase 1 discriminator; it exists only in the feature-branch history commit `91ab1c8`,
-  never on main). Do not resurrect it; the Phase 1 evidence is in progress.md.
-- Server `benchmarks/run_postw4.sh` / `benchmarks/run_deepk.sh` — the two gate-session
-  drivers (6 cells × 6 reps interleaved; deep-k = 3 cells × 6 reps + 2 regate cells).
-- Server `benchmarks/results/postw4.jsonl` (36 records) and `deepk.jsonl` (20 records) —
-  provenance for Phases 2/3/4/5.
-- Server `progress.md` — Phase 0–5 sections + roadmap (all queue items closed).
-- Server `Sources/HTTPServer/Generation/MLXGenerator.swift` — q4 head default is now
-  **required** (fail-loud: unset env → q4 mandatory; missing q4 tree → startup throw).
-  `MLX_QWEN_MTP_HEAD_QUANT=0` is the BF16 rollback.
-- `mtp-head/q4/` (238.9 MB) — disk-only, gitignored; required at startup now.
+| Fixture | tok/s (median, reps 2–6 of 6) | decode s (median) | stream hash | depthDist | acc/step |
+|---|---|---|---|---|---|
+| `essay-1024` | **21.89** | 46.77 | `949b9423…` | 2:461 | 1.2213 |
+| `specdec-800` | **23.29** | 43.96 | `139acb9d…` | 2:431 | 1.3782 |
 
-## Decisions and evidence
+Config: default (QMV verify ON, fusions ON, compiled decode ON, 4-bit MTP head
+ON, draft depth pinned k = 2, offer cap 3). Records:
+`benchmarks/results/k2default-gate.jsonl` (gate) and
+`benchmarks/results/k2default.jsonl` (headline); session log
+`/Users/cwong/ai/qwen38-mtp-server/.tmp/k2default-run.log`; thermal log
+`.tmp/k2default-thermal.log` (12 `pmset -g therm` snapshots, all clean).
+All other headline numbers in `progress.md` are labeled
+superseded-config/superseded-session historical provenance.
 
-- **Bug A (Phase 1): precision family.** The batched M-row verify forward is a different
-  bf16 reduction order than M=1 serial (drift ≤ 2 ulp = 0.125 at logit ~21); flips
-  argmax only at knife-edge positions (top-2 gap ≤ 2–4 ulp; ~9 per 1024 on specdec).
-  The pinned `139acb9d…` reference is an MTP-path stream, not serial greedy
-  (`c70882fc…`, head-invariant). W3's "even-k divergence" was a confound of the
-  non-serial reference. No code fix; candidate mitigations need explicit approval.
-- **Per-config stream-hash registry (1024 tokens, q4):**
+## Changes and evidence
 
-  | config | essay-1024 | specdec-800 |
-  |---|---|---|
-  | serial | `949b9423…` | `c70882fc…` |
-  | k=2 | `949b9423…` | `139acb9d…` |
-  | default (cost model) | `949b9423…` | `139acb9d…` |
-  | k=5/6/8 (post-fix) | `949b9423…` | unmeasured (essay-only sweep) |
+**Engine (`../mlx-swift-lm`), commit `609e0d5` on main (branch
+`feature/k2-default-flip` merged, deleted):**
 
-  Never claim cross-config or against-serial bit-exactness; gate per (fixture, config).
-- **Bug B (Phase 4): fixed.** Pre-fix, verify widths M = 6..9 fell to the reference
-  matmul → fp32-softmax → matmul SDPA fallback (qL·gqa > 32, head_dim 256 not in the
-  fused full-path set) → gross corruption (W3 `da7bb159…`, first divergence at the
-  first drafted token). Post-fix: d5/d6/d8 essay all serial-identical (`949b9423…`),
-  deterministic, gates PASS; headline (M ≤ 5) hashes invariant in the regate cells.
-  The gate is geometry-specific — no M ≤ 5, prefill, other-model, or array-mask path
-  is touched (negative-control tests).
-- **Phases 2+3 (in-session, one 1 h session, binary `db39b916…`):** headline default
-  essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22. k2 beats
-  default (+9.9 % / +7.8 %); default beats serial (+20.4 % / +30.4 %); k2 vs serial
-  (+31.0 % / +40.2 %). Serial tEval floor 59–62 ms/step; k2 − serial tEval 38–40 ms
-  (joint: 2 head steps + width-3 batch effect). Thermal drift present (later reps
-  slower); medians used; only in-session deltas are conclusions.
-- **Phase 5: CLOSE the head-structure workstream.** In-pipeline head cost is well
-  under the flush-contaminated isolated upper bounds (24.66–26.02 ms/round); deep
-  drafts are net-negative on essay (d5/d6/d8 = 14.53/12.85/9.80 tok/s vs 21.28 at k2;
-  acc/step plateaus ~1.7–1.8 while stepAvg grows superlinearly 185→212→283 ms). The
-  q4 head stays as-is (W4 KEEP, default ON, now required). Standing recommendation:
-  `QWEN_MTP_DRAFT_K=2` for this fixture class; a default depth-policy change is a
-  separate A/B decision.
+- `Libraries/MLXLLM/Models/Qwen38MTPBlockSession.swift` — `draftPolicy` default
+  branch now `Swift.min(offeredDepth, Self.defaultDraftDepth)` (k = 2) instead
+  of the adaptive `costModelDepth`; `QWEN_MTP_DRAFT_K` override unchanged;
+  the cost-model math moved to `costModelDepth`'s doc comment (retained as a
+  documented research artifact); `defaultDraftDepth`'s doc documents the
+  decision provenance and the rollback knob.
+- `Tests/MLXLMTests/Qwen38MTPDiagnosticTests.swift` — both test sessions pin
+  `session.draftPolicy = { offered, _ in offered }` so they exercise exactly
+  their intended verify widths (4 → width 5; 5 → width 6) regardless of the
+  production default. New measured values: acceptance 87.50 / 91.02 / 94.53,
+  aggregate **91.02%** (width-5 offer); wide-verify stream 256/256
+  serial-identical (genuinely width 6 now).
 
-## Commands / tests and results (all observed this session)
+**Server (`qwen38-mtp-server`), commit on main (branch merged, deleted):**
 
-- Engine `swift test --filter Qwen38SDPAExactnessTests` — PASS (0.09 s, 4 tests).
-- Engine `swift test --filter Qwen38MTPDiagnosticTests` — PASS (63.9 s; acceptance test
-  + `testWideVerifyStaysInSerialFamily` 256/256 match).
-- Server `swift test --filter HTTPServerTests` — PASS (107 XCTest + 121 Swift Testing
-  tests, 0 failures), built against the fixed engine.
-- `swift build --configuration release --product qwen38-mtp-server` — release binary
-  rebuilt with the fix (`db39b916…` was pre-fix; the post-fix binary was built before
-  the deepk session and used there — see `deepk.jsonl` `binary_sha256`).
-- Gate sessions: `run_postw4.sh` 36/36 cells; `run_deepk.sh` 20/20 cells — all
-  deterministic, `head_gate` PASS, phaseSumOK, `committed=1024`.
-- `git diff --check` clean in both repos before each commit.
+- `Sources/HTTPServer/Generation/MLXGenerator.swift` — load-time log line
+  `MLXLM: MTP draft depth: k=…` (default: `k=2 (default 2; offer cap 3;
+  override QWEN_MTP_DRAFT_K)`; forced: `k=3 (forced via QWEN_MTP_DRAFT_K=3)`).
+- `Sources/HTTPServer/ServerConfig.swift` — help text: `--spec-draft-n-max`
+  default corrected 8 → 3; `QWEN_MTP_DRAFT_K` documented in the env-var block.
+- `benchmarks/run_cell.sh` — parses the load-time draft-depth line into a
+  `draft_depth` JSONL field.
+- `benchmarks/run_k2default.sh` — new driver: `gate` phase (4 one-shot cells,
+  EXPECT_HEAD=q4, hash + phaseSum + committed-1024 + draft-depth gates) and
+  `headline` phase (6 reps × 2 fixtures interleaved, per-rep thermal snapshot,
+  same protocol as `run_postw4.sh`).
+- Docs: `progress.md` (headline table refreshed, registry consolidated with
+  canonical labels, Phase 5 standing recommendation marked implemented, open
+  item 5 re-scoped without the 24 ms target, W5 M=16/17 item closed-untriggered,
+  W3 "current value" fixed, test counts updated, decision on record added),
+  `benchmarks/PROFILE.md` (§1 scope note, §5(b) flush pointer, §5(c) item 2
+  superseded note, §6 safety note corrected to the per-config registry
+  semantics), `docs/README.md` (test counts, `QWEN_MTP_DRAFT_K` knob row,
+  Recommended-configuration section with the final headline).
 
-## Unresolved risks
+## Commands / verification
 
-- Deep-k sweep was **essay-only**; specdec (higher acceptance, 2.38 acc/step at k2)
-  could shift the depth optimum — recorded caveat, not blocking.
-- Thermal drift over long sessions: per-rep `pmset -g therm` logging exists but
-  shorter run blocks / cooldowns are still the proper control (roadmap item).
-- Cross-session absolute tok/s are labels, never conclusions (W4's 21.32/23.45 and
-  this session's 19.63/21.11 differ ~8 % — thermal/ambient, not code).
-- `/tmp/benchvenv`, `/tmp/q4venv`, and `/tmp/*.log` session logs are wiped on reboot;
-  durable provenance is the `.jsonl` records in `benchmarks/results/`.
-- The default adaptive depth policy is suboptimal vs k2 on both fixtures — left
-  unchanged by design (separate decision).
+- `swift build --target MLXLLM` (engine) — clean.
+- `swift test --filter Qwen38MTPDiagnosticTests` — 2/2 PASS (~68 s; acceptance
+  aggregate 91.02%; wide-verify 256/256 serial-identical).
+- `swift test --filter Qwen38SDPAExactnessTests` — 4/4 PASS.
+- `swift build --configuration release --product qwen38-mtp-server` — clean;
+  binary SHA `e448b2e2bbbfa7174c9d24e42108f5f721cb0a76b588f3fa3be7c1cbe1e167ab`.
+- `swift test --filter HTTPServerTests` — 121/121 PASS.
+- `bash benchmarks/run_k2default.sh gate` — 4/4 GATE PASS (hashes, phaseSumOK,
+  committed 1024, head gate q4, draft_depth k=2 default / k=3 forced).
+- `bash benchmarks/run_k2default.sh headline` — 12/12 cells deterministic;
+  medians 21.89 / 23.29 tok/s (reps 2–6).
 
-## Operations that must not be repeated
+## Decisions on record
 
-- No parallel builds/tests during timing cells; no server-binary rebuild mid-matrix;
-  binary SHA must match across a matrix.
-- Do not run `make_q4_head.py` twice (refuses to overwrite; regenerate only after
-  deleting the tree). The q4 tree is now **required** at startup (fail-loud).
-- Do not use the diagnostic's short-prompt committed-stream hashes as an A/B gate
-  (width/head-state sensitive; recorded values only).
-- Do not present cross-session absolute tok/s as conclusions.
-- `*.log` and `*.json` are gitignored in the server repo — provenance files use
-  `.txt` / `.jsonl`.
-- zsh: no parentheses/brackets in inline `git commit -m`; always `git merge --no-edit`.
-- Engine commits before the server; matching feature branches in both repos at task
-  start (none exist now — both on clean main).
-- Do not resurrect the throwaway Phase 1 discriminator test.
+- **k = 2 is the production default draft depth.** Post-W4 queue evidence:
+  post-W4 Phase 2+3 session (k2 21.28/22.75 vs adaptive default 19.63/21.11
+  tok/s, in-session) + Phase 5 closure findings. The adaptive cost model is
+  retired from the default path; it remains in the tree as a documented
+  research artifact (`costModelDepth`).
+- **Rollback:** `QWEN_MTP_DRAFT_K=3` (verified bit-exact against the registered
+  k=3 streams); `MLX_QWEN_MTP_HEAD_QUANT=0` (BF16 head); `--spec-draft-n-max`
+  offer cap bounds the effective k.
+- **Diagnostic tests are pinned to the offered width** — they test the
+  verify-width geometry, not the production depth policy. Do not let them
+  silently track the production default.
+- **The 24 ms `tEvalMs` / 30 tok/s target is formally retired** (v1.1-era
+  target, different head state/binary/config). Open item 5 in progress.md is
+  re-scoped as open work without a numeric target; any successor sets its own
+  success criterion against the current build.
+- **Stream-hash registry semantics (unchanged, now consistently stated):**
+  per-(fixture, config) hashes; never claim bit-exactness across configs or
+  against serial; the essay stream is config-invariant across the measured
+  configs (no knife-edge flips landed); specdec serial (`c70882fc…`) differs
+  from the MTP stream (`139acb9d…`) at the knife-edge family.
 
-## One exact next step
+## Risks / unresolved
 
-Nothing is pending from this queue. The next task is a new prompt; candidates already
-recorded in `progress.md` roadmap: (1) thermal-controlled benchmark runs for
-  cross-session comparability, (2) attention-layer kernel / acceptance-rate work
-  toward the tEval 24 ms / 30 tok/s target, (3) an A/B session if `QWEN_MTP_DRAFT_K=2`
-  is to become the default depth policy. Verify the branch/commit state above before
-  editing.
+- Cross-session absolute tok/s remain non-comparable (thermal); only
+  in-session deltas are valid. The final headline numbers are the live
+  single-source-of-truth for current main.
+- Specdec deep-k (k ≥ 5) was never measured (essay-only deep-k gate); deep
+  drafts are net-negative on essay and the default no longer offers them, so
+  this is low priority.
+- The in-pipeline head cost remains unestablished (flush-free measurement
+  pending); the head-structure workstream is closed — reopening requires a
+  new task.
 
-## Completion marker
+## Do NOT repeat
 
-Fresh checkpoints completed successfully: engine repo
-`/Users/cwong/ai/mlx-swift-lm` at `main` @ `126591a` clean
-(`.dsh/last-agent-checkpoint` 2026-09-14T13:04:57+01:00), and server repo
-`/Users/cwong/ai/qwen38-mtp-server` on clean main at **2026-09-14 13:06:57 BST**
-(`.dsh/last-agent-checkpoint` 2026-09-14T13:06:57+01:00, covering `4a5c9d9`; this
-final HANDOFF commit lands directly on top, leaving `git status --short` empty). A
-final checkpoint is re-run after this commit as the last operation of the session.
-Both feature branches merged and deleted. The fresh-checkpoint procedure completed.
+- Do not re-run the 6×2 headline matrix unless the binary or fixtures change —
+  it is the final headline for this queue.
+- Do not restore the adaptive cost model as the default without a fresh A/B
+  session and explicit approval; do not delete `costModelDepth` (documented
+  research artifact).
+- Do not let the diagnostic tests track the production default policy — the
+  width pins are intentional.
+- Do not resurrect the 24 ms target; it is retired, not paused.
+- Do not compare headline numbers across sessions (different binaries/
+  thermal states); cite the records, not cross-session deltas.
+- Engine commits before server; merge engine first. Checkpoint before ending
+  work.
+
+## Next step (exact)
+
+None — the queue is complete. Both repos are on `main` with all work merged
+and branches deleted. Any successor task starts from this handoff, the
+`progress.md` roadmap (open items 1–6), and the current-main recommended
+configuration in `docs/README.md`.
+
+## Repository state (verified at write time)
+
+- `qwen38-mtp-server`: branch `main`, clean after the merge; latest commits:
+  the k=2 default flip task (server-side changes + docs) merged from
+  `feature/k2-default-flip`, then this HANDOFF marker commit.
+- `../mlx-swift-lm`: branch `main` at `609e0d5` (the engine flip), clean;
+  feature branch deleted. (Local main is ahead of `origin/main` — push is a
+  separate, unrequested operation.)
+- Fresh checkpoint: `.dsh/last-agent-checkpoint` written by
+  `./scripts/agent-checkpoint.sh` (both repos) before this file was finalized.

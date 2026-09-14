@@ -31,7 +31,8 @@ cd mlx-swift-lm && swift build --target MLXLLM
 swift build --configuration release --product qwen38-mtp-server
 
 # Tests (current counts)
-swift test --filter Qwen38MTPDiagnosticTests         # 1/1 (~151 s) — bit-exactness + acceptance (93.46%)
+swift test --filter Qwen38MTPDiagnosticTests         # 2/2 (~70 s) — logit alignment + acceptance (91.02% at the pinned width-5 offer) + wide-verify serial family
+swift test --filter Qwen38SDPAExactnessTests          # 4/4 — SDPA exactness chunk unit suite (Phase 4, Bug B)
 swift test --filter Qwen35FusedSwiGLUProjectionTests  # 9/9
 swift test --filter Qwen35FusedQKVProjectionTests     # 9/9
 swift test --filter Qwen35FusedGDNProjectionTests    # 15/15
@@ -70,8 +71,20 @@ produce a headline number.
 | `MLX_QWEN_FOUR_GDN` | ON | GDN 4-projection input fusion |
 | `MLX_COMPILED_DECODE` | ON | `compile(shapeless: true)` activation micro-fusions (opt-out for the Tahoe Metal JIT bug) |
 | `MLX_QWEN_MTP_HEAD_QUANT` | ON | 4-bit draft head `<QWEN_MTP_HEAD>/q4`; the tree is **required** by default (missing → loud startup failure); `0`/`false`/`off` = explicit BF16 rollback |
+| `QWEN_MTP_DRAFT_K` | unset (pinned k = 2) | Pins the per-round draft depth to `min(offer, k)`; `3` is the rollback knob for the pre-flip adaptive default (reproduces the registered k = 3 streams bit-exact) |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |
 | `QWEN_MTP_STEP_TRACE` | off | Per-request MTP-STEP-SUMMARY on stderr (rounds / proposed / accepted / avgStepMs / component timings) |
+
+## Recommended configuration (current main, 2026-09-14)
+
+Production defaults: QMV verify ON, fusions ON, compiled decode ON, **4-bit MTP head ON** (`MLX_QWEN_MTP_HEAD_QUANT`), **draft depth pinned k = 2** (`--spec-draft-n-max 3` offer cap, `QWEN_MTP_DRAFT_K` unset). Final headline on this default (12/12 cells deterministic, single binary, per-rep thermal snapshots clean):
+
+| Fixture | tok/s (median, reps 2–6 of 6) | stream hash | depthDist |
+|---|---|---|---|
+| `essay-1024` | **21.89** (1024 / 46.77 s) | `949b9423…` | 2:461 |
+| `specdec-800` | **23.29** (1024 / 43.96 s) | `139acb9d…` | 2:431 |
+
+Rollback: `QWEN_MTP_DRAFT_K=3` (the adaptive-default-era config; bit-exact against the registered k = 3 streams) or `MLX_QWEN_MTP_HEAD_QUANT=0` (BF16 head). The `24 ms tEval` figure in the v1.1 planning docs is retired — see `progress.md`, open item 5.
 
 ## Benchmark protocol (short form — full rules in progress.md)
 

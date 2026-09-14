@@ -417,6 +417,18 @@ actor MLXGenerator {
             headVariant = "4-bit quantized (default ON)"
         }
         print("MLXLM: MTP head selected: \(headURL.path) — \(headVariant)")
+        // Load-time engagement proof for the draft depth (post-W4 queue,
+        // 2026-09-14): the session's default policy pins k = 2
+        // (Qwen38MTPBlockSession.defaultDraftDepth); QWEN_MTP_DRAFT_K
+        // overrides. Effective k = min(offer cap, forced ?? default).
+        let forcedDraftK = ProcessInfo.processInfo.environment["QWEN_MTP_DRAFT_K"]
+            .flatMap { Int($0) }
+        let effectiveDraftK = Swift.min(
+            maxDraftDepth, forcedDraftK ?? Qwen38MTPBlockSession.defaultDraftDepth)
+        print("MLXLM: MTP draft depth: k=\(effectiveDraftK)"
+            + (forcedDraftK.map { " (forced via QWEN_MTP_DRAFT_K=\($0))" }
+               ?? " (default \(Qwen38MTPBlockSession.defaultDraftDepth); offer cap "
+                  + "\(maxDraftDepth); override QWEN_MTP_DRAFT_K)"))
 
         let (loadedModel, loadedTokenizer) = try Qwen38MTPHeadAttachment.withHeadAttached(
             backboneDirectory: targetURL,
