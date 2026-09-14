@@ -3,8 +3,8 @@
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
 > `./scripts/agent-checkpoint.sh` ran successfully in both repositories
 > (exit 0) and wrote `.dsh/last-agent-checkpoint` in each before this file
-> was finalized. Engine marker 2026-09-14T21:43:05+01:00; server marker
-> 2026-09-14T21:43:14+01:00.
+> was finalized. Engine marker 2026-09-14T21:45:00+01:00; server marker
+> 2026-09-14T21:45:00+01:00.
 
 ## Objective and acceptance criteria
 
@@ -79,8 +79,8 @@ coverage).
   `progress.md`).
 - `../mlx-swift-lm`: branch `main` at `97a9d85`, clean, untouched by this
   task.
-- Fresh checkpoint markers: engine 2026-09-14T21:43:05+01:00, server
-  2026-09-14T21:43:14+01:00.
+- Fresh checkpoint markers: engine 2026-09-14T21:45:00+01:00, server
+  2026-09-14T21:45:00+01:00.
 
 ## Baseline re-verification (this session)
 
@@ -146,7 +146,7 @@ are outside this checkout (model-level changes, MLX upstream, or policy).
 
 ## Checkpoint markers
 
-- engine: 2026-09-14T21:43:05+01:00
-- server: 2026-09-14T21:43:14+01:00
+- engine: 2026-09-14T21:45:00+01:00
+- server: 2026-09-14T21:45:00+01:00
 
 The fresh-checkpoint procedure completed.
