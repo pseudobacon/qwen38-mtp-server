@@ -16,8 +16,9 @@ The six-phase post-W4 queue is **complete** (Phases 0–5 all done 2026-09-14).
 
 - Engine `/Users/cwong/ai/mlx-swift-lm`: `main` @ `126591a` (Bug B fix + regression tests),
   clean. `feature/postw4-queue` merged (fast-forward) and deleted.
-- Server `/Users/cwong/ai/qwen38-mtp-server`: `main` @ `4a5c9d9` (queue results, drivers,
-  docs), clean. `feature/postw4-queue` merged (fast-forward) and deleted.
+- Server `/Users/cwong/ai/qwen38-mtp-server`: `main` (HEAD = this HANDOFF finalization
+  commit on top of `4a5c9d9` queue results, drivers, docs), clean.
+  `feature/postw4-queue` merged (fast-forward) and deleted.
 - If this file's state disagrees with `git status` / `git log`, Git wins — update this
   file first, then proceed.
 
@@ -142,10 +143,11 @@ recorded in `progress.md` roadmap: (1) thermal-controlled benchmark runs for
 
 ## Completion marker
 
-Fresh checkpoints completed successfully: **2026-09-14 13:04 BST** — server repo
-`/Users/cwong/ai/qwen38-mtp-server` at `main` @ `4a5c9d9` clean
-(`.dsh/last-agent-checkpoint` 2026-09-14T13:04:10+01:00) and engine repo
+Fresh checkpoints completed successfully: engine repo
 `/Users/cwong/ai/mlx-swift-lm` at `main` @ `126591a` clean
-(`.dsh/last-agent-checkpoint` 2026-09-14T13:04:57+01:00). Both feature branches
-merged and deleted; `git status --short` empty in both repos. The fresh-checkpoint
-procedure completed.
+(`.dsh/last-agent-checkpoint` 2026-09-14T13:04:57+01:00), and server repo
+`/Users/cwong/ai/qwen38-mtp-server` on clean main at **2026-09-14 13:06:57 BST**
+(`.dsh/last-agent-checkpoint` 2026-09-14T13:06:57+01:00, covering `4a5c9d9`; this
+final HANDOFF commit lands directly on top, leaving `git status --short` empty). A
+final checkpoint is re-run after this commit as the last operation of the session.
+Both feature branches merged and deleted. The fresh-checkpoint procedure completed.
