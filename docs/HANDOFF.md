@@ -1,6 +1,6 @@
 # HANDOFF — K=2 round decomposition (COMPLETE 2026-09-14)
 
-> **Checkpoint status (2026-09-14 20:02:33+01:00).** The fresh-checkpoint
+> **Checkpoint status (2026-09-14 20:05:54 / 20:06:03 +01:00).** The fresh-checkpoint
 > procedure **completed**: `./scripts/agent-checkpoint.sh` ran successfully in
 > both repositories and wrote `.dsh/last-agent-checkpoint` (gitignored) in
 > each before this file was finalized.
@@ -31,7 +31,7 @@ speculative round and close with a kernel-addressability verdict in
 - [x] Completion criteria: engine diagnostics 2/2 PASS (observed on the
       feature branch before merge); server suite 121/121 PASS (observed
       before merge); fresh checkpoints written in both repos 2026-09-14
-      20:02:33+01:00.
+      20:05:54 (engine) / 20:06:03 (server) +01:00.
 
 ## Result (one live number per fact)
 
@@ -149,6 +149,6 @@ real server context (2–8k) to confirm the no-host-gap finding at depth.
 - `../mlx-swift-lm`: branch `main` at `97a9d85` (FullBench), clean; feature
   branch deleted. (Local main is ahead of `origin/main` — push is a
   separate, unrequested operation.)
-- Fresh checkpoint marker: written 2026-09-14T20:02:33+01:00 in both
-  repositories (`.dsh/last-agent-checkpoint`); fresh-checkpoint procedure
-  completed.
+- Fresh checkpoint marker: written 2026-09-14T20:05:54+01:00 (engine) and
+  2026-09-14T20:06:03+01:00 (server) (`.dsh/last-agent-checkpoint` in each
+  repo); fresh-checkpoint procedure completed.
