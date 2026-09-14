@@ -1,8 +1,11 @@
 # HANDOFF — Head fusion exploration (COMPLETE, NEGATIVE 2026-09-14)
 
-> **Checkpoint status.** The fresh-checkpoint procedure **completed**: see the
-> marker timestamps at the bottom of this file (written after the final edit
-> batch of this task).
+> **Checkpoint status (2026-09-14 20:43:15 / 20:43:24 +01:00).** The
+> fresh-checkpoint procedure **completed**: `./scripts/agent-checkpoint.sh`
+> ran successfully in both repositories (exit 0) and wrote
+> `.dsh/last-agent-checkpoint` in each before this file was finalized.
+> Engine marker 2026-09-14T20:43:15+01:00; server marker
+> 2026-09-14T20:43:24+01:00.
 
 ## Objective and acceptance criteria
 
@@ -105,10 +108,11 @@ workstream (71.60 ms backbone weight streaming).
 
 ## Repository state (verified at write time)
 
-- `qwen38-mtp-server`: branch `main`, clean at the last HANDOFF marker;
-  this task's docs commit lands on a feature branch and merges to `main`
-  (see the commit line recorded in `progress.md` after the merge).
+- `qwen38-mtp-server`: branch `main` at `fa4e1dc` (this task's docs commit,
+  fast-forward merged; feature branch `feature/head-fusion-audit` deleted);
+  clean (this HANDOFF marker commit follows it on `main`).
 - `../mlx-swift-lm`: branch `main` at `97a9d85`, clean, untouched by this
   task.
-- Fresh checkpoint markers: timestamps recorded below; fresh-checkpoint
-  procedure completed in both repos.
+- Fresh checkpoint markers: 2026-09-14T20:43:15+01:00 (engine) and
+  2026-09-14T20:43:24+01:00 (server) (`.dsh/last-agent-checkpoint` in each
+  repo); fresh-checkpoint procedure completed.
