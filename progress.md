@@ -729,7 +729,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 0 harness hardening** (DONE 2026-09-14 — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section), **Phases 2+3 headline re-measure + k=2 evaluation** (DONE 2026-09-14 — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22; detail: Phase 2+3 section), **Phase 4 Bug B fix** (DONE 2026-09-14 — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay now serial-identical (`949b9423…`), headline hashes invariant; detail: Phase 4 section), **Phase 5 head-structure decision** (DONE 2026-09-14 — **CLOSE the head-structure workstream**; q4 head stays as-is; `QWEN_MTP_DRAFT_K=2` recommended for this fixture class; detail: Phase 5 section), **k = 2 default flip + final headline** (DONE 2026-09-14 — production default draft depth pinned k = 2, engine `609e0d5`; diagnostic tests pin their session policy to the offered verify width; server load-time `MTP draft depth: k=…` log line + help-text fixes; `QWEN_MTP_DRAFT_K=3` rollback knob verified bit-exact; post-flip gate 4/4 cells PASS; final headline 21.89 essay / 23.29 specdec tok/s, 12/12 headline cells deterministic, single binary `e448b2e2…`; stale-claim sweep across progress/PROFILE/README/HANDOFF; detail: headline table + this task's entry below).
+**Done:** **K=2 round decomposition** (DONE 2026-09-14 — non-backbone overhead of the pinned k = 2 round decomposed to ~90% real GPU work (2 extra verify rows + 3-row head flush + 1 chain step) and ~10% host tape build; eval-window utilization 98.4% at 256 ctx, no reclaimable host gap; FullBench per-rep first-decode penalty root-caused as a bench artifact and retracted as a model property; deliverable `benchmarks/PROFILE-K2.md`; detail: K=2 decomposition section at the end of this file), Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 0 harness hardening** (DONE 2026-09-14 — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section), **Phases 2+3 headline re-measure + k=2 evaluation** (DONE 2026-09-14 — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22; detail: Phase 2+3 section), **Phase 4 Bug B fix** (DONE 2026-09-14 — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay now serial-identical (`949b9423…`), headline hashes invariant; detail: Phase 4 section), **Phase 5 head-structure decision** (DONE 2026-09-14 — **CLOSE the head-structure workstream**; q4 head stays as-is; `QWEN_MTP_DRAFT_K=2` recommended for this fixture class; detail: Phase 5 section), **k = 2 default flip + final headline** (DONE 2026-09-14 — production default draft depth pinned k = 2, engine `609e0d5`; diagnostic tests pin their session policy to the offered verify width; server load-time `MTP draft depth: k=…` log line + help-text fixes; `QWEN_MTP_DRAFT_K=3` rollback knob verified bit-exact; post-flip gate 4/4 cells PASS; final headline 21.89 essay / 23.29 specdec tok/s, 12/12 headline cells deterministic, single binary `e448b2e2…`; stale-claim sweep across progress/PROFILE/README/HANDOFF; detail: headline table + this task's entry below).
 
 **Decisions on record:**
 
@@ -751,3 +751,60 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 4. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is wired; shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
 5. **Attention-layer kernels and acceptance-rate work — open, no numeric target.** The `tEvalMs` 24 ms / 30 tok/s target is formally retired (2026-09-14): it was set in the v1.1 planning era against a different head state, a pre-qmv-verify binary, and a pre-q4-head configuration, and is not a property of the current build. The honest current framing: decode is GPU-bandwidth-bound on the 14.4 GB 4-bit weight stream (measured in-pipeline bandwidth 200–275 GB/s vs 310–355 GB/s sustained in qmvbench); stepAvg ≈ 100 ms / ≈ 21–23 tok/s at the pinned k = 2 default. If this item proceeds, it re-scopes its own success criterion against the current build — the historical 24 ms figure is provenance only.
 6. **Re-sweep draft depths k ∈ {5,6,8} after the item-2 fix — DONE 2026-09-14 (Phase 4 deep-k gate).** d5/d6/d8 essay: 14.53 / 12.85 / 9.80 tok/s, all deterministic, all serial-identical (`949b9423…`); acc/step plateaus at ~1.7–1.8 while stepAvg grows superlinearly (185 → 212 → 283 ms). Deep drafts are net-negative on essay; the sweep was essay-only (specdec caveat recorded in the Phase 4 section).
+## K=2 round decomposition (2026-09-14)
+
+Task: decompose the ~50 ms/round of non-backbone overhead in the pinned k = 2
+speculative round and close with a kernel-addressability verdict. Deliverable:
+`benchmarks/PROFILE-K2.md`.
+
+**Method.** Four phases: (1) code-read the round's natural sync boundaries (16 host
+segments A–P; the single blocking `eval` is the only device→host sync; the head
+flush+chain is `asyncEval`'d before it so head GPU work overlaps verify-tape
+construction). (2) Algebraic cells: 4 configs (s/k1/k2/k3) × 2 fixtures × 6 reps,
+interleaved per rep, hash-gated (k2/k3 reproduce the registered streams; s/k1
+in-session 6-rep determinism), plus a 4-pair A/B proving the trace instrumentation
+is +2.19 ms/round. (3) xctrace Metal System Trace of 110 k = 2 rounds at 256
+context, offset-calibrated against `mtp-anchor` uptime-ns probes (offset
+696,415,092,781,278; trace-relative GPU `start-time`). (4) `FullBench` diagnostic
+tool in the engine repo (per-rep width matrix, serial mode, SDPA micro-bench,
+anchoress for trace alignment).
+
+**Result (same context, 256 tokens).** Serial M = 1: 59.4 ms round (GPU busy 55.6,
+util 96.0%). k = 2: 86.0 ms round (tG 4.5 + tE 80.4 (GPU busy 79.8, util 98.4%) +
+tC 1.1 + tH 0.02). Δ = 26.6 ms: ~24.2 ms real extra GPU work (2 verify rows + head
+flush/chain tail), ~3.5 ms host (tape build in MLX's C++ flush + accept walk), no
+reclaimable host gap. In-pipeline algebra (12 records/config, growing context):
+s 59.78 / k1 90.08 / k2 100.73 / k3 126.17 ms stepAvg; k1 carries the dead-path
+repair +13.17 ms tC (`rollbackCheckpoints` never written — evidence for a
+follow-up, not fixed; k = 1 is not a production config). The "107–112 ms"
+label is the warm end of the in-session thermal trajectory (k2default 6-rep:
+89.5 → 102.5 ms essay); cold end ~86 ms.
+
+**Findings.** (1) The k = 2 round is GPU-saturated at measured contexts — no
+kernel-level win of order 10 ms is addressable from this checkout without changing
+draft depth (rejected: acceptance cost + k1 dead path), head design, or MLX C++
+(tape build, 3.4 ms tG). (2) QMV routing: M = 1 verify falls back to
+`quantizedMM`; M ≥ 2 routes the QMV verify kernel — the M = 3 tape's sub-linear
+per-row cost is a property of that path, not a bug. (3) **FullBench per-rep
+first-decode penalty is a bench artifact**: newCache + prime + one measured decode
+costs 117–156 ms at prime = 2048 while serial mode (one cache, N back-to-back
+decodes) is flat 55.8 → 56.8 ms across ctx 256 → 3072 and matches the in-pipeline
+serial cell (56.2 ms). The penalty is paid only on the first decode after each
+prime (`--widths 1,1`: 122 ms then 56 ms, same cache), persists after 10 warmup
+reps, and scales with prime size. xctrace of the slow first decode: 68 compute
+intervals, union 60.5 ms, ~1.2 ms GPU-idle gaps, host cpu→gpu stride ~2.2 ms/kernel
+vs ~0.8 ms/kernel — the host MLX flush/encode loop falls behind after a fresh large
+prime + newCache cycle; mechanism is in MLX's C++ eval flush (not readable in this
+checkout — the `mlx-swift` checkout is Swift-only). Isolated SDPA (0.3–0.5 ms,
+K = 256–4096), cache slice update (O(1) host), GDN S = 1 update (single kernel, no
+readback), and no fire-and-forget eval in the forward path all ruled out as the gap
+source. **Prior "M = 1 non-monotonic in context" readings from per-rep FullBench are
+retracted**; in-pipeline at real server contexts (2–8k) has no per-round
+newCache/prime and is not expected to carry the penalty. (4) Instrumentation
+artifact measured, not assumed: +2.19 ms/round (4-pair alternating A/B).
+
+**Files.** Server: `benchmarks/PROFILE-K2.md` (new), `benchmarks/run_k2decomp.sh`,
+`benchmarks/run_k2trace.sh` (new), `benchmarks/results/k2decomp.jsonl`,
+`benchmarks/results/k2decomp-ab.jsonl`. Engine: `Libraries/FullBench/` (new
+diagnostic tool), `Package.swift` (product). No production source changes in either
+repo for this task.
