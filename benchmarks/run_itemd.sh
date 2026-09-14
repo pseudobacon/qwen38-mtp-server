@@ -1,5 +1,7 @@
 #!/bin/bash
-# Item D — A/B: route the MTP verify pass through the candidate QMV kernel.
+# Item D rerun — A/B on the W1 flush-free binary: route the MTP verify pass
+# through the candidate QMV kernel (contiguity guard fixed to a cached
+# per-shape metadata decision — no per-call asData probe).
 #
 # Same release binary in both cells; the only difference is the env var:
 #   D0  essay-1024.txt    default env (knob OFF)
@@ -41,8 +43,13 @@
 # (copies may be eating the kernel win), not noise.
 #
 # Results: one JSON line per rep, appended per cell to
-#   benchmarks/results/itemd-D0-essay.jsonl
-#   benchmarks/results/itemd-D1-essay.jsonl
+#   benchmarks/results/itemd-rerun-D0.jsonl
+#   benchmarks/results/itemd-rerun-D1.jsonl
+#
+# W1 rerun additions vs the 2026-09-14 original: every rep must also pass
+# the phase-sum validation (phaseSumOK in run_cell.sh's record) and show
+# qmvVerifyMaterialized=0; the D1 warmup rep must show the flush artifact
+# gone (tEvalAvg ~125 ms regime, tGraphBuildAvg ~10 ms regime).
 set -u
 SERVER=/Users/cwong/ai/qwen38-mtp-server
 DIR=$SERVER/benchmarks
@@ -54,8 +61,8 @@ THERMALLOG=.tmp/itemd-thermal.log
 : > "$RUNLOG"
 : > "$THERMALLOG"
 
-OUT_D0=benchmarks/results/itemd-D0-essay.jsonl
-OUT_D1=benchmarks/results/itemd-D1-essay.jsonl
+OUT_D0=benchmarks/results/itemd-rerun-D0.jsonl
+OUT_D1=benchmarks/results/itemd-rerun-D1.jsonl
 : > "$OUT_D0"; : > "$OUT_D1"
 
 ESSAY=benchmarks/prompts/essay-1024.txt
@@ -86,8 +93,11 @@ thermal_snapshot() {
   pmset -g therm 2>&1 | while IFS= read -r l; do log "  therm: $l"; done
 }
 
-# Per-rep determinism gate: the last JSONL record of the cell must reproduce
-# the fixture's accepted/proposed/rounds, stream hash, and finish reason.
+# Per-rep gates: the last JSONL record of the cell must reproduce the
+# fixture's accepted/proposed/rounds, stream hash, and finish reason, and
+# must pass the phase-sum validation (tEval + tGraphBuild + tCacheState +
+# tHostRead ≈ stepAvg) — a violation voids the cell. The materialized copy
+# count is logged per rep (it must stay 0 in the rerun).
 gate_check() {
   local tag=$1 out=$2 expected_hash=$3 acc=$4 prop=$5 rounds=$6
   /tmp/benchvenv/bin/python - "$tag" "$out" "$expected_hash" "$acc" "$prop" "$rounds" <<'PYEOF'
@@ -100,9 +110,16 @@ acc, prop, rounds = int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
 
 lines = [ln for ln in open(out) if ln.strip()]
 if not lines:
-    print(f"DETERMINISM GATE FAIL {tag}: no record in {out}", file=sys.stderr)
+    print(f"GATE FAIL {tag}: no record in {out}", file=sys.stderr)
     sys.exit(1)
 rec = json.loads(lines[-1])
+mat = rec.get("qmvVerifyMaterialized")
+print(f"GATE INFO {tag}: qmvVerifyMaterialized={mat}")
+if mat not in (0, 0.0):
+    print(f"GATE FAIL {tag}: qmvVerifyMaterialized={mat}, expected 0 "
+          "(W1 rerun requires zero materializations)", file=sys.stderr)
+    print(json.dumps(rec))
+    sys.exit(1)
 checks = {
     "accepted": (rec.get("accepted"), acc),
     "proposed": (rec.get("proposed"), prop),
@@ -117,8 +134,15 @@ if bad:
           + "; ".join(f"{k}={v} expected {e}" for k, v, e in bad), file=sys.stderr)
     print(json.dumps(rec))
     sys.exit(1)
-print(f"DETERMINISM GATE PASS {tag}: {acc}/{prop}/{rounds} "
-      f"hash {expected_hash[:8]}...")
+ps_ok = rec.get("phaseSumOK")
+ps_delta = rec.get("phaseSumDeltaMs")
+if ps_ok is not True:
+    print(f"PHASE-SUM GATE FAIL {tag}: phaseSumOK={ps_ok} "
+          f"phaseSumDeltaMs={ps_delta} (cell voided)", file=sys.stderr)
+    print(json.dumps(rec))
+    sys.exit(1)
+print(f"GATE PASS {tag}: {acc}/{prop}/{rounds} hash {expected_hash[:8]}... "
+      f"phaseSumDeltaMs={ps_delta}")
 PYEOF
 }
 

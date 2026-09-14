@@ -185,6 +185,18 @@ if n:
     out["tGraphBuildAvg"] = sum(t_graph) / len(t_graph)
     out["tCacheStateAvg"] = sum(t_cache) / len(t_cache)
     out["tHostReadAvg"] = sum(t_read) / len(t_read)
+    # Phase-sum validation (mandatory since the Item D flush incident): the
+    # four phase averages must add back to the round wall-time average.
+    # The STEP-TRACE line emits stepMs = tail - t0, so a large delta means a
+    # phase is missing/misattributed or work leaked outside the four windows
+    # (e.g. a hidden eval-forcing call shifting GPU wait between phases).
+    # A violation voids the cell.
+    phase_sum = (out["tEvalAvg"] + out["tGraphBuildAvg"]
+                 + out["tCacheStateAvg"] + out["tHostReadAvg"])
+    out["phaseSumAvg"] = phase_sum
+    out["phaseSumDeltaMs"] = abs(phase_sum - out["stepAvg"])
+    tolerance = max(1.0, 0.01 * out["stepAvg"])
+    out["phaseSumOK"] = out["phaseSumDeltaMs"] <= tolerance
 
 try:
     resp = json.load(open(response))
