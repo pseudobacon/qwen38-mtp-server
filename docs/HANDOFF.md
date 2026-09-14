@@ -58,4 +58,22 @@ W5: `qmvbench --throughput N` implemented (N back-to-back submissions, one sync 
 
 ## Fresh checkpoint
 
-_(Run `./scripts/agent-checkpoint.sh` inside each repo before ending work; paste the fresh output below and record the timestamp. Do not state a handoff is complete without a successful fresh checkpoint.)_
+Fresh-checkpoint procedure completed successfully (2026-09-14 03:11 BST):
+
+```
+# Repository checkpoint (server)
+- Repository: /Users/cwong/ai/qwen38-mtp-server
+- Branch: main
+- HEAD: a603c33
+- Git status: clean
+- Latest commit: a603c33 W1: record flush-free Item D rerun (keep, default ON) and W5 throughput results
+
+# Repository checkpoint (engine)
+- Repository: /Users/cwong/ai/mlx-swift-lm
+- Branch: main
+- HEAD: a5f102f
+- Git status: clean
+- Latest commit: a5f102f W1: default MLX_QWEN_QMV_VERIFY to ON after flush-free rerun keeps D1; add qmvbench throughput mode
+```
+
+Both worktrees clean (run via `scripts/agent-checkpoint.sh` inside each repo). _(Regenerate at the start of the next session.)_
