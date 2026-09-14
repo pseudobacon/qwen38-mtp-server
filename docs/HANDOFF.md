@@ -58,15 +58,15 @@ W5: `qmvbench --throughput N` implemented (N back-to-back submissions, one sync 
 
 ## Fresh checkpoint
 
-Fresh-checkpoint procedure completed successfully (2026-09-14 03:11 BST):
+Fresh-checkpoint procedure completed successfully (2026-09-14 03:36 BST):
 
 ```
 # Repository checkpoint (server)
 - Repository: /Users/cwong/ai/qwen38-mtp-server
 - Branch: main
-- HEAD: a603c33
+- HEAD: 1e51f6e
 - Git status: clean
-- Latest commit: a603c33 W1: record flush-free Item D rerun (keep, default ON) and W5 throughput results
+- Latest commit: 1e51f6e Reclassify Item D: final verdict keep, default ON; refresh stale docs
 
 # Repository checkpoint (engine)
 - Repository: /Users/cwong/ai/mlx-swift-lm
