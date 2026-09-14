@@ -46,4 +46,22 @@ Implemented engine gate `MLX_QWEN_QMV_VERIFY` (default OFF, loud load-time log):
 
 ## Fresh checkpoint
 
-_(filled in by the session ending this task, after the final commits — see the recorded checkpoint below)_.
+Fresh-checkpoint procedure completed successfully (2026-09-14 01:04 BST):
+
+```
+# Repository checkpoint (server)
+- Repository: /Users/cwong/ai/qwen38-mtp-server
+- Branch: main
+- HEAD: cf36a29
+- Git status: clean
+- Latest commit: cf36a29 Item D: record A/B result (NULL), close open item, refresh handoff
+
+# Repository checkpoint (engine)
+- Repository: /Users/cwong/ai/mlx-swift-lm
+- Branch: main
+- HEAD: b900aad
+- Git status: clean
+- Latest commit: b900aad Item D: add MLX_QWEN_QMV_VERIFY gate, route 3-D MTP verify through candidate QMV kernel, flip M=1 to incumbent, add dispatch counters
+```
+
+Both worktrees clean of tracked and untracked changes (`.tmp/` transient logs are gitignored); `feature/itemd-result` merged and deleted in the server repo; no engine changes this task beyond the Item D implementation already on `main` (`b900aad`). _(Regenerate via `scripts/agent-checkpoint.sh` — run inside each repo — at the start of the next session.)_
