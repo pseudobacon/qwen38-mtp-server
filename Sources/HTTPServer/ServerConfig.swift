@@ -337,7 +337,12 @@ struct ServerConfig: Sendable {
             QWEN_HOST, QWEN_PORT, QWEN_MODEL, QWEN_MTP_HEAD, QWEN_MODEL_ALIASES,
             QWEN_MEMORY_LIMIT_GB, QWEN_MAX_QUEUE_DEPTH, QWEN_PREFILL_CHUNK_SIZE,
             QWEN_KV_SCHEME, QWEN_KV_GROUP_SIZE, QWEN_KV_BITS, QWEN_KV_TAIL_SIZE,
-            LLAMA_ARG_CACHE_TYPE_K, LLAMA_ARG_CACHE_TYPE_V
+            LLAMA_ARG_CACHE_TYPE_K, LLAMA_ARG_CACHE_TYPE_V,
+            MLX_QWEN_MTP_HEAD_QUANT   (1/true/on force the 4-bit draft head
+                                       <QWEN_MTP_HEAD>/q4; 0/false/off the
+                                       pinned BF16 head; unset = default ON,
+                                       falling back to BF16 with a loud log if
+                                       the q4 tree is missing)
 
         EXAMPLES:
             HTTPServer --port 8080 --model /models/qwen-27b

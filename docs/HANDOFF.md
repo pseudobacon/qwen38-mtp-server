@@ -1,148 +1,143 @@
-# HANDOFF — 2026-09-14 (end of W2/W3 session)
+# HANDOFF — 2026-09-14 (end of W4 session)
 
 ## Objective
 
-The five-work-item queue is complete through W3 (W4 is now triggered and is the
-next task). **Next task: W4 — 4-bit quantization of the MTP draft head** (BF16
-849.4 MB → ~300 MB, group 64), A/B vs the BF16 head under the determinism gate.
-Acceptance criteria for W4: (i) acceptance rate at or above the BF16 head's
-within noise, (ii) tok/s improvement (expected ≈ 14 ms/round at d=2, ~13 % of
-the step), (iii) committed-stream hash unchanged (`949b9423…` essay /
-`139acb9d…` specdec), (iv) decision record + `benchmarks/results/W4-ab.jsonl`.
+The five-work-item pre-fused-kernel queue is **complete** (W1, W2, W3, W4, W5 all
+done 2026-09-14). W4 verdict: **KEEP — `MLX_QWEN_MTP_HEAD_QUANT` default flipped
+ON** (essay +8.6 %, specdec +6.1 %, 24/24 reps bit-exact). **Next task: correctness
+bug A — specdec even-k (k=2, k=4) committed-stream divergence** (root-cause in the
+engine's batched verify path + regression test + re-run the specdec
+k∈{1,2,3,4} determinism gate). Acceptance criteria for bug A: (i) root cause
+identified and documented, (ii) fix makes forced k=2 and k=4 bit-exact on
+specdec-800 (`139acb9d…`) without changing the essay streams or the k=1/k=3
+streams, (iii) regression test added, (iv) full determinism gate re-run on both
+fixtures at k∈{1,2,3,4}, (v) progress.md bug-A section + decision record.
 
 ## Branch / commit / uncommitted state (verify independently before editing)
 
-- Engine `/Users/cwong/ai/mlx-swift-lm`: `main`, expected clean. New this
-  session: `headbench` tool (`Libraries/HeadBench/main.swift` + `Package.swift`
-  product entry), committed on `feature/w2-headbench` and merged to main
-  (branch deleted). Build: `swift build -c release --product headbench` →
-  `.build/arm64-apple-macosx/release/headbench`.
-- Server `/Users/cwong/ai/qwen38-mtp-server`: `main`, expected clean. New this
-  session: `benchmarks/PROFILE.md` (W2 deliverable), `benchmarks/run_w2trace.sh`,
-  `benchmarks/run_w3sweep.sh`, `benchmarks/results/w3-*.jsonl` (sweep + probes),
-  `run_cell.sh` depth/acc collection, `progress.md` W2/W3 sections + refreshed
-  headline, this HANDOFF. Committed on `feature/w2-w3-sweep` and merged to main
-  (branch deleted).
+- Engine `/Users/cwong/ai/mlx-swift-lm`: `main` @ `b79140b` (W4 diagnostic test
+  changes + Qwen35 head-fusion comment), expected clean. `feature/w4-head-q4`
+  deleted after merge.
+- Server `/Users/cwong/ai/qwen38-mtp-server`: `feature/w4-head-q4` @ `330d432` with
+  uncommitted W4 changes at the time of the fresh checkpoint below (they are
+  committed + merged to main after the HANDOFF write — verify with
+  `git status --short`, `git log -1 --oneline` that main contains the W4 commit
+  and the feature branch is deleted; if not, complete that first).
 - If this file's state disagrees with `git status` / `git log`, Git wins —
   update this file first, then proceed.
 
 ## Important files
 
-- `benchmarks/PROFILE.md` — W2 profile: GPU 98.2 % busy; headbench measured
-  per-round head-family cost (d=1 24.66 ms, d=2 45.94 ms, d=3 67.47 ms,
-  d=4 88.89 ms); raw-matmul floor 7.36 ms/head forward @ ~115 GB/s; per-round
-  tEval decomposition (backbone ~55–59 ms / head 40.6 ms / verify lm_head
-  5.4 ms at d=2); **W4 trigger MET**; levers ranked.
-- `progress.md` — W2 section, W3 section (incl. the depth-≥5 bug report),
-  refreshed headline (essay 19.90 / specdec 25.44 tok/s, default k=3),
-  decisions on record, open items (bug #1, W4 #2).
-- `benchmarks/results/w3-draftk-essay-k{1,2,3,4}.jsonl` — sweep records (last
-  5 records per file = measured reps r2–r6; rep 1 discarded as warmup).
-- `benchmarks/results/w3-probe-*.jsonl` — bug provenance (k5, k6-qmvoff,
-  k6-nofuse, specdec k2/k2-rerun/k3/k4).
-- `benchmarks/run_cell.sh` — per-round `d`/`acc` collection added (5th arg
-  `EXTRA_ARGS` for CLI flags); outputs `depthDist`, `depthAvg`, `accAvg`.
-- Engine `Libraries/HeadBench/main.swift` — reusable for W4 (already loads the
-  head and times per-round calls; re-point `--head` at a 4-bit head directory).
-- MTP head: `mtp-head/pinned/model.safetensors` (849.4 MB BF16: `fc` + one
-  full-attention `layers.0` + `mlp` + norms; final vocab projection uses the
-  shared 4-bit `lm_head`, not in the head file).
+- `benchmarks/make_q4_head.py` — 4-bit head generation (idempotent; refuses to
+  overwrite). Artifacts: `mtp-head/q4/` (238.9 MB, disk-only, gitignored) from
+  `mtp-head/pinned/model.safetensors` (849.3 MB BF16, untouched).
+- `benchmarks/run_w4ab.sh` — 2-cell × 2-fixture × 6-rep interleaved A/B matrix
+  (gates: stream hash, head_selected engagement, phaseSumOK, materialized=0,
+  finish_reason, completion_tokens, thermal snapshot per rep).
+- `benchmarks/run_cell.sh` — now records `head_selected` + `fusion_summary` per rep
+  (scans both stdout and stderr logs; the load-time prints go to stdout).
+- `Sources/HTTPServer/Generation/MLXGenerator.swift` — `MLX_QWEN_MTP_HEAD_QUANT`
+  selection (unset = default ON with loud BF16 fallback; 1 force q4; 0 rollback;
+  invalid value throws).
+- `Sources/HTTPServer/ServerConfig.swift` — env documented in `--help`.
+- `Tests/MLXLMTests/Qwen38MTPDiagnosticTests.swift` (engine) —
+  `QWEN_MTP_HEAD_TEST_PATH` / `QWEN_MTP_TEST_DEPTH` overrides (depth default 4),
+  per-prompt + overall committed-stream hashes (printed, never asserted).
+- `progress.md` — W4 section (full numbers + verdict), refreshed headline, W4
+  decision on record, open items re-ordered (bug A → bug B).
+- Results: `benchmarks/results/w4-ab-{essay,specdec}-{bf16,q4}.jsonl` (6 reps
+  each, rep 1 warmup per state), `w4-diag-{bf16,q4}-{d1,d4,depth8}.txt`.
 
-## Decisions and evidence (this session)
+## Decisions and evidence
 
-- **W2 done.** GPU-bound (98.2 % busy); CPU not the bottleneck; `tGraphBuild`
-  ~10.5 ms/round is the dominant CPU cost. No per-kernel GPU time (shader
-  profiler not enabled in the Metal System Trace template — stated limitation).
-  Head cost measured directly with `headbench` instead of in-graph timing
-  (per the W2 no-instrumentation rule).
-- **W3 done (valid subset k=1..4).** Essay: k1 19.25, **k2 21.26** (optimum,
-  +6.8 % over default), k3 default 19.90, k4 16.26 tok/s; all bit-exact
-  `949b9423…`, phaseSumOK, materialized=0. k=2 is **conditional**: it fails the
-  specdec determinism gate.
-- **Correctness bug (top open item, report-only):** verify width ≥ 6 commits
-  wrong tokens from round 1. Boundary matches qL·gqa > 32 (width 5 = 30 clean,
-  width 6 = 36 diverges). Root-cause hypothesis: the "exactness chunk" split
-  (two ≤5-row SDPA calls for 6..9-row causal verify) specified in the engine's
-  design comments (`Qwen38MTPBlockSession.swift` ~1428–1436, ~1996–1998;
-  SDPA warm-up comment ~755–770) does not exist in
-  `MLXLMCommon/AttentionUtils.swift`. QMV verify and fused QKV/SwiGLU
-  exonerated by exclusion probes (all three probes give the identical
-  deterministic wrong stream `da7bb159…` on essay). **Do not fix this bug in a
-  W4 task** — separate task; `--spec-draft-n-max`/`QWEN_MTP_DRAFT_K` above 4
-  is broken until then.
-- **Specdec confirmation:** k1 PASS, k2 FAIL (deterministic wrong stream
-  `06882d85…`, divergence ~94.5 %), k3 default PASS, k4 FAIL (`48728382…`,
-  ~95.2 %). k=2 and k=4 specdec failures have a different signature (late
-  knife-edge flips, deterministic per prompt, different wrong stream from the
-  essay bug). Only k=1 and default k=3 are certifiably bit-exact on both
-  fixtures; k=3 stays the recommended configuration.
-- **lm_head size corrected:** 4-bit U32 [248320, 640] = **635.7 MB** payload +
-  79.5 MB scales/biases (the earlier 317.8 MB note was wrong).
-- **Headline refreshed:** essay 19.90 tok/s (k3, 5 reps), specdec 25.44 tok/s
-  (k3, single probe rep) — both default config, binary `11a8e61e…`.
-- **W4 trigger MET** (measured 24.66/45.94 ms/round at d=1/2 vs ~5 ms gate).
-  W4 safety: the head emits only draft proposals; greedy target verify commits,
-  so head precision affects acceptance, not the committed stream. `lm_head`
-  remains report-only (already 4-bit; quantizing it changes committed tokens).
+- **W4 verdict: KEEP, default ON.** In-session A/B at k=3 (Phase 3 protocol,
+  binary `c56ca6ea…`): essay BF16 19.63 → q4 21.32 tok/s (+8.6 %); specdec BF16
+  22.11 → q4 23.45 tok/s (+6.1 %); **all 24 reps bit-exact** (essay
+  `949b9423…`, specdec `139acb9d…`); head fusion engaged in q4 cells
+  (`head swiGLU 1 qkv 1`); zero QMV materializations; phase-sums exact.
+- The delta is carried by **tGraphBuild** (−7.2/−7.8 ms — smaller fused graph);
+  tEval is within in-session noise (−4.0/−0.1 ms). headbench isolated: head body
+  flush 16.38 → **1.52 ms**, step 16.26 → 1.48 ms; per-round d=2 45.94 → 16.52 ms.
+  The isolated collapse does not transfer 1:1 in-pipeline — recorded as an open
+  observation, not blocking (W5 serialized-vs-sustained pattern).
+- **The diagnostic's short prompts are NOT a committed-stream gate** — within a
+  fixed head state the streams already change with depth (d1 ≠ d4 ≠ d8), and at
+  depth 1 (width 2) prompt 1 diverges between head states. Same bug A/B
+  bit-exactness family; the boundary is content/fixture-sensitive, not a clean
+  width threshold. The A/B matrix at k=3 is the valid W4 gate.
+- Recorded diagnostic acceptance (printed, never asserted): BF16 93.46 % (d8,
+  historical), q4 93.97 % (d8); BF16 93.97 % (d4), q4 94.68 % (d4); BF16 95.31 %
+  (d1), q4 96.35 % (d1).
+- Head fusion eligibility requires stock `QuantizedLinear`: BF16 head ineligible
+  (`head swiGLU 0 qkv 0`), 4-bit head engages both fusions. The head's quantized
+  linears also route through the Item D QMV verify kernel (recorded interaction).
+- `lm_head` stays 4-bit report-only (already 4-bit, 635.7 MB; changing it changes
+  committed tokens).
+- Post-flip verification (default ON, binary `9753a41e…`): default cells load q4
+  and reproduce both pinned streams bit-exact; `=0` rollback loads BF16
+  bit-exact.
 
 ## Commands / tests and results
 
-- `benchmarks/run_w2trace.sh` — trace capture: 102 rounds, 256 committed,
-  acceptance 1.5294, avgStepMs 105.9, decodeSeconds 10.81; routed 8176
-  dispatches, materialized 0. Trace `/tmp/w2-profile.trace` (~44 MB) +
-  `/tmp/w2-*.xml` exports.
-- `.build/arm64-apple-macosx/release/headbench --model <backbone> --head
-  mtp-head/pinned --drafts 1,2,3,4 --warmup 10 --timed 50` — measured
-  head-family cost table (PROFILE.md §2); `--raw` — raw matmul reference
-  (PROFILE.md §3). Inputs are float32 (no bf16 initializer in this release);
-  weights are the model's real bf16/4-bit — negligible GPU cost difference.
-- `benchmarks/run_w3sweep.sh` — 4 cells × 6 reps, 24 GATE PASS, all
-  phaseSumOK; plus specdec single-rep probes. Thermal logs in `.tmp/w3-*.log`.
-- Determinism hashes (pinned): essay-1024 `949b9423bd85…`; specdec-800
-  `139acb9d30fe…`. Wrong streams (bug evidence): essay k5/k6 `da7bb159…`;
-  specdec k2 `06882d85…`, k4 `48728382…`.
+- Engine: `swift test --filter Qwen38MTPDiagnosticTests` — PASS (35.9 s; BF16
+  default head, depth 4, overall hash `06e40dd4…` as recorded).
+- Server: `swift test --filter HTTPServerTests` — PASS (121 tests, 2 suites).
+- A/B matrices: 24/24 GATE PASS (both fixtures, both states).
+- `git diff --check` clean in both repos before the engine commit.
+- **Fresh checkpoint (server): 2026-09-14 10:36 BST** —
+  `bash /Users/cwong/ai/qwen38-mlx-server/scripts/agent-checkpoint.sh` from
+  `/Users/cwong/ai/qwen38-mtp-server` (feature branch, uncommitted W4 changes);
+  the fresh-checkpoint procedure **completed successfully**. Re-run it after the
+  final merge so the recorded state is clean main.
 
 ## Unresolved risks
 
-- The depth-≥5 bug means any `--spec-draft-n-max > 4` deployment would commit
-  wrong tokens. The server default (adaptive, cap 7, offered 3) is safe; the
-  knob surface above 4 is not.
-- The ~9 ms head layer-structure cost is an estimate (no per-kernel profile);
-  W4's expected 14 ms/round saving is a projection, to be confirmed by the A/B.
-- specdec k=2/k=4 divergence mechanism is not yet root-caused (signature
-  differs from the essay bug); do not conflate the two.
-- `/tmp/benchvenv` must exist for `run_cell.sh` (recreate if missing after
-  reboot: `python3 -m venv /tmp/benchvenv`); `/tmp/w2-profile.trace` may be
-  gone after reboot — PROFILE.md is the durable record.
+- **Bug A (next task):** specdec k=2/k4 committed streams diverge from the
+  pinned stream (deterministic per prompt, ~95 % position knife-edge flips). The
+  W4 diagnostic evidence adds: width-sensitivity exists even at width 2 on some
+  prompts → the fix must make batched verify bit-exact with serial at ALL widths
+  that the engine claims to support, not just width ≤ 5.
+- **Bug B:** width ≥ 6 (k ≥ 5) commits wrong tokens on essay; missing SDPA
+  exactness chunk in `attentionWithCacheUpdate` (qL·gqa > 32 boundary). Likely
+  the same fix family as bug A — investigate together, document separately.
+- In-pipeline attribution gap: isolated head-family collapse (−29 ms/round at
+  d=2) vs measured tEval delta (noise) — a new in-pipeline profile (xctrace with
+  shader profiler) could resolve it, but is not required.
 
-## Do not repeat
+## Operations that must not be repeated
 
-- Do not run the draft-k sweep or any timing cell with `QWEN_MTP_DRAFT_K ≥ 5`
-or `--spec-draft-n-max` above 4 — wrong streams (bug).
-- Do not fix the SDPA exactness chunk as part of W4 (separate task; greedy
-  semantics — AGENTS stop condition).
-- Do not claim per-kernel GPU breakdown from the existing trace (shader
-  profiler not enabled); do not add in-graph timing instrumentation (W2 rule).
-- Do not present the pre-Item D B1/B2 headline rows (17.55 / 18.92 tok/s) as
-  current; they are superseded (stale rows kept as provenance only).
-- Do not use the k=6/k8 sweep records as performance data (wrong stream).
+- Do not run any timing cell or draft-k sweep at `QWEN_MTP_DRAFT_K ≥ 5` /
+  `--spec-draft-n-max > 4` (bug B — wrong streams).
+- Do not use the diagnostic's committed-stream hashes as a gate for any future
+  A/B (width-sensitive prompts; recorded values only).
+- Do not present cross-session absolute tok/s as conclusions — only in-session
+  paired deltas. Current in-session headlines: essay 21.32, specdec 23.45 tok/s
+  (q4 default, W4 matrix session).
+- Do not rebuild the server binary mid-matrix; no parallel builds/tests during
+  timing cells; binary SHA must match across a matrix.
+- Do not run `make_q4_head.py` twice (it refuses to overwrite; `mtp-head/q4/` is
+  disk-only, gitignored — regenerate only after deleting the tree).
+- `*.log` and `*.json` are gitignored in the server repo — use `.txt` /
+  `.jsonl` extensions for provenance files.
+- The qmvbench product is `qmvbench` (lowercase); `/tmp/benchvenv` must exist for
+  `run_cell.sh` (wiped on reboot); `/tmp/q4venv` (mlx 0.32.2) for quantization.
+- zsh: no parentheses/brackets in inline `git commit -m`; use `git merge --no-edit`.
 
 ## One exact next step
 
-**W4:** quantize the pinned MTP head to 4-bit group 64 (write a quantized
-`model.safetensors` to a new head directory, e.g. `mtp-head/q4/`, in the
-backbone's exact U32 group-64 layout — `fc`, `q`, `k`, `v`, `o`, `gate`, `up`,
-`down` + norms stay bf16 or follow the backbone convention; verify the head
-loads via `Qwen38MTPHeadAttachment`), then A/B: BF16 head vs 4-bit head,
-default config, essay-1024 + specdec-800, 6 reps each, gates: acceptance rate,
-tok/s, committed-stream hash. Use `run_cell.sh` (5th arg for extra env) and
-`headbench` for the per-round head-cost confirmation. Deliverable:
-`benchmarks/results/W4-ab.jsonl` + decision record in `progress.md`.
+In the engine repo, root-cause bug A: with the specdec-800 prompt at k=2
+(`QWEN_MTP_DRAFT_K=2`, `--spec-draft-n-max 2`), bisect the verify path to find
+where the batched forward first diverges from serial greedy at the ~95 % stream
+position (wrong-stream hash `06882d85…`): compare per-round committed token IDs
+and target logits between serial decode and verify rounds (engine-level
+diagnostic, no server needed), confirm/refute the SDPA-exactness-chunk
+hypothesis for width 3 (qL·gqa = 18 ≤ 32 — if the boundary is not the chunk,
+look at GDN tape/state handling and the QMV verify routing at M=3), then fix,
+add a regression test, and re-run the determinism gate on both fixtures at
+k∈{1,2,3,4}.
 
-## Fresh-checkpoint procedure
+## Completion marker
 
-**Fresh checkpoint COMPLETED 2026-09-14 (end of W2/W3 session).**
-`bash /Users/cwong/ai/qwen38-mlx-server/scripts/agent-checkpoint.sh` run from
-both repos: engine clean at `6552162` (main), server clean at `61cb349`
-(main). No uncommitted changes, no untracked files in either repo at the time
-of the checkpoint (this HANDOFF edit and its commit post-date it).
+Fresh checkpoint completed successfully at **2026-09-14 10:36 BST** (server
+repo, feature branch state recorded above); this HANDOFF was written after that
+successful checkpoint.

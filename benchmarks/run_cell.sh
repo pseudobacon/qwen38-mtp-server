@@ -101,12 +101,12 @@ kill $SRV 2>/dev/null
 pkill -f "qwen38-mtp-server serve --port $PORT" 2>/dev/null
 wait $SRV 2>/dev/null
 
-/tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" \
+/tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$STDOUT_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" \
   "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" <<'PYEOF'
 import json, sys, hashlib
 
-tag, stderr_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:8]
-bin_sha256, bin_mtime, server_head, engine_head, server_dirty, engine_dirty = sys.argv[8:14]
+tag, stderr_log, stdout_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:9]
+bin_sha256, bin_mtime, server_head, engine_head, server_dirty, engine_dirty = sys.argv[9:15]
 out = {
     "tag": tag,
     "fixture_hash": fixture_hash,
@@ -149,9 +149,20 @@ except Exception:
     pass
 
 summary = None
-for line in open(stderr_log, errors="replace"):
-    if "MTP-STEP-SUMMARY" in line:
-        summary = line
+head_selected = None
+fusion_summary = None
+# The step trace/summary go to stderr; the load-time prints (head selection,
+# fusion prepare summary) go to stdout — scan both.
+for path in (stderr_log, stdout_log):
+    for line in open(path, errors="replace"):
+        if "MTP-STEP-SUMMARY" in line:
+            summary = line
+        if "MLXLM: MTP head selected:" in line:
+            # W4 provenance: which head tree this cell actually loaded.
+            head_selected = line.split("MLXLM: MTP head selected:", 1)[1].strip()
+        if "MLXLM: fusion prepare summary:" in line:
+            # W4 engagement proof: packed-fusion counts per model family.
+            fusion_summary = line.split("MLXLM: fusion prepare summary:", 1)[1].strip()
 if summary:
     for kv in summary.split():
         if "=" in kv:
@@ -189,6 +200,10 @@ for line in open(stderr_log, errors="replace"):
     f("tHostReadMs", t_read)
     fi("d", depths)
     fi("acc", accs)
+if head_selected:
+    out["head_selected"] = head_selected
+if fusion_summary:
+    out["fusion_summary"] = fusion_summary
 if n:
     out["stepTraceRounds"] = n
     if depths:

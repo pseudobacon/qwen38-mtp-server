@@ -1,0 +1,138 @@
+[1/1] Compiling plugin CudaBuild
+[2/2] Compiling plugin GenerateManual
+[3/3] Compiling plugin GenerateDoccReference
+Building for debugging...
+[3/12] Write sources
+[4/12] Write swift-version-3CD7052B146186F2.txt
+[6/87] Compiling MLXLLM Qwen3Kernels.swift
+[7/87] Compiling MLXLLM LLMModel.swift
+[8/87] Compiling MLXLLM LLMModelFactory.swift
+[9/87] Compiling MLXLLM Lora+Data.swift
+[10/87] Compiling MLXLLM LoraTrain.swift
+[11/91] Emitting module MLXVLM
+[12/91] Compiling MLXLLM SSM.swift
+[13/91] Compiling MLXLLM SmolLM3.swift
+[14/91] Compiling MLXLLM Starcoder2.swift
+[15/91] Compiling MLXLLM Qwen35TextMTPRegistration.swift
+[16/91] Compiling MLXLLM Bitnet.swift
+[17/91] Compiling MLXLLM Cohere.swift
+[18/91] Compiling MLXLLM DeepseekV2.swift
+[19/91] Compiling MLXLLM DeepseekV3.swift
+[20/91] Compiling MLXLLM Ernie4_5.swift
+[21/91] Compiling MLXLLM Gemma4.swift
+[22/91] Compiling MLXLLM Gemma4Text.swift
+[23/91] Compiling MLXLLM Granite.swift
+[24/91] Compiling MLXLLM GraniteMoeHybrid.swift
+[25/91] Compiling MLXLLM Helium.swift
+[26/91] Compiling MLXLLM Hunyuan.swift
+[27/91] Compiling MLXLLM Internlm2.swift
+[28/91] Compiling MLXLLM Jamba.swift
+[29/91] Compiling MLXLLM JinaReranker.swift
+[30/91] Compiling MLXLLM LFM2.swift
+[31/91] Compiling MLXLLM ModelConversion.swift
+[32/91] Compiling MLXLLM AfMoE.swift
+[33/91] Compiling MLXLLM Apertus.swift
+[34/91] Compiling MLXLLM BaichuanM1.swift
+[35/91] Compiling MLXLLM BailingMoe.swift
+[36/91] Emitting module MLXLLM
+[37/91] Compiling MLXLLM LFM2MoE.swift
+[38/91] Compiling MLXLLM Lille130m.swift
+[39/91] Compiling MLXLLM Llama.swift
+[40/91] Compiling MLXLLM Mamba2.swift
+[41/91] Compiling MLXLLM MiMo.swift
+[42/91] Compiling MLXLLM Olmo3.swift
+[43/91] Compiling MLXLLM OlmoE.swift
+[44/91] Compiling MLXLLM OpenELM.swift
+[45/91] Compiling MLXLLM Phi.swift
+[46/91] Compiling MLXLLM Phi3.swift
+[47/91] Compiling MLXLLM GPTOSS.swift
+[48/91] Compiling MLXLLM Gemma.swift
+[49/91] Compiling MLXLLM Gemma2.swift
+[50/91] Compiling MLXLLM Gemma3Text.swift
+[51/91] Compiling MLXLLM Gemma3nText.swift
+[52/91] Compiling MLXLLM Qwen38MTPHeadAttachment.swift
+[53/91] Compiling MLXLLM Qwen38MTPReferenceSession.swift
+[54/91] Compiling MLXLLM Qwen38MTPTarget.swift
+[55/91] Compiling MLXLLM Qwen3MoE.swift
+[56/91] Compiling MLXLLM Qwen3Next.swift
+[57/91] Compiling MLXLLM MiMoV2Flash.swift
+[58/91] Compiling MLXLLM MiniCPM.swift
+[59/91] Compiling MLXLLM MiniMax.swift
+[60/91] Compiling MLXLLM Mistral3Text.swift
+[61/91] Compiling MLXLLM Mixtral.swift
+[62/91] Compiling MLXLLM Exaone4.swift
+[63/91] Compiling MLXLLM FalconH1.swift
+[64/91] Compiling MLXLLM GLM4.swift
+[65/91] Compiling MLXLLM GLM4MOE.swift
+[66/91] Compiling MLXLLM GLM4MOELite.swift
+[67/91] Compiling MLXLLM Qwen35Kernels.swift
+[68/91] Compiling MLXLLM Qwen35MTP.swift
+[69/91] Compiling MLXLLM Qwen35MoE.swift
+[70/91] Compiling MLXLLM Qwen38MTPBlockSession.swift
+[71/91] Compiling MLXLLM Qwen38MTPCore.swift
+[72/91] Compiling MLXLLM PhiMoE.swift
+[73/91] Compiling MLXLLM Qwen2.swift
+[74/91] Compiling MLXLLM Qwen3.swift
+[75/91] Compiling MLXLLM Qwen35+FastPath.swift
+[76/91] Compiling MLXLLM Qwen35.swift
+[77/91] Compiling MLXLLM Nanbeige.swift
+[78/91] Compiling MLXLLM NanoChat.swift
+[79/91] Compiling MLXLLM NemotronH.swift
+[80/91] Compiling MLXLLM NemotronLabsDiffusion.swift
+[81/91] Compiling MLXLLM Olmo2.swift
+[82/94] Emitting module QmvBench
+[82/94] Write Objects.LinkFileList
+[84/94] Emitting module HeadBench
+[85/94] Compiling HeadBench main.swift
+[85/94] Write Objects.LinkFileList
+[87/94] Emitting module MLXLMTests
+[88/94] Compiling MLXLMTests Qwen38MTPDiagnosticTests.swift
+[88/94] Linking qmvbench
+[89/94] Applying qmvbench
+[90/94] Write Objects.LinkFileList
+[91/94] Linking headbench
+[92/94] Applying headbench
+[93/94] Linking mlx-swift-lmPackageTests
+Build complete! (6.90s)
+Test Suite 'Selected tests' started at 2026-09-14 09:34:20.099.
+Test Suite 'mlx-swift-lmPackageTests.xctest' started at 2026-09-14 09:34:20.100.
+Test Suite 'mlx-swift-lmPackageTests.xctest' passed at 2026-09-14 09:34:20.100.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'Selected tests' passed at 2026-09-14 09:34:20.100.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Qwen 3.8 MTP Diagnostic Tests" started.
+◇ Test "Verify postNorm Logit Alignment and Measure Acceptance Rate" started.
+
+=================== MTP DIAGNOSTIC RUN ===================
+  head=/Users/cwong/ai/qwen38-mtp-server/mtp-head
+MLXLM: fused gate+up SwiGLU projection fell back to eager projections: a projection is not a stock QuantizedLinear instance
+MLXLM: fusion prepare summary: backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head swiGLU 0 qkv 0
+MLXLM: QMV verify routing ON (default since the W1 rerun, or MLX_QWEN_QMV_VERIFY=1): 3-D verify inputs with B·L in 2...9 reshape to 2-D and route through the candidate QMV kernel; M=1 (2-D decode and B·L==1) falls back to incumbent quantizedMM; non-contiguous inputs materialize (copies counted); dispatch counters in the step summary and at shutdown
+[Logit Max Divergence vs Target]
+  - postNorm: true  => 16.25
+  - postNorm: false => 14.0
+[Greedy T=0 Session Acceptance - Prompt 1/3]
+  - Total Accepted Drafts: 351 / 372
+  - Measured Acceptance Rate: 94.35%
+  - Committed Stream Hash: 7f8eb4c5ceedafb6f4ae3c829c6612853e7c6b214a4cd54d310497fe7cace833
+[Greedy T=0 Session Acceptance - Prompt 2/3]
+  - Total Accepted Drafts: 336 / 361
+  - Measured Acceptance Rate: 93.07%
+  - Committed Stream Hash: 6eb4427d7f34255f00799e9412400327590224424b2bcac76439d6851b4bbc0e
+[Greedy T=0 Session Acceptance - Prompt 3/3]
+  - Total Accepted Drafts: 385 / 414
+  - Measured Acceptance Rate: 93.00%
+  - Committed Stream Hash: a3edbdfdd047cc4b4bd431ad7bb30c9b1df08a417061700982ffa69a20744945
+[Aggregate Greedy T=0 Session Acceptance]
+  - Total Accepted Drafts: 1072 / 1147
+  - Aggregate Mean Acceptance Rate: 93.46%
+  - Overall Committed Stream Hash: 80ffe8417904f9a14aa340f5116f8fb589b99ab136279c2a33dbc0ea6572137b
+=========================================================
+
+✔ Test "Verify postNorm Logit Alignment and Measure Acceptance Rate" passed after 47.570 seconds.
+✔ Suite "Qwen 3.8 MTP Diagnostic Tests" passed after 47.570 seconds.
+✔ Test run with 1 test in 1 suite passed after 47.570 seconds.
+EXIT=0

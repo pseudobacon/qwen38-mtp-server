@@ -367,7 +367,52 @@ actor MLXGenerator {
         )
 
         let targetURL = URL(fileURLWithPath: modelPath).resolvingSymlinksInPath()
-        let headURL = URL(fileURLWithPath: mtpHeadPath).resolvingSymlinksInPath()
+
+        // W4: draft-head quantization selection. MLX_QWEN_MTP_HEAD_QUANT:
+        //   1/true/on — force the 4-bit sibling tree (<headPath>/q4),
+        //   4-bit group-64 affine, produced by benchmarks/make_q4_head.py;
+        //   fails loudly if the tree is missing (explicit operator intent).
+        //   0/false/off — force the pinned BF16 tree (rollback state).
+        //   unset — default ON since the W4 verdict (2026-09-14, essay +8.6 %
+        //   / specdec +6.1 %, 24/24 reps bit-exact): 4-bit tree if present,
+        //   otherwise a loudly logged fallback to the pinned BF16 tree — a
+        //   fresh checkout has to run benchmarks/make_q4_head.py once.
+        // The target-verify path keeps the committed stream bit-identical
+        // across both head states on the benchmark fixtures (W4 A/B matrix);
+        // the knob changes draft quality (acceptance) and per-round head
+        // weight traffic.
+        let headBase = URL(fileURLWithPath: mtpHeadPath).resolvingSymlinksInPath()
+        let q4URL = headBase.appendingPathComponent("q4")
+        let q4Present = FileManager.default.fileExists(
+            atPath: q4URL.appendingPathComponent("model.safetensors").path)
+        let headURL: URL
+        let headVariant: String
+        switch ProcessInfo.processInfo.environment["MLX_QWEN_MTP_HEAD_QUANT"] {
+        case .some(let v) where ["1", "true", "on"].contains(v.lowercased()):
+            guard q4Present else {
+                throw MLXFastError.invalidInput(
+                    "MLX_QWEN_MTP_HEAD_QUANT=1 but the quantized head tree is missing: "
+                    + q4URL.appendingPathComponent("model.safetensors").path
+                    + " — generate it with benchmarks/make_q4_head.py")
+            }
+            headURL = q4URL
+            headVariant = "4-bit quantized (MLX_QWEN_MTP_HEAD_QUANT=1)"
+        case .some(let v) where ["0", "false", "off"].contains(v.lowercased()):
+            headURL = headBase
+            headVariant = "BF16 pinned (MLX_QWEN_MTP_HEAD_QUANT=0)"
+        case .some(let v):
+            throw MLXFastError.invalidInput(
+                "MLX_QWEN_MTP_HEAD_QUANT must be 1/true/on or 0/false/off, got \"\(v)\"")
+        case .none:
+            if q4Present {
+                headURL = q4URL
+                headVariant = "4-bit quantized (default ON, tree present)"
+            } else {
+                headURL = headBase
+                headVariant = "BF16 pinned (fallback: 4-bit tree missing — run benchmarks/make_q4_head.py)"
+            }
+        }
+        print("MLXLM: MTP head selected: \(headURL.path) — \(headVariant)")
 
         let (loadedModel, loadedTokenizer) = try Qwen38MTPHeadAttachment.withHeadAttached(
             backboneDirectory: targetURL,

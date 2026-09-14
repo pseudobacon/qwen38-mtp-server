@@ -1,0 +1,59 @@
+[0/3] Write swift-version-3CD7052B146186F2.txt
+warning: 'mlx-swift-lm': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/cwong/ai/mlx-swift-lm/Libraries/MLXFoundationModels/README.md
+warning: 'mlx-swift-lm': found 1 file(s) which are unhandled; explicitly declare them as resources or exclude from the target
+    /Users/cwong/ai/mlx-swift-lm/Libraries/MLXGuidedGeneration/README.md
+[0/1] Planning build
+[1/1] Compiling plugin CudaBuild
+[2/2] Compiling plugin GenerateManual
+[3/3] Compiling plugin GenerateDoccReference
+Building for debugging...
+[3/12] Write sources
+[4/12] Write swift-version-3CD7052B146186F2.txt
+[6/8] Compiling MLXLMTests Qwen38MTPDiagnosticTests.swift
+[7/8] Emitting module MLXLMTests
+[7/9] Write Objects.LinkFileList
+[8/9] Linking mlx-swift-lmPackageTests
+Build complete! (8.64s)
+Test Suite 'Selected tests' started at 2026-09-14 09:39:02.387.
+Test Suite 'mlx-swift-lmPackageTests.xctest' started at 2026-09-14 09:39:02.388.
+Test Suite 'mlx-swift-lmPackageTests.xctest' passed at 2026-09-14 09:39:02.388.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'Selected tests' passed at 2026-09-14 09:39:02.388.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Qwen 3.8 MTP Diagnostic Tests" started.
+◇ Test "Verify postNorm Logit Alignment and Measure Acceptance Rate" started.
+
+=================== MTP DIAGNOSTIC RUN ===================
+  head=/Users/cwong/ai/qwen38-mtp-server/mtp-head
+MLXLM: fused gate+up SwiGLU projection fell back to eager projections: a projection is not a stock QuantizedLinear instance
+MLXLM: fusion prepare summary: backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head swiGLU 0 qkv 0
+MLXLM: QMV verify routing ON (default since the W1 rerun, or MLX_QWEN_QMV_VERIFY=1): 3-D verify inputs with B·L in 2...9 reshape to 2-D and route through the candidate QMV kernel; M=1 (2-D decode and B·L==1) falls back to incumbent quantizedMM; non-contiguous inputs materialize (copies counted); dispatch counters in the step summary and at shutdown
+[Logit Max Divergence vs Target]
+  - postNorm: true  => 16.25
+  - postNorm: false => 14.0
+[Greedy T=0 Session Acceptance - Prompt 1/3]
+  - Total Accepted Drafts: 215 / 236
+  - Measured Acceptance Rate: 91.10%
+  - Committed Stream Hash: 3946ce22795528b6108275ddd3b047f022051c567cb4e5befb294c375a4ccb75
+[Greedy T=0 Session Acceptance - Prompt 2/3]
+  - Total Accepted Drafts: 229 / 244
+  - Measured Acceptance Rate: 93.85%
+  - Committed Stream Hash: b87b4df184fa1e49c6b4143d4ce3d45950be1398db44f640087681de21f79797
+[Greedy T=0 Session Acceptance - Prompt 3/3]
+  - Total Accepted Drafts: 242 / 250
+  - Measured Acceptance Rate: 96.80%
+  - Committed Stream Hash: be71eb04ce3b1b22854245d5d40cfcaa393939f8230944b2ec62444cdae99b11
+[Aggregate Greedy T=0 Session Acceptance]
+  - Total Accepted Drafts: 686 / 730
+  - Aggregate Mean Acceptance Rate: 93.97%
+  - Overall Committed Stream Hash: 06e40dd4543e6ce402c671ef1cc274c00cd67545628b19e2ba2eced74dfd4a69
+=========================================================
+
+✔ Test "Verify postNorm Logit Alignment and Measure Acceptance Rate" passed after 32.362 seconds.
+✔ Suite "Qwen 3.8 MTP Diagnostic Tests" passed after 32.362 seconds.
+✔ Test run with 1 test in 1 suite passed after 32.362 seconds.
+EXIT=0
