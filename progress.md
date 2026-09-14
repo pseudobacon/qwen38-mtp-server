@@ -83,10 +83,10 @@ Phase 3 TTLT uses the pinned definition 1024 / wall-seconds (the 22.28 row is 10
 
 | Number | Conditions | Provenance |
 |---|---|---|
-| **18.92 tok/s** (1024 / 54.20 s wall, 141.62 ms mean step) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), in-session thermal ramp | Phase 3 B2 — **STALE: pre-Item D default (`MLX_QWEN_QMV_VERIFY` OFF)** (post-QMV-fix, post-layout-removal binary) — pending re-measure |
-| **17.55 tok/s** (1024 / 58.48 s wall, 136.56 ms mean step) | `essay-1024` fixture, acceptance 1.4061 (2.41 tok/round) | Phase 3 B1 — **STALE: pre-Item D default re-baseline**, comparable to A0 — pending re-measure |
+| **19.90 tok/s** (1024 / 51.47 s decode, 120.63 ms mean step, acceptance 1.4061) | `essay-1024`, default config (QMV verify ON, adaptive draft depth 3), 5 measured reps, binary `11a8e61e…` | **W3 sweep k3 cell (2026-09-14)** — current-main headline, essay |
+| **25.44 tok/s** (1024 / 40.26 s decode, acceptance 1.6974) | `specdec-800`, default config (adaptive depth 3), single probe rep, same binary | **W3 specdec confirmation (2026-09-14)** — current-main headline, specdec (single rep, reference-grade) |
 
-**Headline refresh pending:** both rows above predate the Item D default flip (`MLX_QWEN_QMV_VERIFY` default ON, engine `a5f102f`) and must not be presented as current-main performance. The designated refresh is the W2/W3 session's default-config baseline cell on both fixtures (see open items); no new headline number lands before it.
+**Headline refresh (DONE 2026-09-14):** the W3 session's default-config cells supersede the stale pre-Item D B1/B2 rows (those rows remain below as provenance). The W3 k=2 essay cell (21.26 tok/s, +6.8 % over the default) is the fastest valid essay configuration but **fails the specdec determinism gate** (W3 section); the default adaptive k=3 remains the recommended configuration and the only one certifiably bit-exact on both fixtures.
 | 16.64 tok/s (1024 / 61.66 s wall, 143.91 ms mean step) | `essay-1024` fixture, `MLX_COMPILED_DECODE=0` (compiled fast paths OFF) | Phase 3 B3 — ablation cell |
 | 22.28 tok/s (1024 tok / 45.96 s decode, 120.86 ms steps) | `specdec-800` fixture, acceptance 1.6974 (2.70 tok/round), cooler session | 2d Item 3 final run — **pre-QMV-grid-fix binary**; the routed kernel never executed in that run |
 | 16.55–16.89 tok/s (143.0–145.4 ms steps) | `essay-1024` fixture, acceptance 1.4061 (2.41 tok/round), sustained thermal load | Item A clean fusion matrix — current fixed binary, fusion engaged |
@@ -176,6 +176,151 @@ Two conclusions. (1) The per-call-sync protocol carried a fixed **~170–235 µs
 
 `tEvalAvg` ~131 ms, `tGraphBuildAvg` ~10–11 ms, `tCacheStateAvg` ~0.9–1.7 ms, `tHostReadAvg` ~0.02 ms.
 
+### W2 — tEval profile: Metal System Trace + headbench (2026-09-14) — DONE
+
+Deliverable: **`benchmarks/PROFILE.md`**. One greedy essay-1024 request captured under
+`xctrace` Metal System Trace (driver `benchmarks/run_w2trace.sh`; trace
+`/tmp/w2-profile.trace`, exports `/tmp/w2-*.xml`): **GPU utilization 98.2 %**
+(10 817 ms busy over an 11 010 ms span) — decode is GPU-bound, not dispatch-bound.
+CPU is ~2.56 s over ~11 s wall (server 14.1 %, malloc 4.8 %, AGX 4.2 %, swiftCore
+3.7 %) — not the bottleneck; `tGraphBuild` ≈ 10.5 ms/round (~10 %) is the dominant
+CPU-side cost. **Stated limitation:** this trace template does not enable the Metal
+shader profiler, so it contains no per-kernel GPU intervals (command-level only);
+per-kernel bucketing therefore comes from micro-benchmark measurement +
+bytes/bandwidth estimates, each labeled measured or estimated in PROFILE.md.
+
+New engine tool **`headbench`** (`Libraries/HeadBench`, product `headbench`) loads
+the backbone + head exactly the way the server does and times the exact per-round
+session calls (median of 50 timed reps, release build): head forward (flush/step)
+**16.38 / 16.26 ms**, draft projection `draftTokenID` **3.95 ms**, verify
+`lm_head` **4.33 → 7.94 ms** (M = 2..5). Per-round head-family cost: **d=1 24.66
+ms, d=2 45.94 ms, d=3 67.47 ms, d=4 88.89 ms**. Raw-matmul reference (`--raw`):
+bf16 GEMV floor for one head forward **7.36 ms @ ~115 GB/s**; the ~9 ms remainder
+of the 16.38 ms head forward is layer structure (gated attention, RoPE, q/k
+norms, the eager non-fused SwiGLU path — load summary `head swiGLU 0 qkv 0` —
+per-rep fresh KV-cache update, ~25 kernel launches), an estimate pending a
+per-kernel profile. 4-bit group-32 reference at the backbone gate shape: 0.42 ms
+@ ~105 GB/s.
+
+Per-round decomposition (d=2 class, tEval ≈ 105 ms): backbone verify forward (3
+rows, 4-bit) ~55–59 ms (~55 %, **estimated** from 14.42 GB ÷ 200–275 GB/s —
+implied bandwidth back-computed from the W3 sweep at all four depths: 215 / 247 /
+273 / 200 GB/s, all inside the measured 4-bit kernel band), MTP head family
+40.6 ms (~39 %, **measured**), verify `lm_head` 5.4 ms (~5 %, **measured**), gaps/
+launches the remainder. Weight traffic from the safetensors headers: backbone
+body **13.70 GB/forward** (16 FA × 209.4 MB + 48 GDN × 215.7 MB); `lm_head` 4-bit
+payload **635.7 MB** (U32 [248320, 640], group 64) + 79.5 MB scales/biases;
+`embed_tokens` likewise 635.7 MB; grand total 15.13 GB. **Correction:** the earlier
+note "`lm_head` … 317.8 MB" was wrong (2-byte element assumption); the payload is
+635.7 MB.
+
+**W4 trigger: MET.** Gate was ≥ ~5 ms/round on the draft-head path; measured
+24.66 ms/round (d=1) and 45.94 ms/round (d=2) — triggered by 5–9×. `lm_head` is
+already 4-bit: report-only, no further quantization headroom (and quantizing it
+would change committed tokens). Next fused-kernel levers in size order: (1) 4-bit
+MTP head (W4; ~14 ms/round at d=2, 849 MB → ~300 MB), (2) SwiGLU/QKV fusions
+extended to the head (launch-level win), (3) backbone 4-bit GEMV bandwidth
+(200–275 GB/s in-pipeline vs 310–355 GB/s sustained in qmvbench), (4)
+`tGraphBuild` ~10.5 ms CPU (secondary).
+
+### W3 — MTP draft-depth sweep (2026-09-14) — **correctness stop at depth 5; valid optimum k=2 (21.26 tok/s, conditional)**
+
+**Protocol.** `benchmarks/run_w3sweep.sh` over `run_cell.sh` (fresh server per cell, port
+18099, greedy temp 0, `enable_thinking: false`, max_tokens 1024, `finish_reason: length`,
+`QWEN_MTP_STEP_TRACE=1`, `pmset -g therm` before every rep, no parallel work, no mid-sweep
+rebuild, binary `11a8e61e…` identical across all cells — verified per-cell SHA in the
+driver log). The committed stream must equal the fixture hash in every cell and rep
+(accepted/proposed/rounds are free — they vary with depth — and are logged). 6 reps per
+cell, rep 1 discarded as warmup, interleaved with rotating start cell. Cell configs:
+k1 `QWEN_MTP_DRAFT_K=1`; k2 `QWEN_MTP_DRAFT_K=2`; k3 no env/no flag (adaptive cost model,
+offered 3 — **the current value**); k4 `--spec-draft-n-max 8` + `QWEN_MTP_DRAFT_K=4`.
+
+**Correctness stop (NEW BUG — top open item).** The depth-5 cell (`QWEN_MTP_DRAFT_K=5`,
+`--spec-draft-n-max 8`) committed stream `da7bb159…` — NOT the essay hash `949b9423…`.
+Depth 6 reproduced the *same* wrong stream (deterministic). Depths 1–4 are bit-exact in
+every rep of the sweep. The first divergence is the first drafted token of the **first
+verify round** (the prefill's token 1 matches in all cells). Provenance:
+`benchmarks/results/w3-probe-k5.jsonl`, `w3-probe-k6-qmvoff.jsonl`,
+`w3-probe-k6-nofuse.jsonl`, and the diverged `w3-draftk-essay-k6.jsonl` record.
+
+Exclusion probes (fresh server, single rep each):
+
+| probe | env | stream | verdict |
+|---|---|---|---|
+| k5 default | `QWEN_MTP_DRAFT_K=5` | `da7bb159…` | DIVERGED |
+| k6, QMV off | `QWEN_MTP_DRAFT_K=6 MLX_QWEN_QMV_VERIFY=0` | `da7bb159…` | DIVERGED — routed QMV verify exonerated |
+| k6, no fast path | `QWEN_MTP_DRAFT_K=6 MLX_QWEN_QMV_VERIFY=0 MLX_QWEN_FUSED_QKV=0 MLX_QWEN_FUSED_SWIGLU=0` | `da7bb159…` | DIVERGED — fused QKV/SwiGLU exonerated |
+
+**Root-cause hypothesis (static, strong).** Full-attention verify at width 6..9 dispatches
+a single `MLXFast.scaledDotProductAttention` with qL = 6..9 (plain `KVCacheSimple`
+`update` + one SDPA — the final branch of `attentionWithCacheUpdate` in
+`MLXLMCommon/AttentionUtils.swift`). At qL·gqa = 36..54 > 32 the fused-vector SDPA path is
+left, so the wide verify attention is not bit-identical to the serial (qL=1) path and a
+greedy argmax can flip. The engine's own design comments
+(`Qwen38MTPBlockSession.swift` ~1428–1436 and ~1996–1998; the SDPA warm-up comment
+~755–770) specify an "exactness chunk": 6..9-row causal verify attention must be split
+into two ≤5-row SDPA calls with byte-identical bottom-right-aligned windows — and the
+warm-up code still compiles exactly the qL∈{1..5} shapes that chunk would dispatch —
+**but that split does not exist anywhere in the current code** (single `attentionWithCacheUpdate`
+definition, no `updateAndAttend` in the LLM model). The empirical boundary matches the
+qL·gqa = 32 edge exactly: width ≤5 (qL·gqa ≤ 30) is bit-exact, width 6 (36) diverges at
+round 1. Fix direction (separate task): implement the chunked verify SDPA (two ≤5-row
+calls, second call over the cache extended by the first chunk's K/V), then re-run the
+determinism gate at k5–k8 before any performance claim at those depths. Until then,
+draft depths ≥5 are **unsound** and the `--spec-draft-n-max 8` / `QWEN_MTP_DRAFT_K`
+surface above 4 is broken, not merely slow.
+
+**Essay-1024 results (valid subset, 5 measured reps per cell; all reps bit-exact
+`949b9423…`, phaseSumOK, materialized=0):**
+
+| k | rounds | accepted | acc/step | stepAvg ms | decode s | tok/s |
+|---|---|---|---|---|---|---|
+| 1 | 577 | 448 | 0.7764 | 92.08 | 53.20 | 19.25 |
+| 2 | 459 | 567 | 1.2353 | 104.76 | 48.16 | **21.26** |
+| 3 (adaptive, current) | 426 | 599 | 1.4061 | 120.63 | 51.47 | 19.90 |
+| 4 | 390 | 636 | 1.6308 | 161.27 | 62.97 | 16.26 |
+
+Per-rep data: `benchmarks/results/w3-draftk-essay-k{1,2,3,4}.jsonl` (last 5 records are the
+measured reps r2–r6). Depth distributions: k1 `1:577`, k2 `2:459`, k3 `1:16, 2:160, 3:250`,
+k4 `4:390`.
+
+**Reading.** Within the valid set, **k=2 is the essay optimum: 21.26 tok/s, +6.8 % over the
+current default (k=3 adaptive, 19.90)** and +10.4 % over k=1. The acceptance curve is
+sub-linear in depth: each extra drafted token adds ~40 ms of verify cost (stepAvg
+92→105→121→161 ms) while removing far fewer than a proportional number of rounds
+(577→459→426→390). k=4 is strictly worse than the default. The pre-fix sweep cells at
+k=6/k8 are INVALID (wrong stream) and are reported only as bug evidence — their
+timing-looking numbers must never be used as performance data. If the SDPA exactness
+chunk is implemented and re-verified, the sweep must be re-run at k ∈ {5,6,8} before
+claiming any deep-depth optimum.
+
+**Specdec-800 confirmation (fresh server, single rep per k; determinism gate + reference
+timing only, not headline-grade statistics):**
+
+| k | rounds | accepted | acc/step | decode s | tok/s | gate |
+|---|---|---|---|---|---|---|
+| 1 | 562 | 462 | 0.8221 | 45.95 | 22.29 | PASS (`139acb9d…`) |
+| 2 | 427 | 598 | 1.4005 | 39.26 | 26.08 | **FAIL** — deterministic wrong stream `06882d85…` (rerun reproduces the same hash; divergence at char 4847/5131 ≈ 94.5 %) |
+| 3 (adaptive, current) | 380 | 645 | 1.6974 | 40.26 | 25.44 | PASS |
+| 4 | 334 | 690 | 2.0659 | 47.24 | 21.68 | **FAIL** — deterministic wrong stream `48728382…` (divergence at char 4883/5131 ≈ 95.2 %) |
+
+Provenance: `benchmarks/results/w3-draftk-specdec-k1.jsonl`,
+`w3-draftk-specdec-k2.jsonl`, `w3-probe-specdec-k2-rerun.jsonl`,
+`w3-probe-specdec-k3.jsonl`, `w3-probe-specdec-k4.jsonl`.
+
+**Specdec reading.** Forced depths k=2 and k=4 are not bit-exact on specdec-800 either —
+with a *different* signature from the k5/k6 essay bug: divergence at ~95 % of the stream
+(late-position knife-edge argmax flips), deterministic per prompt (same wrong hash across
+fresh server runs), and the k2/k4 specdec wrong streams differ from the essay k5/k6 wrong
+stream. Combined with the essay results: **no forced depth other than k=1 is
+certifiably bit-exact on both fixtures in the current evidence**; the default adaptive
+k=3 is the only configuration bit-exact on both fixtures and the recommended
+configuration. The k=2 essay optimum is therefore **conditional**: it is the fastest
+valid essay cell, but until the specdec k=2/k4 divergence is understood and resolved, k=2
+must not be promoted as the default. (Note the specdec k2 wrong stream at 26.08 tok/s is
+fastest-in-class on specdec — the divergence costs nothing in the measured stream, which
+is exactly why the hash gate, not the timing, is the acceptance criterion.)
+
 ## Benchmarking history (superseded results — kept for provenance only)
 
 The v1.0-baseline, 2a, 2b, and 2c tables previously in this file are **retracted as measurement artifacts**, for two reasons established on 2026-09-13:
@@ -187,7 +332,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13 — first valid headline tok/s measured, on the pre-Item D default binary — now stale, pending re-measure; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`).
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact).
 
 **Decisions on record:**
 
@@ -195,13 +340,14 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 - Interleaved gate+up layout: rejected (no gain, +6.5 GB row-gather copies); removed from the engine in `901d2ca` (2026-09-13). Historical data in `benchmarks/FUSION_REPORT.md` and `benchmarks/results/itemC.jsonl`.
 - Item D verify-routing knob `MLX_QWEN_QMV_VERIFY`: **KEEP, default ON** (2026-09-14; final classification in the Phase 3 Item D section). The original A/B was NULL due to a measurement artifact: the guard's per-call `asData` stride probe calls `self.eval()` on every routed dispatch, serializing the verify pipeline and shifting ~119 ms of GPU wait from the tEval phase into the graphBuild phase. After replacing the probe with a cached per-shape contiguity decision (`Qwen35RowMajorCache`, engine `c87fc6b`), the flush-free rerun shows **+16.659 ms/step mean (12.2%), 5/5 paired reps, bit-exact, 99.1% routed, zero materializations, phase-sums exact in all 12 reps** — the qmvbench 15–20% kernel win at M = 2..4 does transfer end-to-end. Default is now ON; `MLX_QWEN_QMV_VERIFY=0` is the rollback knob (selects the pre-Item D baseline for A/B cells). Per-rep provenance for both the invalid original A/B and the valid flush-free rerun is in the `benchmarks/results/itemd-*.jsonl` records.
 - W1 hot-path `asData` audit: all call sites classified (one hidden flush — fixed; two dead-code probes — fixed with the same pattern; `UserInput` non-hot-path; MTP session readouts are intentional post-`eval` host reads). No remaining per-call tensor metadata in the forward path.
-- MTP head quantization target (for W4): the deployed head at `mtp-head/pinned/` is **BF16** (849 MB; `layers.0` full-attention layer + `mlp`, no `head.` prefix), not 4-bit — so 4-bit quantization of the draft head is a live W4 option (~5–6 ms/round read saving at this geometry). The backbone `lm_head` is already 4-bit in the checkpoint (vocab 248 320 × hidden 5120, U32 group-64); quantizing it further is out of scope (report-only if the profile shows ≥ ~8 ms/round on the logits path).
+- MTP head quantization target (for W4): the deployed head at `mtp-head/pinned/` is **BF16** (849.4 MB; `fc` + one full-attention `layers.0` + `mlp`, no `head.` prefix), not 4-bit. **W2 measured the per-round cost (headbench): 24.66 ms/round at d=1, 45.94 ms/round at d=2 — W4 trigger MET (5–9× the ~5 ms gate).** 4-bit (group 64, ~300 MB) is expected to save ≈ 14 ms/round at d=2 by cutting the head's matmul floor (7.36 ms → ~2 ms per forward); the ~9 ms layer-structure cost is unchanged. The backbone `lm_head` is already 4-bit in the checkpoint (vocab 248 320 × hidden 5120, U32 group-64, **635.7 MB** payload — the earlier 317.8 MB note was wrong); quantizing it further is out of scope (report-only; it would change committed tokens). W4 safety: the head emits only draft proposals — the target's greedy verify commits, so head precision affects acceptance, not the committed stream (W3's k=1..4 bit-exactness under different depths is the evidence).
 
-**Open items (in priority order — the five-work-item queue: W1 and W5 done 2026-09-14; next W2, W3; W4 gated on W2):**
+**Open items (in priority order — W1, W2, W3, W5 done 2026-09-14; next: the depth-≥5 correctness bug, then W4):**
 
-1. **W2 — profile `tEval` (~107–125 ms/step)** with an external Metal System Trace (one greedy request, essay fixture, MTP on, default config = QMV verify ON); also carries the **designated headline refresh** — the session's default-config baseline cell on both fixtures supersedes the stale pre-Item D B1/B2 rows above. Bucket kernel time; answer (a) draft-head forward + logits cost per round, (b) logits-head cost per round, (c) where the fused-kernel work should go next. Deliverable: `benchmarks/PROFILE.md`.
-2. **W3 — MTP draft-depth sweep** k ∈ {1, 2, 3, 4, 6, 8} (current adaptive cap = 7; offered depth = min(specDraftNMax, depth) so k > 3 needs `--spec-draft-n-max 8`), essay-1024, strict determinism gate (committed 1024-token stream bit-identical for all k), 6+ reps per k; confirm the best k on specdec-800. Deliverable: `benchmarks/results/draftk-sweep.jsonl` + `progress.md` section.
-3. **W4 — conditional MTP-head 4-bit quantization** (group 64), A/B vs the BF16 head (wall time, acceptance, committed-stream determinism); triggers if the W2 profile shows ≥ ~5 ms/round on the draft-head path. `lm_head` is report-only. Deliverable: `benchmarks/results/W4-ab.jsonl` + decision record.
-4. **W5 — `qmvbench --throughput N`: DONE 2026-09-14** — sustained throughput measured at M ∈ {1,2,4,8,9}, narrow/wide × routed/fallback (table in the QMV microbenchmark section): ~170–235 µs/call sync overhead in the serialized protocol; the routed kernel's M = 2..9 win grows to ~30% under sustained conditions; M = 1 is a wash. Remaining: M = 16/17 extension (gated on W3's optimum sitting at the sweep ceiling).
+1. **Correctness bug: verify width ≥ 6 commits wrong tokens (report-only until fixed).** Root-cause hypothesis (strong, static + empirical): the "exactness chunk" split specified in the engine's design comments — 6..9-row causal verify SDPA as two ≤5-row calls — does not exist in `attentionWithCacheUpdate`; at qL·gqa > 32 the fused-vector SDPA path is left and wide verify attention is not bit-identical to serial. Boundary matches exactly (width 5 = 30 ≤ 32 clean; width 6 = 36 diverges at round 1); QMV verify and fused QKV/SwiGLU exonerated by exclusion probes. Full detail + provenance: W3 section. Fix is a separate task (chunked verify SDPA + re-run the determinism gate at k5–k8); **the `--spec-draft-n-max` / `QWEN_MTP_DRAFT_K` surface above 4 is broken, not merely slow, until then.**
+2. **W4 — MTP-head 4-bit quantization (TRIGGERED by W2: measured 24.66 / 45.94 ms/round at d=1/2 vs the ~5 ms gate).** Quantize the BF16 head (849.4 MB → ~300 MB, group 64), A/B vs the BF16 head: gates on acceptance rate, tok/s, and the committed-stream hash staying `949b9423…` / `139acb9d…` (the head affects only draft proposals). `lm_head` report-only (already 4-bit). Expected ≈ 14 ms/round at d=2 (~13 % of the step). Deliverable: `benchmarks/results/W4-ab.jsonl` + decision record.
+3. **W5 — `qmvbench --throughput N`: DONE 2026-09-14** — sustained throughput measured at M ∈ {1,2,4,8,9}, narrow/wide × routed/fallback (table in the QMV microbenchmark section): ~170–235 µs/call sync overhead in the serialized protocol; the routed kernel's M = 2..9 win grows to ~30% under sustained conditions; M = 1 is a wash. The M = 16/17 extension is **moot**: W3's optimum sits at k=2, not the sweep ceiling.
+4. **SwiGLU/QKV fusions extended to the MTP head** — the head runs the eager gate/up/silu/mul/down chain (`head swiGLU 0 qkv 0` at load); launch-level win, same bit-exact pattern as the backbone (PROFILE.md §5).
 5. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is wired; shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
 6. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
+7. **Re-sweep draft depths k ∈ {5,6,8} after the item-1 fix** — the current k=6/k8 records are bug evidence only.

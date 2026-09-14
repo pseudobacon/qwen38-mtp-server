@@ -4,13 +4,16 @@
 # time, parse the MTP step trace + response, compute the greedy stream hash,
 # and emit one JSON line on stdout.
 #
-# usage: run_cell.sh <tag> <env-spec> <port> <prompt-file>
+# usage: run_cell.sh <tag> <env-spec> <port> <prompt-file> [extra-serve-args]
 #   env-spec: space-separated VAR=VAL pairs (only the fusion/layout knobs vary)
+#   extra-serve-args: optional raw CLI args appended to the serve command
+#     (W3: "--spec-draft-n-max 8" for draft depths above the offered default)
 set -u
 TAG=$1
 ENVSPEC=$2
 PORT=${3:-18099}
 PROMPT_FILE=$4
+EXTRA_ARGS=${5:-}
 
 SERVER=/Users/cwong/ai/qwen38-mtp-server
 cd "$SERVER" || exit 1
@@ -52,7 +55,7 @@ sleep 1
 ENV_PREFIX="QWEN_MTP_STEP_TRACE=1"
 for kv in $ENVSPEC; do ENV_PREFIX="$ENV_PREFIX $kv"; done
 
-env $ENV_PREFIX "$SERVER_BIN" serve --port "$PORT" --model ./weights \
+env $ENV_PREFIX "$SERVER_BIN" serve --port "$PORT" --model ./weights $EXTRA_ARGS \
   > "$STDOUT_LOG" 2> "$STDERR_LOG" &
 SRV=$!
 
@@ -158,7 +161,8 @@ if summary:
             except ValueError:
                 out[k] = v
 
-step_ms, t_eval, t_graph, t_cache, t_read, n = [], [], [], [], [], 0
+step_ms, t_eval, t_graph, t_cache, t_read, depths, accs, n = [], [], [], [], [], [], [], 0
+from collections import Counter
 for line in open(stderr_log, errors="replace"):
     if "STEP-TRACE" not in line:
         continue
@@ -173,13 +177,27 @@ for line in open(stderr_log, errors="replace"):
             lst.append(float(vals.get(key, "nan")))
         except ValueError:
             pass
+    def fi(key, lst):
+        try:
+            lst.append(int(vals.get(key, "-1")))
+        except ValueError:
+            pass
     f("stepMs", step_ms)
     f("tEvalMs", t_eval)
     f("tGraphBuildMs", t_graph)
     f("tCacheStateMs", t_cache)
     f("tHostReadMs", t_read)
+    fi("d", depths)
+    fi("acc", accs)
 if n:
     out["stepTraceRounds"] = n
+    if depths:
+        # Per-round draft depth d (verify width M = d+1). Forced cells are
+        # constant; the adaptive cell shows the cost-model distribution.
+        out["depthDist"] = ",".join(f"{d}:{c}" for d, c in sorted(Counter(depths).items()))
+        out["depthAvg"] = sum(depths) / len(depths)
+    if accs:
+        out["accAvg"] = sum(accs) / len(accs)
     out["stepAvg"] = sum(step_ms) / len(step_ms)
     out["tEvalAvg"] = sum(t_eval) / len(t_eval)
     out["tGraphBuildAvg"] = sum(t_graph) / len(t_graph)
