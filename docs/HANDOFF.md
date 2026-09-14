@@ -141,6 +141,8 @@ tok/s, committed-stream hash. Use `run_cell.sh` (5th arg for extra env) and
 
 ## Fresh-checkpoint procedure
 
-Checkpoint status: **pending — record below after running
-`bash /Users/cwong/ai/qwen38-mlx-server/scripts/agent-checkpoint.sh` from each
-repo.**
+**Fresh checkpoint COMPLETED 2026-09-14 (end of W2/W3 session).**
+`bash /Users/cwong/ai/qwen38-mlx-server/scripts/agent-checkpoint.sh` run from
+both repos: engine clean at `6552162` (main), server clean at `61cb349`
+(main). No uncommitted changes, no untracked files in either repo at the time
+of the checkpoint (this HANDOFF edit and its commit post-date it).
