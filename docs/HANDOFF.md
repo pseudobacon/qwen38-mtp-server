@@ -157,9 +157,9 @@ configuration in `docs/README.md`.
 
 ## Repository state (verified at write time)
 
-- `qwen38-mtp-server`: branch `main`, clean after the merge; latest commits:
-  the k=2 default flip task (server-side changes + docs) merged from
-  `feature/k2-default-flip`, then this HANDOFF marker commit.
+- `qwen38-mtp-server`: branch `main` at `0973cf7` (the k=2 default flip task —
+  server-side changes + docs, merged from `feature/k2-default-flip`), clean;
+  this HANDOFF marker commit follows it on `main`; feature branch deleted.
 - `../mlx-swift-lm`: branch `main` at `609e0d5` (the engine flip), clean;
   feature branch deleted. (Local main is ahead of `origin/main` — push is a
   separate, unrequested operation.)
