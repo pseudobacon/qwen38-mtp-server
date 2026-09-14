@@ -138,6 +138,9 @@ k∈{1,2,3,4}.
 
 ## Completion marker
 
-Fresh checkpoint completed successfully at **2026-09-14 10:36 BST** (server
-repo, feature branch state recorded above); this HANDOFF was written after that
-successful checkpoint.
+Fresh checkpoints completed successfully: **2026-09-14 10:36 BST** (server
+repo, feature-branch state recorded above, before the final commit) and
+**2026-09-14 10:38 BST** on both repos after the merges — engine `main`
+@ `b79140b` and server `main` @ `34e67b6`, both clean (`git status --short`
+empty), feature branches deleted. The fresh-checkpoint procedure completed
+successfully.
