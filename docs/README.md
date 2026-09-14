@@ -32,10 +32,10 @@ swift build --configuration release --product qwen38-mtp-server
 
 # Tests (current counts)
 swift test --filter Qwen38MTPDiagnosticTests         # 1/1 (~151 s) — bit-exactness + acceptance (93.46%)
-swift test --filter Qwen35FusedSwiGLUProjectionTests  # 8/8
-swift test --filter Qwen35FusedQKVProjectionTests     # 8/8
-swift test --filter Qwen35FusedGDNProjectionTests    # 14/14
-swift test --filter HTTPServerTests                  # 107 passed, 0 failed
+swift test --filter Qwen35FusedSwiGLUProjectionTests  # 9/9
+swift test --filter Qwen35FusedQKVProjectionTests     # 9/9
+swift test --filter Qwen35FusedGDNProjectionTests    # 15/15
+swift test --filter HTTPServerTests                  # 121 passed, 0 failed
 
 # Benchmark matrix
 bash benchmarks/run_matrix.sh verify   # §0 fixture provenance check (both pinned fixtures)
