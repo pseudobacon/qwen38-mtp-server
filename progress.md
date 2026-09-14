@@ -783,7 +783,14 @@ label is the warm end of the in-session thermal trajectory (k2default 6-rep:
 **Findings.** (1) The k = 2 round is GPU-saturated at measured contexts — no
 kernel-level win of order 10 ms is addressable from this checkout without changing
 draft depth (rejected: acceptance cost + k1 dead path), head design, or MLX C++
-(tape build, 3.4 ms tG). (2) QMV routing: M = 1 verify falls back to
+(tape build, 3.4 ms tG). (5) **Head fusion explored and closed negative**
+(2026-09-14 — fusing the MTP head into the backbone's last-layer graph is a
+rearrangement, not a work removal: the head-family is 11.40 ms/round of real
+weight streaming (HeadBench: flush 1.95 + step 1.47 + 2×proj1 7.98), 8.27 ms of
+it sits in the eval window on the verify critical path (draft ids feed the
+verify input), and 3.13 ms is already hidden behind the verify build; a fused
+single graph loses that overlap and is predicted +3.1 ms/round; no engine
+change made; detail: head fusion section below and PROFILE-K2.md §8). (2) QMV routing: M = 1 verify falls back to
 `quantizedMM`; M ≥ 2 routes the QMV verify kernel — the M = 3 tape's sub-linear
 per-row cost is a property of that path, not a bug. (3) **FullBench per-rep
 first-decode penalty is a bench artifact**: newCache + prime + one measured decode
@@ -808,3 +815,38 @@ artifact measured, not assumed: +2.19 ms/round (4-pair alternating A/B).
 `benchmarks/results/k2decomp-ab.jsonl`. Engine: `Libraries/FullBench/` (new
 diagnostic tool), `Package.swift` (product). No production source changes in either
 repo for this task.
+
+## Head fusion exploration (2026-09-14, negative result)
+
+**Objective.** Reduce the k = 2 eval window (80.4 ms) by ≥ 8 ms by fusing the
+MTP head forward into the backbone's last-layer graph (one graph, one blocking
+eval). **Verdict: NO WIN, not implemented.** The fusion is a rearrangement —
+the head's GPU work is real weight streaming on the verify critical path — and
+the fused-graph variant is predicted to regress ~3.1 ms/round.
+
+**Measurements (binary `e448b2e2…`, stream hash `949b9423…` unchanged):**
+
+1. HeadBench (engine, q4 head, d = 2, flush = 3, steady-state shape): flush
+   1.95 ms + step 1.47 ms + 2 × proj1 7.98 ms = **11.40 ms/round head-family GPU
+   work** (proj1 = single-row 4-bit backbone lm_head 635.7 MB + argmax, 3.99 ms
+each; the autoregressive chain forces them sequential and single-row).
+2. 5-way host trace (`MLX_QWEN_MTP_TRACE=1`, 461-round essay cell): d_head1 74 µs,
+   d_chain 41 µs, verify_build 2,969 µs, eval_wall 79,870 µs, round 84,186 µs
+   (stepAvg 84.18 ms). Head submitted 0.23 ms after round start → **3.13 ms
+   hidden behind the verify build, 8.27 ms in the eval window**.
+3. Cross-check: implied M = 3 tape = 79.87 − 8.27 = 71.60 ms = serial 58.30 +
+   2 × 6.65 ms marginal row. Δ(k2 − serial) = 21.57 ms = 8.27 head + 13.30 rows.
+   Per-round GPU util 98.6 % (busy 83.00 / wall 84.19 ms) — the host side is
+   already fully hidden; the round is GPU-throughput-bound.
+
+**Why the 8 ms bar is unreachable from this angle.** Even removing 100 % of the
+head work (impossible — draft ids are verify inputs) caps the saving at 8.27 ms.
+Any rearrangement conserves the 83.00 ms per-round GPU work; the only lever is
+reducing GPU work itself: (a) model-level — a native 2-token head or
+draft-vocabulary lm_head (≈ 12.1 ms/round for one step + proj1 + verify row);
+(b) draft-depth policy (k = 1: −12.1 ms/round, −1.22 tokens/round); (c) the
+verify tape (71.60 ms, backbone 4-bit weight streaming) — the separate
+workstream that owns the eval window.
+
+**Files.** Server: `benchmarks/PROFILE-K2.md` §8 (new), this section,
+`docs/HANDOFF.md`. No source changes in either repo; no new binaries.

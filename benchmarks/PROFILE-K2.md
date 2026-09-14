@@ -182,3 +182,66 @@ cd ../mlx-swift-lm && swift build --configuration release --product FullBench
 Trace artifacts (session-local, /tmp): k2trace-mtp-trace.log, k2trace-gpu-intervals.xml
 (offset 696,415,092,781,278), fb1-profile.trace (per-rep M=1@2048, pid 73984),
 fb256-profile.trace (per-rep M=1@256, pid 76137, offset 702,590,931,325,346).
+
+## 8. Head fusion exploration (2026-09-14, negative result)
+
+Question: can fusing the MTP head forward into the backbone's last-layer graph cut
+the k=2 eval window by ≥ 8 ms (80.4 → ~70 ms)? **No — the fusion is a
+rearrangement, not a work removal, and the specific fused-graph variant is
+predicted to REGRESS ~3.1 ms/round.** No engine change was made.
+
+**Audit (head path in `generateRound`).** Per drafting round the head does:
+(1) a flush forward over the backlog + current (pendingHidden, primary) rows —
+3 rows on a full-accept round — through the 1-layer q4 head (238.9 MB),
+(2) `draftTokenID` = backbone lm_head (635.7 MB 4-bit, single row) + argmax,
+(3) one autoregressive chain step (head forward, 1 row) + a second
+`draftTokenID`. The flush is `asyncEval`-submitted ~0.23 ms after round start,
+the chain ~0.28 ms; the verify graph is built 2.97 ms of host afterwards and one
+blocking eval drains head-tail + verify tape. **The verify input is
+`[primary] + draftIdArrays`, so the head's draft-id work is on the verify
+critical path** — it cannot be removed, only hidden.
+
+**Measurements (same binary `e448b2e2…`, stream hash `949b9423…` unchanged).**
+
+| quantity | value | source |
+|---|---|---|
+| flush (3 rows) | 1.95 ms | HeadBench, q4 head, d=2 flush=3 |
+| chain step (1 row) | 1.47 ms | HeadBench |
+| 2 × proj1 (single-row lm_head) | 7.98 ms (3.99 each) | HeadBench |
+| **head-family total** | **11.40 ms/round** | HeadBench |
+| d_head1 / d_chain host build | 74 / 41 µs | 5-way trace, 461-round median |
+| verify_build | 2,969 µs | 5-way trace |
+| eval_wall | 79,870 µs | 5-way trace |
+| head hidden behind verify_build | 3.13 ms | timeline (submitted 0.23 ms) |
+| **head in eval window** | **8.27 ms** | 11.40 − 3.13 |
+| implied M=3 verify tape | 71.60 ms | 79.87 − 8.27 |
+| cross-check | 58.30 (serial) + 2 × 6.65 (marginal row) = 71.60 | PROFILE-K2 §3 |
+| per-round GPU util | 98.6 % (busy 83.00 / wall 84.19 ms) | derived |
+
+The three independent numbers (HeadBench, 5-way trace, serial cross-check)
+triangulate exactly: Δ(k2 − serial eval) = 21.57 ms = 8.27 head-in-window +
+13.30 two extra verify rows.
+
+**Why Option A (one fused graph) cannot win.** Fusing head + verify into one
+graph keeps every byte of weight streaming (the head work is real GPU work, not
+launch overhead) and moves the head submission from t = 0.23 ms to t = 3.36 ms
+(the whole graph must be built before the single eval), losing the 3.13 ms the
+shipped design already hides behind the verify build. Predicted eval =
+11.40 + 71.60 = **83.00 ms, i.e. +3.1 ms/round vs the shipped 79.87 ms**.
+
+**Why no scheduling variant wins.** The shipped design already submits the head
+at the earliest possible instant; the hideable amount is the host build between
+head submission and the blocking eval (≈ 2.97 ms verify build), which is the same
+in every variant. Total per-round GPU work (83.00 ms: 71.60 tape + 11.40 head)
+is invariant under rearrangement, and the host side is already fully hidden
+(GPU idle 1.18 ms/round). Even removing 100 % of the head work — impossible,
+being on the critical path — would cap the saving at 8.27 ms, at the bar rather
+than through it.
+
+**Follow-up candidates (all outside this task's scope).** (a) Model-level: a
+native 2-token head or a draft-vocabulary lm_head would remove one
+step+proj1+verify row (≈ 12.1 ms/round) — a model change, not an engine change.
+(b) Draft-depth policy (k = 1 removes 5.45 ms head + 6.65 ms tape at the cost of
+~1.22 tokens/round on this fixture). (c) The verify tape itself (71.60 ms,
+backbone 4-bit weight streaming amortized over 3 rows) is the separate
+workstream that actually owns the eval window.
