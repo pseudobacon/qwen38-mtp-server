@@ -1,0 +1,836 @@
+qmvbench: loading shard model-00001-of-00003.safetensors (/Users/cwong/ai/qwen38-mtp-server/weights/model-00001-of-00003.safetensors) ...
+qmvbench: loaded 632 tensors from shard
+
+Geometry (layer 3, Qwen3.8-27B-4bit):
+  narrow projection: N=17408, K=5120 (packed K=640)
+  wide fused: N=34816, packed K=640
+  quantization: bits=4, groupSize=64,
+  scales/biases [N, 80] bfloat16, weight [N, 640] uint32
+  kernel row tile=32; M values: [1, 2, 4, 8, 9]
+  protocol: 100 warmup + 1000 timed iters, randomized
+  randomized order, 3 whole blocks, monotonic clock with device sync
+------------------------------------------------------------------------
+M=1: guards passed for all routed conditions; bit-exactness verified
+
+M=1 — microseconds per iteration (mean / min / p50 / std over
+3000 samples), GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 352.67 | 283 | 345 | 29.75 | 142.29 |
+| narrow_up_routed          | 351.16 | 296 | 344 | 27.58 | 142.90 |
+| wide_global_routed        | 537.93 | 465 | 528 | 40.94 | 186.55 |
+| narrow_gate_fallback      | 351.86 | 284 | 344 | 32.94 | 142.61 |
+| narrow_up_fallback        | 352.55 | 277 | 344 | 38.07 | 142.33 |
+| wide_global_fallback      | 538.84 | 453 | 529 | 46.00 | 186.23 |
+
+M=1 — sustained throughput: 128 back-to-back
+submissions, one eval per batch; per-iteration microseconds
+(batch total / N), mean / min / p50 / std over 3
+batches, GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 162.01 | 146.98 | 163.76 | 14.24 | 309.73 |
+| narrow_up_routed          | 141.41 | 138.52 | 141.62 | 2.78 | 354.86 |
+| wide_global_routed        | 321.81 | 305.45 | 310.74 | 23.90 | 311.83 |
+| narrow_gate_fallback      | 162.36 | 143.67 | 170.86 | 16.21 | 309.07 |
+| narrow_up_fallback        | 151.72 | 141.16 | 154.00 | 9.63 | 330.74 |
+| wide_global_fallback      | 303.66 | 291.26 | 299.47 | 14.95 | 330.47 |
+------------------------------------------------------------------------
+M=2: guards passed for all routed conditions; bit-exactness verified
+
+M=2 — microseconds per iteration (mean / min / p50 / std over
+3000 samples), GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 363.96 | 290 | 356 | 38.06 | 138.00 |
+| narrow_up_routed          | 364.55 | 294 | 357 | 34.42 | 137.77 |
+| wide_global_routed        | 548.68 | 479 | 542 | 36.18 | 183.04 |
+| narrow_gate_fallback      | 396.17 | 318 | 390 | 33.49 | 126.78 |
+| narrow_up_fallback        | 394.96 | 317 | 388 | 35.25 | 127.16 |
+| wide_global_fallback      | 618.75 | 521 | 607 | 48.06 | 162.31 |
+
+M=2 — sustained throughput: 128 back-to-back
+submissions, one eval per batch; per-iteration microseconds
+(batch total / N), mean / min / p50 / std over 3
+batches, GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 165.78 | 161.64 | 162.49 | 6.45 | 302.96 |
+| narrow_up_routed          | 166.47 | 160.09 | 166.25 | 6.49 | 301.70 |
+| wide_global_routed        | 342.21 | 336.41 | 344.91 | 5.02 | 293.48 |
+| narrow_gate_fallback      | 197.08 | 196.12 | 196.30 | 1.50 | 254.85 |
+| narrow_up_fallback        | 197.12 | 195.09 | 197.22 | 1.99 | 254.79 |
+| wide_global_fallback      | 404.18 | 402.42 | 403.72 | 2.03 | 248.48 |
+------------------------------------------------------------------------
+M=4: guards passed for all routed conditions; bit-exactness verified
+
+M=4 — microseconds per iteration (mean / min / p50 / std over
+3000 samples), GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 446.02 | 363 | 446 | 29.31 | 112.81 |
+| narrow_up_routed          | 445.52 | 363 | 445 | 29.31 | 112.94 |
+| wide_global_routed        | 712.02 | 616 | 704 | 42.34 | 141.27 |
+| narrow_gate_fallback      | 536.67 | 455 | 531 | 34.04 | 93.75 |
+| narrow_up_fallback        | 535.73 | 446 | 531 | 33.02 | 93.92 |
+| wide_global_fallback      | 894.05 | 823 | 887 | 41.51 | 112.51 |
+
+M=4 — sustained throughput: 128 back-to-back
+submissions, one eval per batch; per-iteration microseconds
+(batch total / N), mean / min / p50 / std over 3
+batches, GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 252.53 | 252.30 | 252.45 | 0.28 | 199.25 |
+| narrow_up_routed          | 250.12 | 249.57 | 250.11 | 0.56 | 201.16 |
+| wide_global_routed        | 499.03 | 497.47 | 497.85 | 2.38 | 201.57 |
+| narrow_gate_fallback      | 359.76 | 356.95 | 360.62 | 2.50 | 139.86 |
+| narrow_up_fallback        | 363.26 | 362.86 | 362.88 | 0.68 | 138.51 |
+| wide_global_fallback      | 745.85 | 714.73 | 759.95 | 26.99 | 134.87 |
+------------------------------------------------------------------------
+M=8: guards passed for all routed conditions; bit-exactness verified
+
+M=8 — microseconds per iteration (mean / min / p50 / std over
+3000 samples), GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 723.85 | 612 | 718 | 39.60 | 69.76 |
+| narrow_up_routed          | 723.16 | 631 | 717 | 38.13 | 69.83 |
+| wide_global_routed        | 1196.31 | 1110 | 1192 | 39.12 | 84.35 |
+| narrow_gate_fallback      | 892.69 | 800 | 885 | 36.66 | 56.57 |
+| narrow_up_fallback        | 895.23 | 799 | 886 | 43.64 | 56.40 |
+| wide_global_fallback      | 1579.02 | 1481 | 1575 | 33.20 | 63.91 |
+
+M=8 — sustained throughput: 128 back-to-back
+submissions, one eval per batch; per-iteration microseconds
+(batch total / N), mean / min / p50 / std over 3
+batches, GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 496.94 | 496.73 | 496.76 | 0.34 | 101.61 |
+| narrow_up_routed          | 496.11 | 494.91 | 496.51 | 1.05 | 101.78 |
+| wide_global_routed        | 990.91 | 987.98 | 989.80 | 3.63 | 101.83 |
+| narrow_gate_fallback      | 698.66 | 692.30 | 697.87 | 6.79 | 72.27 |
+| narrow_up_fallback        | 697.82 | 689.03 | 700.09 | 7.90 | 72.36 |
+| wide_global_fallback      | 1426.16 | 1386.63 | 1406.57 | 52.15 | 70.76 |
+------------------------------------------------------------------------
+M=9: guards passed for all routed conditions; bit-exactness verified
+
+M=9 — microseconds per iteration (mean / min / p50 / std over
+3000 samples), GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 789.92 | 677 | 779 | 37.79 | 63.98 |
+| narrow_up_routed          | 789.76 | 684 | 779 | 37.63 | 63.99 |
+| wide_global_routed        | 1340.19 | 1251 | 1337 | 28.84 | 75.35 |
+| narrow_gate_fallback      | 1062.88 | 966 | 1056 | 33.52 | 47.55 |
+| narrow_up_fallback        | 1062.98 | 954 | 1056 | 32.45 | 47.55 |
+| wide_global_fallback      | 1932.62 | 1832 | 1928 | 32.79 | 52.26 |
+
+M=9 — sustained throughput: 128 back-to-back
+submissions, one eval per batch; per-iteration microseconds
+(batch total / N), mean / min / p50 / std over 3
+batches, GB/s at mean:
+| condition                 |   mean |   min |  p50 |  std |  GB/s |
+|---------------------------|--------|-------|------|------|-------|
+| narrow_gate_routed        | 572.74 | 571.05 | 571.14 | 2.85 | 88.24 |
+| narrow_up_routed          | 570.57 | 569.84 | 570.52 | 0.76 | 88.58 |
+| wide_global_routed        | 1140.76 | 1137.84 | 1138.18 | 4.78 | 88.53 |
+| narrow_gate_fallback      | 856.02 | 855.37 | 856.12 | 0.61 | 59.04 |
+| narrow_up_fallback        | 856.15 | 853.62 | 854.13 | 3.95 | 59.03 |
+| wide_global_fallback      | 1740.57 | 1717.38 | 1733.80 | 27.20 | 58.02 |
+
+[
+  {
+    "mean_us" : 352.67000000000002,
+    "condition" : "narrow_gate_routed",
+    "mode" : "serialized",
+    "min_us" : 283,
+    "p50_us" : 345,
+    "std_us" : 29.751809301602275,
+    "gbs" : 142.28626194459409,
+    "samples" : 3000,
+    "m" : 1
+  },
+  {
+    "mean_us" : 351.15833333333336,
+    "condition" : "narrow_up_routed",
+    "min_us" : 296,
+    "std_us" : 27.584915680130649,
+    "p50_us" : 344,
+    "mode" : "serialized",
+    "m" : 1,
+    "gbs" : 142.89877595576544,
+    "samples" : 3000
+  },
+  {
+    "gbs" : 186.54730607715089,
+    "mode" : "serialized",
+    "condition" : "wide_global_routed",
+    "std_us" : 40.937062979348191,
+    "p50_us" : 528,
+    "samples" : 3000,
+    "mean_us" : 537.93299999999999,
+    "m" : 1,
+    "min_us" : 465
+  },
+  {
+    "samples" : 3000,
+    "m" : 1,
+    "mode" : "serialized",
+    "mean_us" : 351.86433333333332,
+    "min_us" : 284,
+    "std_us" : 32.935849535378537,
+    "condition" : "narrow_gate_fallback",
+    "p50_us" : 344,
+    "gbs" : 142.61205597233024
+  },
+  {
+    "min_us" : 277,
+    "p50_us" : 344,
+    "mean_us" : 352.55433333333332,
+    "condition" : "narrow_up_fallback",
+    "m" : 1,
+    "samples" : 3000,
+    "mode" : "serialized",
+    "gbs" : 142.33294348010662,
+    "std_us" : 38.073721260720895
+  },
+  {
+    "p50_us" : 529,
+    "condition" : "wide_global_fallback",
+    "gbs" : 186.23364678503225,
+    "min_us" : 453,
+    "std_us" : 46.00055538829956,
+    "m" : 1,
+    "mean_us" : 538.83900000000006,
+    "mode" : "serialized",
+    "samples" : 3000
+  },
+  {
+    "batch" : 128,
+    "samples" : 3,
+    "min_us" : 146.984375,
+    "condition" : "narrow_gate_routed",
+    "mean_us" : 162.01302083333334,
+    "p50_us" : 163.7578125,
+    "std_us" : 14.236665253230901,
+    "m" : 1,
+    "mode" : "sustained",
+    "gbs" : 309.72878440197383
+  },
+  {
+    "batch" : 128,
+    "mean_us" : 141.40625,
+    "condition" : "narrow_up_routed",
+    "std_us" : 2.7799000410592556,
+    "min_us" : 138.5234375,
+    "gbs" : 354.86476729281765,
+    "mode" : "sustained",
+    "samples" : 3,
+    "m" : 1,
+    "p50_us" : 141.625
+  },
+  {
+    "condition" : "wide_global_routed",
+    "mode" : "sustained",
+    "gbs" : 311.83243698512626,
+    "std_us" : 23.899746783629624,
+    "mean_us" : 321.80729166666669,
+    "min_us" : 305.4453125,
+    "p50_us" : 310.7421875,
+    "m" : 1,
+    "samples" : 3,
+    "batch" : 128
+  },
+  {
+    "p50_us" : 170.859375,
+    "min_us" : 143.671875,
+    "batch" : 128,
+    "condition" : "narrow_gate_fallback",
+    "std_us" : 16.205829390993848,
+    "m" : 1,
+    "mean_us" : 162.359375,
+    "gbs" : 309.06805350784333,
+    "samples" : 3,
+    "mode" : "sustained"
+  },
+  {
+    "condition" : "narrow_up_fallback",
+    "std_us" : 9.6267754044383942,
+    "gbs" : 330.74419608650874,
+    "mean_us" : 151.71875,
+    "p50_us" : 154,
+    "mode" : "sustained",
+    "min_us" : 141.15625,
+    "samples" : 3,
+    "batch" : 128,
+    "m" : 1
+  },
+  {
+    "min_us" : 291.2578125,
+    "gbs" : 330.46654175599883,
+    "batch" : 128,
+    "m" : 1,
+    "mean_us" : 303.66145833333331,
+    "mode" : "sustained",
+    "p50_us" : 299.46875,
+    "std_us" : 14.947712279017885,
+    "samples" : 3,
+    "condition" : "wide_global_fallback"
+  },
+  {
+    "min_us" : 290,
+    "samples" : 3000,
+    "gbs" : 137.99660401619963,
+    "condition" : "narrow_gate_routed",
+    "mode" : "serialized",
+    "m" : 2,
+    "p50_us" : 356,
+    "std_us" : 38.06431369250177,
+    "mean_us" : 363.95933333333335
+  },
+  {
+    "m" : 2,
+    "mode" : "serialized",
+    "p50_us" : 357,
+    "min_us" : 294,
+    "condition" : "narrow_up_routed",
+    "std_us" : 34.415119701136916,
+    "mean_us" : 364.54833333333335,
+    "gbs" : 137.77364318403139,
+    "samples" : 3000
+  },
+  {
+    "p50_us" : 542,
+    "samples" : 3000,
+    "std_us" : 36.184910412774613,
+    "mean_us" : 548.67899999999997,
+    "condition" : "wide_global_routed",
+    "mode" : "serialized",
+    "m" : 2,
+    "min_us" : 479,
+    "gbs" : 183.03930713586632
+  },
+  {
+    "std_us" : 33.492219596199497,
+    "m" : 2,
+    "mean_us" : 396.17166666666668,
+    "samples" : 3000,
+    "mode" : "serialized",
+    "condition" : "narrow_gate_fallback",
+    "min_us" : 318,
+    "p50_us" : 390,
+    "gbs" : 126.77623420823464
+  },
+  {
+    "mean_us" : 394.96066666666667,
+    "p50_us" : 388,
+    "mode" : "serialized",
+    "m" : 2,
+    "min_us" : 317,
+    "gbs" : 127.16494638284655,
+    "samples" : 3000,
+    "std_us" : 35.245025987239273,
+    "condition" : "narrow_up_fallback"
+  },
+  {
+    "p50_us" : 607,
+    "condition" : "wide_global_fallback",
+    "mean_us" : 618.75300000000004,
+    "mode" : "serialized",
+    "gbs" : 162.31003970889839,
+    "min_us" : 521,
+    "m" : 2,
+    "std_us" : 48.061744677381569,
+    "samples" : 3000
+  },
+  {
+    "gbs" : 302.95563010320296,
+    "min_us" : 161.640625,
+    "samples" : 3,
+    "batch" : 128,
+    "std_us" : 6.4528711991050605,
+    "condition" : "narrow_gate_routed",
+    "mode" : "sustained",
+    "mean_us" : 165.78385416666666,
+    "p50_us" : 162.4921875,
+    "m" : 2
+  },
+  {
+    "p50_us" : 166.25,
+    "std_us" : 6.4911125263260603,
+    "samples" : 3,
+    "batch" : 128,
+    "mode" : "sustained",
+    "condition" : "narrow_up_routed",
+    "min_us" : 160.09375,
+    "gbs" : 301.70447192804073,
+    "mean_us" : 166.47135416666666,
+    "m" : 2
+  },
+  {
+    "mode" : "sustained",
+    "mean_us" : 342.20833333333331,
+    "std_us" : 5.021634915050285,
+    "gbs" : 293.47568196761239,
+    "samples" : 3,
+    "m" : 2,
+    "p50_us" : 344.9140625,
+    "min_us" : 336.4140625,
+    "batch" : 128,
+    "condition" : "wide_global_routed"
+  },
+  {
+    "mean_us" : 197.08072916666666,
+    "mode" : "sustained",
+    "condition" : "narrow_gate_fallback",
+    "m" : 2,
+    "p50_us" : 196.3046875,
+    "batch" : 128,
+    "min_us" : 196.125,
+    "gbs" : 254.84557628932731,
+    "std_us" : 1.5024461933134521,
+    "samples" : 3
+  },
+  {
+    "min_us" : 195.09375,
+    "gbs" : 254.78834242232085,
+    "p50_us" : 197.21875,
+    "batch" : 128,
+    "samples" : 3,
+    "m" : 2,
+    "mode" : "sustained",
+    "mean_us" : 197.125,
+    "std_us" : 1.986035230679456,
+    "condition" : "narrow_up_fallback"
+  },
+  {
+    "mode" : "sustained",
+    "samples" : 3,
+    "mean_us" : 404.18229166666669,
+    "gbs" : 248.47655642178782,
+    "m" : 2,
+    "min_us" : 402.421875,
+    "p50_us" : 403.71875,
+    "std_us" : 2.0322313334628843,
+    "batch" : 128,
+    "condition" : "wide_global_fallback"
+  },
+  {
+    "samples" : 3000,
+    "mean_us" : 446.02366666666666,
+    "min_us" : 363,
+    "gbs" : 112.80850717189148,
+    "std_us" : 29.313936540731948,
+    "m" : 4,
+    "condition" : "narrow_gate_routed",
+    "p50_us" : 446,
+    "mode" : "serialized"
+  },
+  {
+    "mode" : "serialized",
+    "mean_us" : 445.51733333333334,
+    "std_us" : 29.313685033882141,
+    "gbs" : 112.9367147705439,
+    "min_us" : 363,
+    "p50_us" : 445,
+    "condition" : "narrow_up_routed",
+    "samples" : 3000,
+    "m" : 4
+  },
+  {
+    "mean_us" : 712.02233333333334,
+    "p50_us" : 704,
+    "mode" : "serialized",
+    "m" : 4,
+    "std_us" : 42.339706164878734,
+    "min_us" : 616,
+    "condition" : "wide_global_routed",
+    "gbs" : 141.27305182843048,
+    "samples" : 3000
+  },
+  {
+    "condition" : "narrow_gate_fallback",
+    "p50_us" : 531,
+    "samples" : 3000,
+    "mode" : "serialized",
+    "min_us" : 455,
+    "std_us" : 34.037753981732266,
+    "gbs" : 93.753927433244641,
+    "m" : 4,
+    "mean_us" : 536.67366666666669
+  },
+  {
+    "std_us" : 33.02263917054713,
+    "mode" : "serialized",
+    "min_us" : 446,
+    "condition" : "narrow_up_fallback",
+    "p50_us" : 531,
+    "mean_us" : 535.73266666666666,
+    "samples" : 3000,
+    "m" : 4,
+    "gbs" : 93.918603681687017
+  },
+  {
+    "mode" : "serialized",
+    "p50_us" : 887,
+    "mean_us" : 894.04966666666667,
+    "condition" : "wide_global_fallback",
+    "min_us" : 823,
+    "m" : 4,
+    "std_us" : 41.513166355778253,
+    "gbs" : 112.51004474397209,
+    "samples" : 3000
+  },
+  {
+    "batch" : 128,
+    "min_us" : 252.296875,
+    "gbs" : 199.24576807499147,
+    "samples" : 3,
+    "p50_us" : 252.453125,
+    "mean_us" : 252.52864583333334,
+    "m" : 4,
+    "std_us" : 0.2773529194493603,
+    "mode" : "sustained",
+    "condition" : "narrow_gate_routed"
+  },
+  {
+    "mean_us" : 250.125,
+    "condition" : "narrow_up_routed",
+    "mode" : "sustained",
+    "m" : 4,
+    "min_us" : 249.5703125,
+    "gbs" : 201.16047576211892,
+    "samples" : 3,
+    "p50_us" : 250.109375,
+    "std_us" : 0.56266273687596369,
+    "batch" : 128
+  },
+  {
+    "min_us" : 497.46875,
+    "gbs" : 201.56967724967123,
+    "p50_us" : 497.8515625,
+    "mode" : "sustained",
+    "mean_us" : 499.03125,
+    "m" : 4,
+    "condition" : "wide_global_routed",
+    "std_us" : 2.3825051031228139,
+    "samples" : 3,
+    "batch" : 128
+  },
+  {
+    "condition" : "narrow_gate_fallback",
+    "mode" : "sustained",
+    "mean_us" : 359.76302083333331,
+    "min_us" : 356.9453125,
+    "std_us" : 2.5007363824335989,
+    "m" : 4,
+    "gbs" : 139.85668644724177,
+    "batch" : 128,
+    "p50_us" : 360.625,
+    "samples" : 3
+  },
+  {
+    "gbs" : 138.509182367574,
+    "condition" : "narrow_up_fallback",
+    "p50_us" : 362.8828125,
+    "m" : 4,
+    "mode" : "sustained",
+    "mean_us" : 363.26302083333331,
+    "std_us" : 0.67893876384552043,
+    "samples" : 3,
+    "batch" : 128,
+    "min_us" : 362.859375
+  },
+  {
+    "condition" : "wide_global_fallback",
+    "m" : 4,
+    "min_us" : 714.734375,
+    "std_us" : 26.987635289074397,
+    "gbs" : 134.86539823398172,
+    "samples" : 3,
+    "mode" : "sustained",
+    "mean_us" : 745.8515625,
+    "p50_us" : 759.953125,
+    "batch" : 128
+  },
+  {
+    "m" : 8,
+    "p50_us" : 718,
+    "mode" : "serialized",
+    "mean_us" : 723.84833333333336,
+    "gbs" : 69.759762749563095,
+    "condition" : "narrow_gate_routed",
+    "samples" : 3000,
+    "std_us" : 39.604042183527774,
+    "min_us" : 612
+  },
+  {
+    "gbs" : 69.826098580214079,
+    "std_us" : 38.133916462257957,
+    "mode" : "serialized",
+    "condition" : "narrow_up_routed",
+    "m" : 8,
+    "mean_us" : 723.16066666666666,
+    "samples" : 3000,
+    "p50_us" : 717,
+    "min_us" : 631
+  },
+  {
+    "condition" : "wide_global_routed",
+    "p50_us" : 1192,
+    "m" : 8,
+    "std_us" : 39.11793118481674,
+    "gbs" : 84.350398058025178,
+    "mode" : "serialized",
+    "min_us" : 1110,
+    "mean_us" : 1196.308,
+    "samples" : 3000
+  },
+  {
+    "m" : 8,
+    "mean_us" : 892.69299999999998,
+    "condition" : "narrow_gate_fallback",
+    "mode" : "serialized",
+    "std_us" : 36.66038841892351,
+    "min_us" : 800,
+    "p50_us" : 885,
+    "samples" : 3000,
+    "gbs" : 56.565345533122809
+  },
+  {
+    "p50_us" : 886,
+    "gbs" : 56.404939503554949,
+    "m" : 8,
+    "samples" : 3000,
+    "mode" : "serialized",
+    "min_us" : 799,
+    "condition" : "narrow_up_fallback",
+    "std_us" : 43.636544851432546,
+    "mean_us" : 895.23166666666668
+  },
+  {
+    "p50_us" : 1575,
+    "gbs" : 63.906156099418666,
+    "mean_us" : 1579.0193333333334,
+    "mode" : "serialized",
+    "min_us" : 1481,
+    "m" : 8,
+    "samples" : 3000,
+    "std_us" : 33.200748828851509,
+    "condition" : "wide_global_fallback"
+  },
+  {
+    "mode" : "sustained",
+    "condition" : "narrow_gate_routed",
+    "std_us" : 0.34074801868768562,
+    "batch" : 128,
+    "samples" : 3,
+    "mean_us" : 496.94270833333331,
+    "min_us" : 496.734375,
+    "m" : 8,
+    "gbs" : 101.61229283221365,
+    "p50_us" : 496.7578125
+  },
+  {
+    "m" : 8,
+    "mean_us" : 496.10677083333331,
+    "min_us" : 494.9140625,
+    "std_us" : 1.0512192202192334,
+    "mode" : "sustained",
+    "gbs" : 101.78350905225584,
+    "batch" : 128,
+    "condition" : "narrow_up_routed",
+    "p50_us" : 496.5078125,
+    "samples" : 3
+  },
+  {
+    "mode" : "sustained",
+    "mean_us" : 990.9140625,
+    "min_us" : 987.9765625,
+    "p50_us" : 989.796875,
+    "std_us" : 3.6274994750387282,
+    "gbs" : 101.83431623264505,
+    "samples" : 3,
+    "batch" : 128,
+    "condition" : "wide_global_routed",
+    "m" : 8
+  },
+  {
+    "min_us" : 692.3046875,
+    "samples" : 3,
+    "mode" : "sustained",
+    "mean_us" : 698.6640625,
+    "batch" : 128,
+    "condition" : "narrow_gate_fallback",
+    "std_us" : 6.7929586418124908,
+    "p50_us" : 697.8671875,
+    "gbs" : 72.274345726777668,
+    "m" : 8
+  },
+  {
+    "mode" : "sustained",
+    "m" : 8,
+    "mean_us" : 697.81510416666663,
+    "min_us" : 689.03125,
+    "p50_us" : 700.09375,
+    "std_us" : 7.8951268613969772,
+    "gbs" : 72.362274330966073,
+    "samples" : 3,
+    "condition" : "narrow_up_fallback",
+    "batch" : 128
+  },
+  {
+    "m" : 8,
+    "gbs" : 70.755960996559821,
+    "std_us" : 52.151842117325721,
+    "batch" : 128,
+    "p50_us" : 1406.5703125,
+    "condition" : "wide_global_fallback",
+    "mean_us" : 1426.15625,
+    "min_us" : 1386.6328125,
+    "samples" : 3,
+    "mode" : "sustained"
+  },
+  {
+    "condition" : "narrow_gate_routed",
+    "mode" : "serialized",
+    "mean_us" : 789.91733333333332,
+    "gbs" : 63.982067321812586,
+    "samples" : 3000,
+    "min_us" : 677,
+    "m" : 9,
+    "std_us" : 37.790985067954487,
+    "p50_us" : 779
+  },
+  {
+    "m" : 9,
+    "std_us" : 37.631076408165825,
+    "gbs" : 63.994732583655058,
+    "mean_us" : 789.76099999999997,
+    "p50_us" : 779,
+    "mode" : "serialized",
+    "samples" : 3000,
+    "condition" : "narrow_up_routed",
+    "min_us" : 684
+  },
+  {
+    "gbs" : 75.353905961445903,
+    "p50_us" : 1337,
+    "min_us" : 1251,
+    "std_us" : 28.836542043947503,
+    "mode" : "serialized",
+    "mean_us" : 1340.1949999999999,
+    "condition" : "wide_global_routed",
+    "m" : 9,
+    "samples" : 3000
+  },
+  {
+    "min_us" : 966,
+    "p50_us" : 1056,
+    "std_us" : 33.517286326856201,
+    "condition" : "narrow_gate_fallback",
+    "mode" : "serialized",
+    "m" : 9,
+    "gbs" : 47.550549591503092,
+    "mean_us" : 1062.8803333333333,
+    "samples" : 3000
+  },
+  {
+    "m" : 9,
+    "mean_us" : 1062.981,
+    "gbs" : 47.546046448619499,
+    "condition" : "narrow_up_fallback",
+    "min_us" : 954,
+    "mode" : "serialized",
+    "p50_us" : 1056,
+    "samples" : 3000,
+    "std_us" : 32.44642089778705
+  },
+  {
+    "min_us" : 1832,
+    "samples" : 3000,
+    "mode" : "serialized",
+    "mean_us" : 1932.6163333333334,
+    "m" : 9,
+    "p50_us" : 1928,
+    "condition" : "wide_global_fallback",
+    "std_us" : 32.787225163675139,
+    "gbs" : 52.255031823008842
+  },
+  {
+    "min_us" : 571.0546875,
+    "p50_us" : 571.140625,
+    "batch" : 128,
+    "condition" : "narrow_gate_routed",
+    "mean_us" : 572.74479166666663,
+    "std_us" : 2.8532457931257138,
+    "samples" : 3,
+    "mode" : "sustained",
+    "m" : 9,
+    "gbs" : 88.242695063064374
+  },
+  {
+    "mean_us" : 570.5703125,
+    "min_us" : 569.8359375,
+    "std_us" : 0.76318968552631139,
+    "gbs" : 88.578993496090803,
+    "samples" : 3,
+    "m" : 9,
+    "batch" : 128,
+    "mode" : "sustained",
+    "p50_us" : 570.515625,
+    "condition" : "narrow_up_routed"
+  },
+  {
+    "m" : 9,
+    "samples" : 3,
+    "mean_us" : 1140.7630208333333,
+    "mode" : "sustained",
+    "batch" : 128,
+    "gbs" : 88.527526011692657,
+    "condition" : "wide_global_routed",
+    "min_us" : 1137.8359375,
+    "p50_us" : 1138.1796875,
+    "std_us" : 4.7752549561079283
+  },
+  {
+    "mean_us" : 856.02083333333337,
+    "std_us" : 0.61119186946660486,
+    "p50_us" : 856.1171875,
+    "batch" : 128,
+    "gbs" : 59.041254642361693,
+    "min_us" : 855.3671875,
+    "samples" : 3,
+    "condition" : "narrow_gate_fallback",
+    "m" : 9,
+    "mode" : "sustained"
+  },
+  {
+    "gbs" : 59.032095752867569,
+    "samples" : 3,
+    "batch" : 128,
+    "mode" : "sustained",
+    "p50_us" : 854.1328125,
+    "condition" : "narrow_up_fallback",
+    "min_us" : 853.625,
+    "std_us" : 3.9481373962590998,
+    "m" : 9,
+    "mean_us" : 856.15364583333337
+  },
+  {
+    "condition" : "wide_global_fallback",
+    "batch" : 128,
+    "std_us" : 27.204370588824776,
+    "mode" : "sustained",
+    "m" : 9,
+    "mean_us" : 1740.5677083333333,
+    "p50_us" : 1733.8046875,
+    "gbs" : 58.020683433625884,
+    "samples" : 3,
+    "min_us" : 1717.3828125
+  }
+]
+
+qmvbench: done

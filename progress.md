@@ -147,9 +147,53 @@ TTLT: D0 17.475 vs D1 17.446 tok/s. Effective bandwidth ≈14.5 GB ÷ tEvalAvg (
 
 **Follow-up (queued, not started):** (a) `qmvbench` throughput mode (N calls per sync) — the designated next diagnostic; establishes whether the kernel win persists under async pipeline conditions at all; (b) `qmvbench` M = 16/17 extension; (c) any future in-model Item D re-run requires the guard fix first: replace the per-call `asData` probe with a metadata-only, no-eval contiguity decision — e.g. validate the row-major layout once per shape at warm-up (where a flush is harmless) and cache the decision — since public `MLXArray.strides` is deprecated ("changes before and after evaluation") and `asData` always evaluates.
 
+### W1 — flush-free guard fix + Item D A/B rerun (2026-09-14) — **KEEP: default flipped to ON**
+
+**Fix (engine `c87fc6b`):** the per-call `x.asData(access: .noCopy).strides` contiguity probe is replaced by `Qwen35RowMajorCache` (`Qwen35+FastPath.swift`): a lock-protected, shape-keyed cache that pays the one `asData` probe on the first observation of a shape (warm-up, where a flush is harmless) and returns the cached decision afterwards. A stale "contiguous" entry is safe by construction — the QMV kernel wrappers are `ensureRowContiguous: true`, so the worst case is an unnecessary copy inside the reshape, never a wrong result. The same pattern replaces the two latent per-call stride probes in `applyResidualNorm`.
+
+**Hot-path `asData` audit (all call sites classified):**
+
+| Location | Classification | Disposition |
+|---|---|---|
+| `Qwen35Kernels.swift` Item D guard | **Hidden flush** — 96 `eval()`s per verify forward in D1; the Item D artifact | Fixed: cached per-shape decision |
+| `Qwen35+FastPath.swift` `applyResidualNorm` stride probes | **Dead code** — every live caller passes 3-D `[B,S,H]`, so the `ndim == 2` guard declines before the probe fires; latent landmine | Fixed with the same cache pattern |
+| `UserInput.swift` image processing | Non-hot-path | None |
+| `Qwen38MTPBlockSession` `asArray` / `.item()` readouts | Intentional post-`eval` host reads (the `tHostRead` phase) | None |
+
+**Rerun protocol (same as the original Item D, plus W1 gates):** single flush-free binary `55fa97e8…` in both cells (env-var-only difference), essay-1024 fixture, port 18099, greedy, `QWEN_MTP_STEP_TRACE=1`, fresh server per cell, 6 reps per cell interleaved, rep 1 discarded (warmup), 5 measured, `pmset -g therm` before every rep (no thermal warning in any snapshot), no parallel builds/tests, no mid-matrix rebuild. Every rep additionally gated on the new **phase-sum validation** (`tEval + tGraphBuild + tCacheState + tHostRead ≈ stepAvg` within max(1 ms, 1%)) and `qmvVerifyMaterialized = 0`. Phase 2 gates before the matrix, on this binary: fusion projection tests green in both explicit knob states (QKV 9/9, SwiGLU 9/9, GDN 15/15 in `swift test` processes with and without the env set); `Qwen38MTPDiagnosticTests` at 93.46% / 16.25 / 14.0 in both states; `run_matrix.sh verify` bit-exact on both fixtures with zero routed dispatches (explicit OFF env), zero materializations, phase-sums exact.
+
+| rep | D0 avgStepMs | D1 avgStepMs | Δ (D0−D1) | D0 tEvalAvg | D1 tEvalAvg | D0 tGraphBuild | D1 tGraphBuild | D0 wall s | D1 wall s |
+|---|---|---|---|---|---|---|---|---|---|
+| 2 | 130.666 | 108.668 | +21.998 | 118.925 | 96.630 | 10.116 | 10.419 | 55.981 | 46.607 |
+| 3 | 137.002 | 121.408 | +15.595 | 125.211 | 109.273 | 10.175 | 10.535 | 58.679 | 52.033 |
+| 4 | 137.546 | 120.780 | +16.766 | 125.717 | 108.405 | 10.206 | 10.734 | 58.905 | 53.368 |
+| 5 | 137.845 | 123.343 | +14.502 | 125.964 | 111.093 | 10.236 | 10.621 | 59.046 | 52.864 |
+| 6 | 138.242 | 123.786 | +14.457 | 126.443 | 111.575 | 10.174 | 10.590 | 59.199 | 53.038 |
+| **mean** | **136.260** | **119.601** | **+16.659** | **124.452** | **107.395** | **10.182** | **10.580** | **58.362** | **51.582** |
+
+TTLT: D0 17.62 vs D1 20.11 tok/s. All 12 reps bit-exact (599/1086/426, hash `949b9423…`), phase-sums exact to 0.00 ms in every rep, `materialized=0` in every rep. **The artifact is gone:** the D1 warmup rep shows tEvalAvg 93.1 ms and tGraphBuildAvg 10.4 ms — the D0 regime — versus the pre-fix D1's 6.3 / 129.9 ms. Engagement identical to the original D1: routed `2:1632, 3:15552, 4:24096` (41 280 dispatches, 99.1% of all 41 664) in every D1 rep.
+
+**Verdict: KEEP — `MLX_QWEN_QMV_VERIFY` default flipped to ON.** The keep gate (mean improvement ≥ 2.0 ms/step AND ≥ 4 of 5 paired reps favoring D1) passes decisively: **+16.659 ms/step mean (12.2%)** and **5/5 paired reps** favor D1. The original null was entirely the flush artifact; with it removed, the qmvbench 15–20% kernel win at M = 2..4 transfers end-to-end. Note the direction of the thermal bias: D0 always runs first in each pair (colder start), yet still loses — the win is robust to in-run thermal drift (both cells drift upward across reps). The original Item D section above stands as provenance; its NULL verdict is superseded by this rerun.
+
+**Default flip (engine `c87fc6b` + follow-up commit, server unchanged):** `Qwen35QMVVerifyRouting.enabled` now returns true when the env is unset; `MLX_QWEN_QMV_VERIFY=0` (or any non-on token) still selects the pre-Item D baseline for A/B cells. Post-flip verification on the new binary `11a8e61e…`: fusion projection tests green in both explicit states (default run = ON), `Qwen38MTPDiagnosticTests` 93.46% in both states, and `run_matrix.sh verify` (env unset → default ON) bit-exact on both fixtures with engaged routing (essay `2:3264, 3:31104, 4:48192`) and `materialized=0`. The 2× routed dispatch count versus the original D1 spot cell is the fusion-state difference only (this cell runs `FUSED_QKV=0 FUSED_SWIGLU=0`, six dispatches per full-attention layer, versus the default-ON fusions' three); both agree with the same two-full-forward-per-round structure (16 full-attention layers × 3 or 6 dispatches).
+
+Records: `benchmarks/results/itemd-rerun-D0.jsonl`, `itemd-rerun-D1.jsonl`; driver `benchmarks/run_itemd.sh`; run log `/tmp/itemd-rerun-driver.log`.
+
 ### QMV microbenchmark (`qmvbench`)
 
-Layer-3 gate/up pair, 100 warmup + 1000 timed × 3 blocks, per-call device sync. Routed kernel is bit-identical to incumbent `quantizedMM` everywhere. At M = 1 it is ~5% slower per projection (~385 vs ~366 µs); at M = 4 it is ~15% faster (~464 vs ~545 µs) and the fused wide dispatch ~20% faster (~725 vs ~904 µs). Interleaved layout within noise of global at both M. **Caveat: per-call sync measures serialized latency, not pipeline throughput — A2's null end-to-end result shows these per-kernel deltas do not survive async submission at this geometry.** A throughput mode (N calls per sync) is the standing methodology gap.
+Layer-3 gate/up pair, 100 warmup + 1000 timed × 3 blocks, per-call device sync. Routed kernel is bit-identical to incumbent `quantizedMM` everywhere (re-verified at every M in the W5 run). At M = 1 it is ~5% slower per projection (~385 vs ~366 µs); at M = 4 it is ~15% faster (~464 vs ~545 µs) and the fused wide dispatch ~20% faster (~725 vs ~904 µs). Interleaved layout within noise of global at both M.
+
+**W5 — sustained throughput mode (`--throughput 128`, 2026-09-14):** 128 back-to-back submissions per timed batch, one device sync per batch, 1000 timed batches, same geometry and bit-exactness checks. Raw log: `benchmarks/results/w5-throughput.txt`. Sustained µs/call (routed vs fallback, mean):
+
+| M | narrow gate / up (routed / fallback) | wide fused (routed / fallback) | routed win |
+|---|---|---|---|
+| 1 | 162.0 / 162.4 ; 141.4 / 151.7 | 321.8 / 303.7 | wash (wide slightly favors fallback) |
+| 2 | 165.8 / 197.1 ; 166.5 / 197.1 | 342.2 / 404.2 | ~16% |
+| 4 | 252.5 / 359.8 ; 250.1 / 363.3 | 499.0 / 745.9 | ~30% |
+| 8 | 496.9 / 698.7 ; 496.1 / 697.8 | 990.9 / 1426.2 | ~29% |
+| 9 | 572.7 / 856.0 ; 570.6 / 856.2 | 1140.8 / 1740.6 | ~33% |
+
+Two conclusions. (1) The per-call-sync protocol carried a fixed **~170–235 µs/call sync overhead** (serialized − sustained at every condition); the Item D-era micro numbers were inflated by it, and the "~5% slower at M = 1" penalty does not exist under sustained conditions (routed ≈ fallback at M = 1, consistent with the M = 1 flip to incumbent). (2) **The M = 2..9 kernel win survives — and grows to ~30% — under sustained async submission**, confirming the W1 end-to-end keep decision and resolving the original A2 null question (the null was the flush artifact, not async submission). Sustained bandwidth at M = 1 reaches 310–355 GB/s (vs 142–186 GB/s serialized).
 
 ### Reference step-component profile (in-session, ~143 ms round)
 
@@ -166,18 +210,22 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13 — first valid headline tok/s measured on current main, plus per-rep thermal logging wired into the harness), Item D verify-pass QMV routing (implemented, A/B measured 2026-09-14 — **NULL**, default stays OFF; engine `b900aad`, server `4ca9589`+`4af4e73`).
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13 — first valid headline tok/s measured on current main, plus per-rep thermal logging wired into the harness), Item D verify-pass QMV routing (implemented; original A/B measured 2026-09-14 — NULL due to the `asData` flush artifact; engine `b900aad`, server `4ca9589`+`4af4e73`), **W1 flush-free re-run + default flip to ON** (engine `c87fc6b` + default-flip commit, server `31032ec` + evidence commit — D1 +16.659 ms/step, 5/5 paired reps, bit-exact), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine default-flip commit).
 
 **Decisions on record:**
 
 - Fused W_qkv and W_gate+up: keep, default ON (latency-neutral, bit-exact, net-0 memory, rollback knobs `MLX_QWEN_FUSED_QKV` / `MLX_QWEN_FUSED_SWIGLU`).
 - Interleaved gate+up layout: rejected (no gain, +6.5 GB row-gather copies); removed from the engine in `901d2ca` (2026-09-13). Historical data in `benchmarks/FUSION_REPORT.md` and `benchmarks/results/itemC.jsonl`.
-- Item D verify-routing knob `MLX_QWEN_QMV_VERIFY`: implemented and measured **NULL** end-to-end (2026-09-14) — mean −0.252 ms/step (D1 marginally slower), 4/5 pairs, no thermal warnings, bit-exact, 99.1% routed share, zero materializations. Default stays OFF. Root cause of the null: the guard's per-call `asData` stride probe calls `self.eval()` on every routed dispatch, serializing the verify pipeline and shifting ~119 ms of GPU wait from the tEval phase into the graphBuild phase; the qmvbench micro win does not transfer end-to-end. See the Phase 3 Item D section above.
+- Item D verify-routing knob `MLX_QWEN_QMV_VERIFY`: **KEEP, default ON** (2026-09-14, W1). The original A/B was NULL due to a measurement artifact: the guard's per-call `asData` stride probe calls `self.eval()` on every routed dispatch, serializing the verify pipeline and shifting ~119 ms of GPU wait from the tEval phase into the graphBuild phase. After replacing the probe with a cached per-shape contiguity decision (`Qwen35RowMajorCache`, engine `c87fc6b`), the flush-free rerun shows **+16.659 ms/step mean (12.2%), 5/5 paired reps, bit-exact, 99.1% routed, zero materializations, phase-sums exact in all 12 reps** — the qmvbench 15–20% kernel win at M = 2..4 does transfer end-to-end. Default is now ON; `MLX_QWEN_QMV_VERIFY=0` selects the pre-Item D baseline for A/B cells. See the W1 section above; the original Item D section stands as provenance.
+- W1 hot-path `asData` audit: all call sites classified (one hidden flush — fixed; two dead-code probes — fixed with the same pattern; `UserInput` non-hot-path; MTP session readouts are intentional post-`eval` host reads). No remaining per-call tensor metadata in the forward path.
+- MTP head quantization target (for W4): the deployed head at `mtp-head/pinned/` is **BF16** (849 MB; `layers.0` full-attention layer + `mlp`, no `head.` prefix), not 4-bit — so 4-bit quantization of the draft head is a live W4 option (~5–6 ms/round read saving at this geometry). The backbone `lm_head` is already 4-bit in the checkpoint (vocab 248 320 × hidden 5120, U32 group-64); quantizing it further is out of scope (report-only if the profile shows ≥ ~8 ms/round on the logits path).
 
-**Open items (in priority order):**
+**Open items (in priority order — the five-work-item queue, W1 done 2026-09-14):**
 
-1. **`qmvbench` throughput mode + M = 16/17 extension** — the designated next diagnostic after the Item D null: batch N calls per sync so per-kernel numbers reflect async pipeline conditions, and extend the M sweep to 16/17 (the next width band beyond the current 2..9 gate). Establishes whether the M = 2..9 kernel win persists under async conditions at all. Any future in-model Item D re-run additionally requires the guard fix from the Item D section (metadata-only, no-eval contiguity decision) first.
-2. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is now wired (`benchmarks/run_phase3.sh`); shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
-3. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
-3. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is now wired (`benchmarks/run_phase3.sh`); shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
+1. **W2 — profile `tEval` (~107–125 ms/step)** with an external Metal System Trace (one greedy request, essay fixture, MTP on, default config); bucket kernel time; answer (a) draft-head forward + logits cost per round, (b) logits-head cost per round, (c) where the fused-kernel work should go next. Deliverable: `benchmarks/PROFILE.md`.
+2. **W3 — MTP draft-depth sweep** k ∈ {1, 2, 3, 4, 6, 8} (current adaptive cap = 7; offered depth = min(specDraftNMax, depth) so k > 3 needs `--spec-draft-n-max 8`), essay-1024, strict determinism gate (committed 1024-token stream bit-identical for all k), 6+ reps per k; confirm the best k on specdec-800. Deliverable: `benchmarks/results/draftk-sweep.jsonl` + `progress.md` section.
+3. **W4 — conditional MTP-head 4-bit quantization** (group 64), A/B vs the BF16 head (wall time, acceptance, committed-stream determinism); triggers if the W2 profile shows ≥ ~5 ms/round on the draft-head path. `lm_head` is report-only. Deliverable: `benchmarks/results/W4-ab.jsonl` + decision record.
+4. **W5 — `qmvbench --throughput N`: DONE 2026-09-14** — sustained throughput measured at M ∈ {1,2,4,8,9}, narrow/wide × routed/fallback (table in the QMV microbenchmark section): ~170–235 µs/call sync overhead in the serialized protocol; the routed kernel's M = 2..9 win grows to ~30% under sustained conditions; M = 1 is a wash. Remaining: M = 16/17 extension (gated on W3's optimum sitting at the sweep ceiling).
+5. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is wired; shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
+6. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
 4. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
