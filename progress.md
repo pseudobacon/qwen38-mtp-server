@@ -531,6 +531,171 @@ position) to cross the gap. No fix is implemented; candidate mitigations (fp32 l
 for committed rows, knife-edge M=1 tie re-check, or a per-config golden registry as the
 acceptance criterion) require explicit approval before any of them is built.
 
+### Phase 2 + 3 — headline re-measure (q4 default) and k=2 evaluation (2026-09-14)
+
+**Protocol.** One ~1 h session (driver `benchmarks/run_postw4.sh`): six cells × 6 reps
+interleaved in fixed order — `h-essay` (default config), `k2-essay`
+(`QWEN_MTP_DRAFT_K=2`), `s-essay` (`--spec-draft-n-max 0`, serial), then the specdec-800
+analogs `h-specdec` / `k2-specdec` / `s-specdec`. Single release binary `db39b916…`
+across all cells; engine `91ab1c8` (throwaway discriminator test only — no engine code
+change in this session); the new `EXPECT_HEAD=q4` gate active on every cell (fail-loud q4
+default); `QWEN_MTP_STEP_TRACE=1`; max_tokens 1024, greedy, non-streaming; fresh server
+per cell; rep 1 discarded per cell (warmup), 5 measured; `pmset -g therm` before every
+rep; no parallel builds/tests; per-rep phase-sum gate and `head_gate` gate. All 36 cells:
+deterministic (identical stream hash across measured reps), gate PASS, phaseSumOK,
+`finish_reason=length`, `committed=1024`, `head_selected` q4. Records:
+`benchmarks/results/postw4.jsonl`; session log `/tmp/postw4-session.log`.
+
+| cell | med tok/s (reps 2–6) | range | stream hash | depthDist |
+|---|---|---|---|---|
+| h-essay (default) | **19.63** | 15.94–19.82 | `949b9423…` | 1:16, 2:176, 3:239 |
+| k2-essay | **21.28** | 17.24–21.69 | `949b9423…` | 2:461 |
+| s-essay (serial) | **16.26** | 13.06–16.55 | `949b9423…` | 0:1024 |
+| h-specdec (default) | **21.11** | 17.06–22.34 | `139acb9d…` | 1:1, 2:133, 3:250 |
+| k2-specdec | **22.75** | 17.84–23.24 | `139acb9d…` | 2:431 |
+| s-specdec (serial) | **16.22** | 13.12–16.40 | `c70882fc…` | 0:1024 |
+
+In-session deltas: k2 beats default on both fixtures (+9.9% essay, +7.8% specdec); default
+beats serial +20.4% (essay) / +30.4% (specdec); k2 vs serial +31.0% / +40.2%. Matches the
+W3 pattern (k = 2 beats the adaptive default; acceptance is the limiter).
+
+**Hash-registry additions (1024 tokens, q4, this session):**
+
+| config | essay-1024 | specdec-800 |
+|---|---|---|
+| serial | `949b9423…` | `c70882fc…` |
+| k = 2 | `949b9423…` | `139acb9d…` |
+| default (cost model) | `949b9423…` | `139acb9d…` |
+
+On both fixtures the default committed stream equals the k = 2 stream exactly (the
+adaptive path offers k = 2-equivalent verifies on these fixtures and no knife-edge flip
+lands between them); the essay serial stream is `949b9423…` as well, so the essay stream
+is config-invariant (serial = k2 = default), while the specdec stream differs only in the
+knife-edge flip family (serial `c70882fc…` vs MTP `139acb9d…`; first flip at token 989 per
+Phase 1).
+
+**Serial probe (Phase 5 input):** in-pipeline serial floor 16.2–16.3 tok/s, tEval
+59–62 ms/step (backbone + lm_head at M = 1, head fully out of the loop). Per-rep tEval
+deltas: default − serial = 54.4 ms median (essay) / 61.2 ms (specdec); k2 − serial =
+38–40 ms per rep on both fixtures (joint: 2 head steps + width-3 batched-forward effect).
+Thermal drift: later reps within a cell slow (e.g. s-essay tEval 59.2 → 74.8 ms by rep 6);
+medians absorb most of it; per the in-session-deltas rule only same-session comparisons are
+conclusions.
+
+### Phase 4 — Bug B: SDPA exactness chunk (2026-09-14) — **fix implemented; unit + model regression tests green; deep-k gate session in flight**
+
+**Root cause (code inspection, confirmed by the W3 evidence).** This fork's
+`attentionWithCacheUpdate` (`AttentionUtils.swift`) lacked the SDPA exactness chunk that
+upstream MLXLLM carries. The Metal SDPA dispatch
+(`mlx/backend/metal/scaled_dot_product_attention.cpp`) routes qL ≤ 8 to the fused vector
+kernel only when `qL·gqa ≤ 32`; this model has gqa = 6, head_dim = 256 (not in the fused
+full-path set {64, 80, 128}), so verify widths M = 6..9 (draft depths 5..8) fall to the
+reference matmul → fp32-softmax → matmul fallback. That fallback's bf16 reduction order
+drifts enough at logit magnitudes ~21 / top-2 gaps ~0.25 to flip many positions — the W3
+gross corruption (first divergence at the first drafted token of the first verify round;
+`da7bb159…`), not the knife-edge family. Widths M ≤ 5 stay on the vector kernel and show
+only the Phase 1 knife-edge behavior (W3 k4 first divergence at token 1020 — knife-edge,
+consistent). The GDN layers are T-independent per row (the scan resets per row), so the
+corruption is isolated to the 16 full-attention layers.
+
+**Fix (engine, feature branch).** `attentionWithCacheUpdate` gains the upstream-style
+exactness chunk: when the verify block's last dimension L ∈ 6..9, `L·gqa > 32`, head_dim =
+256, `5·gqa ≤ 32`, `cache.offset > 0`, and the mask is the symbolic `.causal`, the block
+is split into a leading 5-row chunk and a trailing L−5 chunk, each with an incremental
+`KVCacheSimple` scatter update (O(L)) followed by one `MLXFast.scaledDotProductAttention`
+call on its causal window; outputs are concatenated along the sequence axis. Both chunks
+stay on the fused vector kernel (chunk qL ≤ 5 → qL·gqa ≤ 30 ≤ 32). Causal alignment is
+bottom-right per call: chunk-1 row j sees keys 0..offset+j, chunk-2 row j sees keys
+0..offset+5+j — identical windows to the full-block causal mask. The gate is
+geometry-specific: L ≤ 5 (the current default path, depths ≤ 4), prefill (offset = 0),
+L > 9 (already fallback — unchanged), other models (head_dim 128 fails the gate), and
+explicit array masks (their alignment is caller-defined, same rationale as upstream) all
+fall through to the legacy single call. `KVCacheSimple.update` is a scatter write into a
+pre-allocated buffer; two incremental updates compose to the same live rows as one full
+update (buffer pad may differ — internal detail, no stream effect). The compiled decode
+path (`Qwen35+FastPath.swift` → `attentionCacheStep`) also routes through this function;
+decode (L = 1) is untouched (gate fails).
+
+**Tests (engine, feature branch — merge candidates, except the Phase 1 throwaway):**
+
+1. `Qwen38SDPAExactnessTests` (unit, new file): wall geometry (24 q heads / 4 kv heads /
+   head_dim 256 / scale 1/16). `testWideVerifyBlockMatchesPromotedWindows` asserts
+   bit-exact equality with an independently-driven promoted-windows reference (5-row prefix
+   + L−5-row tail, one `.causal` SDPA call per chunk, independent cache) plus live cache
+   state equality, for L ∈ {6,7,8,9} × offset ∈ {13, 29, 41, 57, 250} (250 crosses a
+   buffer-growth boundary). Negative controls: L = 5, offset = 0, and `.array` mask all
+   stay on the legacy single call (bit-exact against it). **All pass** (0.08 s).
+2. `Qwen38MTPDiagnosticTests.testWideVerifyStaysInSerialFamily` (model-level, new test):
+   serial (depth 0) vs depth 5 (verify width 6) on the same synthetic prompt, 256 tokens,
+   greedy: **256/256 match, no divergence, match rate 1.0000** (pre-fix signature per W3:
+   divergence at the first drafted token, ~0–40% match). Asserts `firstDivergence >= 16`
+   and `matchRate >= 0.85`. Passes (suite 63.9 s including model load); the full
+   `Qwen38MTPDiagnosticTests` suite is green.
+
+**Deep-k gate (driver `benchmarks/run_deepk.sh`, in flight).** Three cells (d5/d6/d8-essay:
+`QWEN_MTP_DRAFT_K=k` + `--spec-draft-n-max 8`, `EXPECT_HEAD=q4`) × 6 reps plus two
+one-rep headline regate cells (`h-essay-regate`, `h-specdec-regate`) to confirm the fix
+leaves the M ≤ 5 headline hashes invariant. Expected: per-config determinism; headline
+hashes unchanged; d5/d6/d8 streams now in the serial family (knife-edge flips only, not
+gross corruption). Records will land in `benchmarks/results/deepk.jsonl`.
+
+**Throwaway:** `Tests/MLXLMTests/Qwen38BugADiscriminatorTests.swift` (Phase 1
+discriminator) is removed before the final engine merge.
+
+**Deep-k gate results (2026-09-14).** Protocol: same as Phase 2/3, single release
+binary built with the fix, essay-1024, `QWEN_MTP_DRAFT_K=k` + `--spec-draft-n-max 8`,
+`EXPECT_HEAD=q4`, 3 cells × 6 reps interleaved plus two one-rep headline regate cells.
+Records: `benchmarks/results/deepk.jsonl`; session log `/tmp/deepk-session.log`.
+
+| cell | med tok/s (reps 2–6) | stream hash | acc/step | stepAvg (reps 2–6) |
+|---|---|---|---|---|
+| d5-essay | **14.53** | `949b9423…` | 1.71 | 184–192 ms |
+| d6-essay | **12.85** | `949b9423…` | 1.741 | 210–219 ms |
+| d8-essay | **9.80** | `949b9423…` | 1.771 | 277–283 ms |
+| h-essay-regate | 20.49 (one rep) | `949b9423…` | — | — |
+| h-specdec-regate | 22.44 (one rep) | `139acb9d…` | — | — |
+
+All cells deterministic, gate PASS, phaseSumOK, `committed=1024`. Three confirmations:
+(1) the fix works — d5/d6/d8 essay streams are now **identical to the essay serial
+stream** (`949b9423…`), no gross corruption (pre-fix `da7bb159…`) and no knife-edge
+flip in 1024 tokens; (2) the fix leaves the M ≤ 5 path untouched — both headline
+regate hashes match the pre-fix postw4-session values exactly; (3) deep drafts are
+**net-negative on essay**: accepted/step plateaus at 1.71–1.77 (marginal draft
+acceptance is low) while the verify-width cost grows superlinearly (stepAvg
+185 → 212 → 283 ms), giving a monotonic 14.53 → 12.85 → 9.80 tok/s, all far below
+k2's 21.28 and default's 19.63. Caveat: the sweep is essay-only; specdec (higher
+k2 acceptance, 2.38 acc/step) could shift the depth optimum, but the acceptance
+structure (diminishing marginal acceptance vs superlinear width cost) argues the
+optimum stays shallow.
+
+### Phase 5 — head-structure decision (2026-09-14) — **CLOSE the head-structure workstream**
+
+**Decision: close** — no further head restructuring, deepening, or re-quantization
+work. The q4 head stays as-is: KEEP verdict from W4, default ON, fail-loud required.
+Evidence (all in-session, this queue):
+
+1. **In-pipeline head cost is small.** The flush-contaminated isolated upper bounds
+   (24.66–26.02 ms/round at d = 1) do not carry into the pipeline: the joint
+   k2 − serial tEval delta is 38–40 ms/step and includes *both* 2 head steps *and*
+   the width-3 batched-forward effect, so the head's share is well under the old
+   upper bound. tGraphBuild runs ~3.5–4 ms/step with the head in the loop.
+2. **Deeper drafts do not pay.** d5/d6/d8 essay: 14.53 / 12.85 / 9.80 tok/s vs 21.28
+   at k2, with acc/step plateauing at ~1.7–1.8 — the head's marginal draft
+   acceptance cannot amortize the superlinear verify-width cost.
+3. **k = 2 is the operating sweet spot** on both fixtures (+31.0% essay / +40.2%
+   specdec vs serial), and its committed stream equals the default adaptive
+   stream on both fixtures — the default's extra offered depth is net-negative
+   (+9.9% / +7.8% in k2's favor).
+4. **Correctness is settled.** Bug A (knife-edge family) is a precision artifact of
+   the batched verify order — no logic bug; Bug B (SDPA fallback at M ≥ 6) is fixed
+   and regression-tested. The per-(fixture, config) hash registry is the standing
+   acceptance criterion.
+
+**Standing recommendation (documented, not implemented):** for this fixture class,
+`QWEN_MTP_DRAFT_K=2` is the best measured configuration; the default adaptive cost
+model over-offers depth. Changing the default depth policy is a separate decision
+requiring its own A/B session and explicit approval — out of scope for this queue.
+
 ### Benchmarking history (superseded results — kept for provenance only)
 
 The v1.0-baseline, 2a, 2b, and 2c tables previously in this file are **retracted as measurement artifacts**, for two reasons established on 2026-09-13:
@@ -542,7 +707,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section).
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 0 harness hardening** (DONE 2026-09-14 — `EXPECT_HEAD` gate in `run_cell.sh`/`run_matrix.sh`; q4 default fail-loud; PROFILE.md §7 flush-contamination label), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section), **Phases 2+3 headline re-measure + k=2 evaluation** (DONE 2026-09-14 — 36-cell session, all deterministic; headline q4 default essay 19.63 / specdec 21.11 tok/s; k2 21.28 / 22.75; serial 16.26 / 16.22; detail: Phase 2+3 section), **Phase 4 Bug B fix** (DONE 2026-09-14 — SDPA exactness chunk in `attentionWithCacheUpdate`; unit + model regression tests green; deep-k gate: d5/d6/d8 essay now serial-identical (`949b9423…`), headline hashes invariant; detail: Phase 4 section), **Phase 5 head-structure decision** (DONE 2026-09-14 — **CLOSE the head-structure workstream**; q4 head stays as-is; `QWEN_MTP_DRAFT_K=2` recommended for this fixture class; detail: Phase 5 section).
 
 **Decisions on record:**
 
@@ -552,12 +717,14 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 - W1 hot-path `asData` audit: all call sites classified (one hidden flush — fixed; two dead-code probes — fixed with the same pattern; `UserInput` non-hot-path; MTP session readouts are intentional post-`eval` host reads). No remaining per-call tensor metadata in the forward path.
 - W4 MTP-head 4-bit quantization: **KEEP, default ON** (2026-09-14). The pinned head was BF16 (849.4 MB) — W2's headbench measured 24.66 / 45.94 ms/round at d=1/2 (trigger MET). The 4-bit group-64 tree (`mtp-head/q4/`, 238.9 MB, `benchmarks/make_q4_head.py`) A/B'd against the BF16 head at k=3 on both fixtures: **essay 19.63 → 21.32 tok/s (+8.6 %), specdec 22.11 → 23.45 tok/s (+6.1 %), 24/24 reps bit-exact, head fusion engaged (`head swiGLU 1 qkv 1`), zero materializations, phase-sums exact.** Win carried by tGraphBuild (−7.2/−7.8 ms); tEval within noise; the isolated head-body collapse (16.38 → 1.52 ms/forward) does not transfer 1:1 in-pipeline (recorded observation). `MLX_QWEN_MTP_HEAD_QUANT`: unset = default ON (loud BF16 fallback if the q4 tree is missing), `1` force q4, `0` rollback BF16. `lm_head` report-only (already 4-bit, 635.7 MB payload — quantizing it changes committed tokens). The diagnostic's short prompts are width-sensitive within a fixed head state (same bug A/B family), so they are recorded, not gated; the A/B matrix at k=3 is the committed-stream gate.
 - MTP-head SwiGLU/QKV fusions: engaged automatically by the W4 4-bit head (stock `QuantizedLinear` eligibility); the BF16 head remains eager-fallback by design. No separate task needed.
+- Bug B fix (Phase 4, 2026-09-14): the SDPA exactness chunk is geometry-gated (L ∈ 6..9, `L·gqa > 32`, head_dim 256, `5·gqa ≤ 32`, `offset > 0`, symbolic `.causal` mask) so it cannot change any M ≤ 5 path, prefill, other models, or explicit-mask callers — confirmed by negative-control unit tests and by the invariant headline hashes in the deep-k regate cells. `QWEN_MTP_DRAFT_K`/`--spec-draft-n-max` above 4 is correct again but net-negative on essay; no default change.
+- Phase 5 (2026-09-14): the head-structure workstream is **closed**. The q4 head stays as-is (W4 KEEP); in-pipeline head cost is well under the flush-contaminated isolated upper bounds; deeper drafts do not amortize the verify-width cost (acc/step plateau ~1.7–1.8); k = 2 is the recommended operating point for this fixture class. Any future re-scope (e.g. specdec deep-k, default depth-policy change) is a new task with its own A/B session.
 
-**Open items (in priority order — W1, W2, W3, W4, W5, Phase 1 done 2026-09-14; next: headline re-measure + k=2 evaluation (Phases 2–3), then bug B):**
+**Open items (in priority order — W1–W5 and Phases 0–5 all done 2026-09-14; the post-W4 queue is complete):**
 
 1. **Correctness bug A — RESOLVED 2026-09-14 (Phase 1): precision family, not a logic bug.** The W3 even-k divergence was a confound of a non-serial reference: the batched-verify forward is a different bf16 reduction order than the M=1 serial forward (drift ≤ 2 ulp) and flips the argmax only at knife-edge positions (top-2 gap ≤ 2–4 ulp; ~9 per 1024 on specdec, first flip at ~95–96 %). k=2 on the q4 head reproduces the pinned `139acb9d…` exactly; bf16 k=2 reproduces the W3 `06882d85…` exactly; the serial stream is `c70882fc…` (head-invariant). Binding gate policy: per-(fixture, config) stream hashes — never claim cross-config or against-serial bit-exactness. No code fix; no challenge-specific change without explicit approval (risk assessment in the Phase 1 section).
-2. **Correctness bug B — verify width ≥ 6 commits wrong tokens (report-only until fixed).** Root-cause hypothesis (strong, static + empirical): the "exactness chunk" split specified in the engine's design comments — 6..9-row causal verify SDPA as two ≤5-row calls — does not exist in `attentionWithCacheUpdate`; at qL·gqa > 32 the fused-vector SDPA path is left and wide verify attention is not bit-identical to serial. Boundary matches exactly (width 5 = 30 ≤ 32 clean; width 6 = 36 diverges at round 1); QMV verify and fused QKV/SwiGLU exonerated by exclusion probes. Full detail + provenance: W3 section. Fix is a separate task (chunked verify SDPA + re-run the determinism gate at k5–k8); **the `--spec-draft-n-max` / `QWEN_MTP_DRAFT_K` surface above 4 is broken, not merely slow, until then.**
+2. **Correctness bug B — RESOLVED 2026-09-14 (Phase 4): SDPA exactness chunk implemented.** Root cause confirmed: this fork's `attentionWithCacheUpdate` lacked the upstream exactness chunk; verify widths M = 6..9 (qL·gqa > 32, head_dim 256) fell to the reference matmul → fp32-softmax → matmul SDPA fallback, whose bf16 reduction order drifted enough to grossly corrupt wide-verify streams (W3 `da7bb159…`, first divergence at the first drafted token). The chunk splits L ∈ 6..9 blocks into a 5-row + (L−5)-row pair of vector-kernel `.causal` SDPA calls with incremental KV scatter updates — bit-exact against the promoted-windows reference (unit test, L × offset matrix incl. a buffer-growth boundary) and the width-6 model stream is now serial-identical over 256 tokens (model-level regression test). Deep-k gate: d5/d6/d8 essay deterministic and **serial-identical** (`949b9423…`); headline (M ≤ 5) hashes invariant. The `--spec-draft-n-max` / `QWEN_MTP_DRAFT_K` surface above 4 is correct again — and net-negative on essay (14.53/12.85/9.80 tok/s vs 21.28 at k2), so k = 2 remains the recommended operating point.
 3. **W5 — `qmvbench --throughput N`: DONE 2026-09-14** — sustained throughput measured at M ∈ {1,2,4,8,9}, narrow/wide × routed/fallback (table in the QMV microbenchmark section): ~170–235 µs/call sync overhead in the serialized protocol; the routed kernel's M = 2..9 win grows to ~30% under sustained conditions; M = 1 is a wash. The M = 16/17 extension is **moot**: W3's optimum sits at k=2, not the sweep ceiling.
 4. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is wired; shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.
 5. **Attention-layer kernels and acceptance-rate work** — the remaining path toward the `tEvalMs` 24 ms / 30 tok/s target; weight-packing is measured out as a lever at this geometry.
-6. **Re-sweep draft depths k ∈ {5,6,8} after the item-2 fix** — the current k=6/k8 records are bug evidence only.
+6. **Re-sweep draft depths k ∈ {5,6,8} after the item-2 fix — DONE 2026-09-14 (Phase 4 deep-k gate).** d5/d6/d8 essay: 14.53 / 12.85 / 9.80 tok/s, all deterministic, all serial-identical (`949b9423…`); acc/step plateaus at ~1.7–1.8 while stepAvg grows superlinearly (185 → 212 → 283 ms). Deep drafts are net-negative on essay; the sweep was essay-only (specdec caveat recorded in the Phase 4 section).
