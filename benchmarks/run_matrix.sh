@@ -14,9 +14,9 @@ OUT=benchmarks/results/$PHASE.jsonl
 : > "$OUT"
 
 run_cell() {
-  local TAG=$1 ENVSPEC=$2 PROMPT=$3
-  echo "[matrix] cell $TAG env=[$ENVSPEC] prompt=$PROMPT" >&2
-  "$DIR/run_cell.sh" "$TAG" "$ENVSPEC" 18099 "$PROMPT" >> "$OUT" 2>"$OUT".cellerr
+  local TAG=$1 ENVSPEC=$2 PROMPT=$3 EXTRA=${4:-} EXPECT_HEAD=${5:-q4}
+  echo "[matrix] cell $TAG env=[$ENVSPEC] prompt=$PROMPT expect_head=$EXPECT_HEAD" >&2
+  "$DIR/run_cell.sh" "$TAG" "$ENVSPEC" 18099 "$PROMPT" "$EXTRA" "$EXPECT_HEAD" >> "$OUT" 2>"$OUT".cellerr
   local rc=$?
   if [ $rc -ne 0 ]; then
     echo "[matrix] cell $TAG failed rc=$rc — stopping" >&2

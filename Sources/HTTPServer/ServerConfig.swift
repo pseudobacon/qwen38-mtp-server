@@ -340,9 +340,11 @@ struct ServerConfig: Sendable {
             LLAMA_ARG_CACHE_TYPE_K, LLAMA_ARG_CACHE_TYPE_V,
             MLX_QWEN_MTP_HEAD_QUANT   (1/true/on force the 4-bit draft head
                                        <QWEN_MTP_HEAD>/q4; 0/false/off the
-                                       pinned BF16 head; unset = default ON,
-                                       falling back to BF16 with a loud log if
-                                       the q4 tree is missing)
+                                       pinned BF16 head (explicit rollback);
+                                       unset = default ON — the q4 tree is
+                                       REQUIRED and a missing tree fails
+                                       startup loudly; generate it once with
+                                       benchmarks/make_q4_head.py)
 
         EXAMPLES:
             HTTPServer --port 8080 --model /models/qwen-27b

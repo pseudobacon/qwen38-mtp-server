@@ -132,7 +132,7 @@ estimated:
 | bucket | ms/round | share | basis |
 |---|---|---|---|
 | Backbone verify forward, 3 rows (4-bit QMV) | ~55–59 | ~55 % | **estimated**: 14.42 GB ÷ 200–275 GB/s; implied bandwidth back-computed per depth from the W3 sweep (stepAvg − measured head family): k1 215, k2 247, k3 273, k4 200 GB/s — all inside the measured 4-bit kernel band (qmvbench sustained 310–355 GB/s; serialized 142–186 GB/s) |
-| MTP head family (flush + 1 step + 2 proj1) | 40.6 | ~39 % | **measured** (§2) |
+| MTP head family (flush + 1 step + 2 proj1) | 40.6 | ~39 % | **measured in isolation** (§2; per-call-sync → flush-contaminated upper bound, see §7) |
 | Verify `lm_head` over 3 rows (4-bit) | 5.4 | ~5 % | **measured** (§2, `verifyM(M=3)`) |
 | Gaps, launches, dispatch | remainder | ~1–2 % | trace: 98.2 % GPU busy leaves little idle |
 
@@ -159,7 +159,12 @@ quantization headroom** on the logits path; report-only per the W4 scope.
    layer-structure cost is unchanged. Net: ≈ 4.5 ms saved per head forward →
    ≈ 9 ms/round at d=1, ≈ 14 ms/round at d=2 (~13 % of the d=2 step). Memory:
    849 MB → ≈ 300 MB. This is the largest remaining per-step lever outside the
-   backbone's weight traffic.
+   backbone's weight traffic. — **DONE (W4, 2026-09-14): KEEP, default ON.**
+   Measured in-pipeline: essay 19.63 → 21.32 tok/s (+8.6 %), specdec 22.11 →
+   23.45 tok/s (+6.1 %), 24/24 reps bit-exact; the win was carried by
+   `tGraphBuild` (−7.2/−7.8 ms), and the isolated head-body collapse
+   (16.38 → 1.52 ms) did **not** transfer 1:1 to `tEval` (within in-session
+   noise) — see §7 for the flush-contamination explanation.
 2. **Extend the SwiGLU/QKV fusions to the head.** The load-time fusion summary
    reports `head swiGLU 0 qkv 0`: the head's MLP runs the eager
 gate/up/silu/mul/down chain (5 ops) and its QKV the unfused projections.
@@ -187,3 +192,40 @@ committed stream (the W3 sweep's k=1..4 bit-exactness under different draft
 depths is the evidence that the committed stream is invariant to draft
 quality). The W4 A/B gates on (i) acceptance rate, (ii) tok/s, and
 (iii) the committed-stream hash staying `949b9423…` / `139acb9d…`.
+
+## 7. Post-W4 amendment — head-family numbers are flush-contaminated upper bounds (2026-09-14)
+
+The §2 head-forward numbers (16.38 / 16.26 ms) and the per-round head-family
+bucket (24.66 / 45.94 / 67.47 / 88.89 ms; "40.6 ms ≈ 39 %" in §2's
+decomposition) are **isolated measurements with per-rep graph build +
+synchronous `eval`** — one GPU pipeline flush between every timed call. By
+the Item D lesson (the `asData` flush artifact), a per-call-sync isolated
+number is an **upper bound on in-pipeline cost, not the in-pipeline cost**:
+in the real session the head forward is one of ~25 kernel groups inside a
+continuously running pipeline with no per-call drain.
+
+W4's in-pipeline A/B (2026-09-14, k=3, 6 reps per state, both fixtures)
+provides the correction: quantizing the head body (849 → 238.9 MB; 8 linears
+to 4-bit) collapsed the **isolated** head forward **16.38 → 1.52 ms
+(10.8×)**, yet the **in-pipeline** `tEval` moved only within in-session noise
+(−4.01 / −0.12 ms on essay/specdec) while the total step improved 8–11 ms/
+round carried by `tGraphBuild` (−7.2 / −7.8 ms — the smaller fused graph).
+If the 40.6 ms/round bucket were the true in-pipeline cost, the q4 state
+would have dropped `tEval` by tens of ms; it did not.
+
+Consequences (recorded, not re-measured here):
+
+- The §2 "MTP head family 40.6 ms (~39 %)" bucket is an **upper bound**;
+  the true in-pipeline head cost is **unestablished** and must be measured
+  flush-free in-pipeline before the head-structure GPU kernel item is scoped.
+- The "~14 ms/round at d=2" estimate in §5(c) was not realized in-pipeline
+  on the GPU side; the measured W4 win was `tGraphBuild` plus q4
+  acceptance/routing effects. The committed-stream gate held bit-exact
+  (24/24 reps); q4 acceptance ran ~2–4 % lower per step (1.3759/1.6693 vs
+  1.4061/1.6974).
+- The §6 lever list's item (1) is **done** (W4, KEEP, default ON); the
+  GPU-side head lever is **unproven** until a corrected in-pipeline
+  measurement exists.
+
+Nothing in §2–§6 is deleted — all numbers remain valid as labeled isolated
+measurements; this section labels their in-pipeline applicability.

@@ -42,6 +42,24 @@ bash benchmarks/run_matrix.sh verify   # §0 fixture provenance check (both pinn
 bash benchmarks/run_matrix.sh itemA    # 2×2 fusion matrix
 ```
 
+### MTP head asset (fresh-checkout bootstrap)
+
+The pinned BF16 head tree (`mtp-head/pinned/`) and the generated 4-bit tree
+(`mtp-head/q4/`) are both gitignored; the `mtp-head/` entries are cache-backed.
+The server **requires** the q4 tree by default — a missing tree is a loud
+startup failure, never a silent BF16 run. Once, after the model assets are in
+place:
+
+```bash
+python3 -m venv /tmp/q4venv && /tmp/q4venv/bin/pip install -q mlx==0.32.2 safetensors
+/tmp/q4venv/bin/python benchmarks/make_q4_head.py   # → mtp-head/q4/ (238.9 MB)
+```
+
+`make_q4_head.py` is idempotent (refuses to overwrite an existing tree). The
+benchmark harness additionally gates every cell on the actually-loaded head
+state (`run_cell.sh` `expect-head` argument) so a fallback can never silently
+produce a headline number.
+
 ## Runtime knobs
 
 | Env var | Default | Effect |
@@ -51,6 +69,7 @@ bash benchmarks/run_matrix.sh itemA    # 2×2 fusion matrix
 | `MLX_QWEN_QMV_VERIFY` | ON | Routed QMV kernel on the verify pass (`B·L ∈ 2..9`, 3-D verify reshaped to `[B·L, K]`); M = 1 falls back to the incumbent (rollback: `0`) |
 | `MLX_QWEN_FOUR_GDN` | ON | GDN 4-projection input fusion |
 | `MLX_COMPILED_DECODE` | ON | `compile(shapeless: true)` activation micro-fusions (opt-out for the Tahoe Metal JIT bug) |
+| `MLX_QWEN_MTP_HEAD_QUANT` | ON | 4-bit draft head `<QWEN_MTP_HEAD>/q4`; the tree is **required** by default (missing → loud startup failure); `0`/`false`/`off` = explicit BF16 rollback |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |
 | `QWEN_MTP_STEP_TRACE` | off | Per-request MTP-STEP-SUMMARY on stderr (rounds / proposed / accepted / avgStepMs / component timings) |
 

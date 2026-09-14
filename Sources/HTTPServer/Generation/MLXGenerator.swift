@@ -374,9 +374,11 @@ actor MLXGenerator {
         //   fails loudly if the tree is missing (explicit operator intent).
         //   0/false/off — force the pinned BF16 tree (rollback state).
         //   unset — default ON since the W4 verdict (2026-09-14, essay +8.6 %
-        //   / specdec +6.1 %, 24/24 reps bit-exact): 4-bit tree if present,
-        //   otherwise a loudly logged fallback to the pinned BF16 tree — a
-        //   fresh checkout has to run benchmarks/make_q4_head.py once.
+        //   / specdec +6.1 %, 24/24 reps bit-exact). The 4-bit tree is
+        //   REQUIRED: a missing tree is a loud startup failure, never a
+        //   silent BF16 fallback (post-W4 hardening — a headline measured on
+        //   the fallback would be the stale-binary error class). A fresh
+        //   checkout runs benchmarks/make_q4_head.py once to obtain it.
         // The target-verify path keeps the committed stream bit-identical
         // across both head states on the benchmark fixtures (W4 A/B matrix);
         // the knob changes draft quality (acceptance) and per-round head
@@ -404,13 +406,15 @@ actor MLXGenerator {
             throw MLXFastError.invalidInput(
                 "MLX_QWEN_MTP_HEAD_QUANT must be 1/true/on or 0/false/off, got \"\(v)\"")
         case .none:
-            if q4Present {
-                headURL = q4URL
-                headVariant = "4-bit quantized (default ON, tree present)"
-            } else {
-                headURL = headBase
-                headVariant = "BF16 pinned (fallback: 4-bit tree missing — run benchmarks/make_q4_head.py)"
+            guard q4Present else {
+                throw MLXFastError.invalidInput(
+                    "MTP head default is the 4-bit tree but it is missing: "
+                    + q4URL.appendingPathComponent("model.safetensors").path
+                    + " — generate it with benchmarks/make_q4_head.py (or set "
+                    + "MLX_QWEN_MTP_HEAD_QUANT=0 for an explicit BF16 rollback)")
             }
+            headURL = q4URL
+            headVariant = "4-bit quantized (default ON)"
         }
         print("MLXLM: MTP head selected: \(headURL.path) — \(headVariant)")
 

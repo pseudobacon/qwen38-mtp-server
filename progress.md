@@ -208,7 +208,9 @@ Per-round decomposition (d=2 class, tEval ≈ 105 ms): backbone verify forward (
 rows, 4-bit) ~55–59 ms (~55 %, **estimated** from 14.42 GB ÷ 200–275 GB/s —
 implied bandwidth back-computed from the W3 sweep at all four depths: 215 / 247 /
 273 / 200 GB/s, all inside the measured 4-bit kernel band), MTP head family
-40.6 ms (~39 %, **measured**), verify `lm_head` 5.4 ms (~5 %, **measured**), gaps/
+40.6 ms (~39 %, **measured in isolation with per-call sync — flush-contaminated
+upper bound on in-pipeline cost**, see the post-W4 amendment below and
+PROFILE.md §7), verify `lm_head` 5.4 ms (~5 %, **measured**), gaps/
 launches the remainder. Weight traffic from the safetensors headers: backbone
 body **13.70 GB/forward** (16 FA × 209.4 MB + 48 GDN × 215.7 MB); `lm_head` 4-bit
 payload **635.7 MB** (U32 [248320, 640], group 64) + 79.5 MB scales/biases;
@@ -224,6 +226,17 @@ MTP head (W4; ~14 ms/round at d=2, 849 MB → ~300 MB), (2) SwiGLU/QKV fusions
 extended to the head (launch-level win), (3) backbone 4-bit GEMV bandwidth
 (200–275 GB/s in-pipeline vs 310–355 GB/s sustained in qmvbench), (4)
 `tGraphBuild` ~10.5 ms CPU (secondary).
+
+**Post-W4 amendment (2026-09-14):** the headbench numbers above are isolated
+per-rep graph-build + synchronous-eval measurements — one GPU pipeline flush
+between every timed call (the Item D flush-artifact class). W4's in-pipeline
+A/B showed the isolated head-body collapse (16.38 → 1.52 ms under q4) does **not**
+transfer 1:1 to in-pipeline `tEval` (moved within in-session noise, −4.01/−0.12
+ms) while the total-step win was carried by `tGraphBuild` (−7.2/−7.8 ms). The
+40.6 ms/round head-family bucket is therefore an **upper bound, not the
+in-pipeline cost**; the true in-pipeline head cost is unestablished pending a
+flush-free in-pipeline measurement. Nothing is deleted — labels only
+(PROFILE.md §7).
 
 ### W3 — MTP draft-depth sweep (2026-09-14) — **correctness stop at depth 5; valid optimum k=2 (21.26 tok/s, conditional)**
 
@@ -435,8 +448,90 @@ Provenance: `benchmarks/results/w4-ab-essay-{bf16,q4}.jsonl`,
 `w4-diag-{bf16,q4}-{d1,d4,depth8}.txt`, `benchmarks/make_q4_head.py`,
 `benchmarks/run_w4ab.sh`.
 
+### Phase 1 — Bug A: discriminating test and verdict (2026-09-14) — **precision family, not a logic bug**
 
-## Benchmarking history (superseded results — kept for provenance only)
+**Task.** The W3 gate found specdec k=2 (verify width 3) and k=4 (width 5) diverging from
+the pinned stream `139acb9d…` on the BF16 head while k=1/k=3 matched. The discriminating
+test separates two hypotheses: (a) precision — the bf16 accumulation order of the batched
+M-row verify forward differs from the M=1 serial forward and flips the argmax at
+knife-edge positions; (b) logic — a state inconsistency (KV, cache, row mapping) corrupts
+the stream.
+
+**Method.** Throwaway diagnostic (`Tests/MLXLMTests/Qwen38BugADiscriminatorTests.swift`,
+engine `feature/postw4-queue`, marked NOT FOR MERGE — must not ship with the Phase 4 merge)
+runs two trajectories per head state on specdec-800 (1024 tokens, greedy): a serial leg
+(`generateRound(depth: 0)`) and a k=2 leg (`QWEN_MTP_DRAFT_K=2`), recording per-position
+top-2 (id, value) from the round result — no engine instrumentation. The serial leg never
+invokes the head, so it is head-state-invariant.
+
+**Results** (per-position provenance: `/tmp/buga-q4.jsonl`, `/tmp/buga-bf16.jsonl`):
+
+| leg | stream hash | note |
+|---|---|---|
+| serial (q4 head state) | `c70882fc40a2c22da9310e689a7b83c650ab16134aac912c2e8fe8e149bbc9e8` | head-invariant |
+| serial (bf16 head state) | `c70882fc…` (identical) | no head leakage into the target path |
+| k=2, q4 head | `139acb9d30fee4749c873aaa42142481d888f53537a729e630c68ca8dcf49cac` | **reproduces the pinned reference exactly** |
+| k=2, bf16 head | `06882d856267601f4e74d1ed971e04184d518a41041336ab1733f3a4c9022ff4` | **reproduces the W3 failure exactly** |
+
+- **The pinned reference `139acb9d…` is not the serial greedy stream.** It is an MTP-path
+  stream (originally the k=3 BF16 server run). The serial greedy stream is `c70882fc…`:
+  35/1024 positions differ from `139acb9d…` on specdec, first at position 989 (q4 leg),
+  then fully diverged (0 equal afterwards).
+- **The first divergence is a knife-edge argmax flip in both states.** q4 pos 989: serial
+  top-2 `[4779, 2193] = [21.0, 20.875]` (gap 0.125 = 2 ulp); verify row `[2193, 4779] =
+  [21.0, 21.0]` — the verify-row logit for 2193 drifted +0.125 (exactly 2 ulp at this
+  magnitude), creating an exact tie that the smaller-id-wins ordering flipped. bf16 pos
+  973: serial `[58377, 8476] = [20.625, 20.375]` (gap 0.25); verify `[8476, 58377] =
+  [20.5, 20.5]` — both tokens drifted ∓0.125 (2 ulp), again an exact tie and a flip.
+- **Drift at agreeing positions (pre-flip):** top-1 values bit-exact at 979/988 (q4) and
+  969/973 (bf16); max drift 0.125 (2 ulp); nothing larger before the first flip. No
+  state-inconsistency signature — no gross one-shot corruption, no wrong-row mapping (the
+  k=2 legs reconstruct exactly the known W3 hashes).
+- **Knife-edge supply (serial stream, head-invariant):** gap ≤ 0.125 (2 ulp) at 9
+  positions per 1024; gap < 0.25 (4 ulp) at 38; gap < 0.5 at 98; gap < 1.0 at 218. The eight
+  sub-2-ulp positions (40, 236, 337, 352, 417, 775, 884, 943) are identical in both states
+  and did not flip in either leg; the flip landed at a 2-ulp-gap position (q4) and a
+  4-ulp-gap position (bf16).
+
+**Verdict: precision family (branch a).** The batched M-row verify forward and the M=1
+serial forward are different bf16 reduction orders of the same exact logits; the drift is
+≤ 2 ulp and only matters at knife-edge positions (gap ≤ 2–4 ulp). The committed stream
+absorbs drift only through batched rows (accepted-draft rows and the bonus row of a fully
+accepted block); the rejection path rolls the window back and re-forwards a fresh M=1 block
+whose last row is the next primary — serial-consistent. The W3 "even-k divergence" was a
+**confound**: the gate compared MTP widths against a non-serial reference, and the
+per-(width, head-state) acceptance pattern modulates which positions are computed in batched
+rows versus M=1, so knife-edge flips land at different positions per config → different
+hashes. There is no width-specific logic bug at k=2/k=4.
+
+**Gate policy (binding).** The determinism gate is a **per-(fixture, config) stream hash**;
+config = (head state, pinned draft k or default cost model, fusion env). **Never claim
+bit-exactness across configs or against the serial stream** — the MTP path is serial in
+exact arithmetic and differs from serial only at knife-edge positions. Known registry
+(specdec-800, 1024 tokens):
+
+| config | hash |
+|---|---|
+| serial (any head state) | `c70882fc40a2c22da9310e689a7b83c650ab16134aac912c2e8fe8e149bbc9e8` |
+| k=2, q4 | `139acb9d30fee4749c873aaa42142481d888f53537a729e630c68ca8dcf49cac` |
+| k=2, bf16 | `06882d856267601f4e74d1ed971e04184d518a41041336ab1733f3a4c9022ff4` |
+| k=1 / k=3, bf16 (W3) | `139acb9d…` |
+| k=4, bf16 (W3) | `48728382…` |
+| essay-1024, k=1..4 bf16 (W3) and default q4 (post-W4) | `949b9423…` |
+
+Essay serial: pending (Phase 2 serial-probe cell).
+
+**Risk assessment (external golden-stream requirement).** No challenge/golden requirement is
+documented in this repository. If one required bit-exact match to a serial-greedy golden
+stream, the MTP path would be at risk: on specdec the first knife-edge flip lands at ~95–96%
+of the 1024-token stream (positions 973–989) and the streams then stay fully diverged; ~9
+positions per 1024 sit in the ≤ 2-ulp flip zone and ~38 in the < 4-ulp zone. A flip requires
+the position-specific drift (0–2 ulp, determined by which batched row computed the
+position) to cross the gap. No fix is implemented; candidate mitigations (fp32 logit readout
+for committed rows, knife-edge M=1 tie re-check, or a per-config golden registry as the
+acceptance criterion) require explicit approval before any of them is built.
+
+### Benchmarking history (superseded results — kept for provenance only)
 
 The v1.0-baseline, 2a, 2b, and 2c tables previously in this file are **retracted as measurement artifacts**, for two reasons established on 2026-09-13:
 
@@ -447,7 +542,7 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 
 ## Current status and roadmap
 
-**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section).
+**Done:** Checkpoints 1, 2a, 2b, 2b-fix, 2c, 2d (both packed projections, merged to main in both repos), Item C interleaved layout (implemented, measured, rejected; removed from the engine in `901d2ca`), `qmvbench` microbenchmark target, prompt-fixture + determinism benchmarking protocol, MLXFast grid-convention bug fix, Phase 3 dual-fixture re-baseline + compiled-path ablation (2026-09-13; per-rep thermal logging wired into the harness), **Item D verify-pass QMV routing** (implemented; **final classification: +12.2% win, default ON** — the original A/B null was the `asData` flush artifact, root-caused; the flush-free rerun kept D1; engine `b900aad` → `c87fc6b` → `a5f102f`, server `4ca9589`+`4af4e73` → `31032ec` + evidence commits; detail: Phase 3 Item D section), **W5 `qmvbench` sustained-throughput mode** (implemented + measured; engine `a5f102f`), **W2 tEval profile** (DONE 2026-09-14 — `benchmarks/PROFILE.md`; `headbench` tool added to the engine; W4 trigger MET; headline refreshed), **W3 draft-depth sweep** (DONE 2026-09-14 — k=1..4 valid and bit-exact on essay; **k≥5 correctness stop** (top open item); essay optimum k=2 21.26 tok/s, conditional on the specdec k=2/k4 divergence; specdec: only k=1 and default k=3 bit-exact), **W4 MTP-head 4-bit quantization** (DONE 2026-09-14 — 4-bit head tree 238.9 MB generated; A/B matrix 24/24 reps bit-exact; essay +8.6 % / specdec +6.1 %; **verdict KEEP, `MLX_QWEN_MTP_HEAD_QUANT` default flipped ON**; detail: W4 section), **Phase 1 Bug A discriminating test** (DONE 2026-09-14 — **verdict: precision family, not a logic bug**; the pinned `139acb9d…` reference is an MTP-path stream, not serial greedy (`c70882fc…`); per-(fixture, config) stream-hash gate policy now binding; detail: Phase 1 section).
 
 **Decisions on record:**
 
@@ -458,9 +553,9 @@ The engineering work of those checkpoints (kernels, fusions, tests, refactors) s
 - W4 MTP-head 4-bit quantization: **KEEP, default ON** (2026-09-14). The pinned head was BF16 (849.4 MB) — W2's headbench measured 24.66 / 45.94 ms/round at d=1/2 (trigger MET). The 4-bit group-64 tree (`mtp-head/q4/`, 238.9 MB, `benchmarks/make_q4_head.py`) A/B'd against the BF16 head at k=3 on both fixtures: **essay 19.63 → 21.32 tok/s (+8.6 %), specdec 22.11 → 23.45 tok/s (+6.1 %), 24/24 reps bit-exact, head fusion engaged (`head swiGLU 1 qkv 1`), zero materializations, phase-sums exact.** Win carried by tGraphBuild (−7.2/−7.8 ms); tEval within noise; the isolated head-body collapse (16.38 → 1.52 ms/forward) does not transfer 1:1 in-pipeline (recorded observation). `MLX_QWEN_MTP_HEAD_QUANT`: unset = default ON (loud BF16 fallback if the q4 tree is missing), `1` force q4, `0` rollback BF16. `lm_head` report-only (already 4-bit, 635.7 MB payload — quantizing it changes committed tokens). The diagnostic's short prompts are width-sensitive within a fixed head state (same bug A/B family), so they are recorded, not gated; the A/B matrix at k=3 is the committed-stream gate.
 - MTP-head SwiGLU/QKV fusions: engaged automatically by the W4 4-bit head (stock `QuantizedLinear` eligibility); the BF16 head remains eager-fallback by design. No separate task needed.
 
-**Open items (in priority order — W1, W2, W3, W4, W5 done 2026-09-14; next: correctness bug A, then bug B):**
+**Open items (in priority order — W1, W2, W3, W4, W5, Phase 1 done 2026-09-14; next: headline re-measure + k=2 evaluation (Phases 2–3), then bug B):**
 
-1. **Correctness bug A — specdec even-k (k=2, k=4) committed-stream divergence (report-only until fixed).** Late-position knife-edge argmax flips at ~95 % of the stream, deterministic per prompt, distinct from bug B's wrong streams. Same batched-verify-vs-serial bit-exactness family; W4's diagnostic runs confirmed the diagnostic's short prompts are width-sensitive even at verify width 2 within a fixed head state, i.e. the boundary is content/fixture-sensitive, not a clean width threshold. Root-cause + regression test is the next engine task; then re-run the specdec k∈{1,2,3,4} determinism gate.
+1. **Correctness bug A — RESOLVED 2026-09-14 (Phase 1): precision family, not a logic bug.** The W3 even-k divergence was a confound of a non-serial reference: the batched-verify forward is a different bf16 reduction order than the M=1 serial forward (drift ≤ 2 ulp) and flips the argmax only at knife-edge positions (top-2 gap ≤ 2–4 ulp; ~9 per 1024 on specdec, first flip at ~95–96 %). k=2 on the q4 head reproduces the pinned `139acb9d…` exactly; bf16 k=2 reproduces the W3 `06882d85…` exactly; the serial stream is `c70882fc…` (head-invariant). Binding gate policy: per-(fixture, config) stream hashes — never claim cross-config or against-serial bit-exactness. No code fix; no challenge-specific change without explicit approval (risk assessment in the Phase 1 section).
 2. **Correctness bug B — verify width ≥ 6 commits wrong tokens (report-only until fixed).** Root-cause hypothesis (strong, static + empirical): the "exactness chunk" split specified in the engine's design comments — 6..9-row causal verify SDPA as two ≤5-row calls — does not exist in `attentionWithCacheUpdate`; at qL·gqa > 32 the fused-vector SDPA path is left and wide verify attention is not bit-identical to serial. Boundary matches exactly (width 5 = 30 ≤ 32 clean; width 6 = 36 diverges at round 1); QMV verify and fused QKV/SwiGLU exonerated by exclusion probes. Full detail + provenance: W3 section. Fix is a separate task (chunked verify SDPA + re-run the determinism gate at k5–k8); **the `--spec-draft-n-max` / `QWEN_MTP_DRAFT_K` surface above 4 is broken, not merely slow, until then.**
 3. **W5 — `qmvbench --throughput N`: DONE 2026-09-14** — sustained throughput measured at M ∈ {1,2,4,8,9}, narrow/wide × routed/fallback (table in the QMV microbenchmark section): ~170–235 µs/call sync overhead in the serialized protocol; the routed kernel's M = 2..9 win grows to ~30% under sustained conditions; M = 1 is a wash. The M = 16/17 extension is **moot**: W3's optimum sits at k=2, not the sweep ceiling.
 4. **Thermal control for benchmarks** — per-rep `pmset -g therm` logging is wired; shorter run blocks / cooldowns remain, so absolute numbers become comparable across sessions.

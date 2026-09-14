@@ -4,16 +4,21 @@
 # time, parse the MTP step trace + response, compute the greedy stream hash,
 # and emit one JSON line on stdout.
 #
-# usage: run_cell.sh <tag> <env-spec> <port> <prompt-file> [extra-serve-args]
+# usage: run_cell.sh <tag> <env-spec> <port> <prompt-file> [extra-serve-args] [expect-head]
 #   env-spec: space-separated VAR=VAL pairs (only the fusion/layout knobs vary)
 #   extra-serve-args: optional raw CLI args appended to the serve command
 #     (W3: "--spec-draft-n-max 8" for draft depths above the offered default)
+#   expect-head: q4 | bf16 | empty (no assertion). Post-W4 hardening: every
+#     headline cell must declare its expected head state and fails loudly on
+#     mismatch — a headline silently measured on the BF16 fallback is the
+#     stale-binary error class.
 set -u
 TAG=$1
 ENVSPEC=$2
 PORT=${3:-18099}
 PROMPT_FILE=$4
 EXTRA_ARGS=${5:-}
+EXPECT_HEAD=${6:-}
 
 SERVER=/Users/cwong/ai/qwen38-mtp-server
 cd "$SERVER" || exit 1
@@ -102,11 +107,12 @@ pkill -f "qwen38-mtp-server serve --port $PORT" 2>/dev/null
 wait $SRV 2>/dev/null
 
 /tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$STDOUT_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" \
-  "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" <<'PYEOF'
+  "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" "$EXPECT_HEAD" <<'PYEOF'
 import json, sys, hashlib
 
 tag, stderr_log, stdout_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:9]
 bin_sha256, bin_mtime, server_head, engine_head, server_dirty, engine_dirty = sys.argv[9:15]
+expect_head = sys.argv[15] if len(sys.argv) > 15 else ""
 out = {
     "tag": tag,
     "fixture_hash": fixture_hash,
@@ -204,6 +210,21 @@ if head_selected:
     out["head_selected"] = head_selected
 if fusion_summary:
     out["fusion_summary"] = fusion_summary
+
+# Post-W4 hardening: the declared head state must be what actually loaded.
+if expect_head:
+    marker = "4-bit quantized" if expect_head == "q4" else "BF16 pinned"
+    if not head_selected:
+        print(json.dumps({"error": ("head gate: expected head state \"" + expect_head
+                                     + "\" but no 'MLXLM: MTP head selected:' line "
+                                     + "in the server log — cell void")}))
+        sys.exit(1)
+    if marker not in head_selected:
+        print(json.dumps({"error": ("head gate: expected head state \"" + expect_head
+                                     + "\" (marker \"" + marker + "\") but loaded "
+                                     + "\"" + head_selected + "\" — cell void")}))
+        sys.exit(1)
+    out["head_gate"] = "PASS (" + expect_head + ")"
 if n:
     out["stepTraceRounds"] = n
     if depths:

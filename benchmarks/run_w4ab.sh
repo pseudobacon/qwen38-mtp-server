@@ -140,7 +140,9 @@ run_cell() {
   out="benchmarks/results/w4-ab-${MODE}-${cell}.jsonl"
   thermal_snapshot "$tag"
   log "cell $tag env=[$envspec]"
-  "$DIR/run_cell.sh" "$tag" "$envspec" 18099 "$PROMPT" >> "$out" 2>"$out".cellerr
+  # EXPECT_HEAD=$cell double-gates at the cell level (run_cell fails loudly
+  # before the request if the wrong head loaded); gate_check re-checks.
+  "$DIR/run_cell.sh" "$tag" "$envspec" 18099 "$PROMPT" "" "$cell" >> "$out" 2>"$out".cellerr
   local rc=$?
   rm -f "$out".cellerr
   if [ $rc -ne 0 ]; then
