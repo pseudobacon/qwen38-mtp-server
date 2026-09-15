@@ -967,3 +967,61 @@ recommendation), `benchmarks/results/dpsweep-*.jsonl` (27 files, full
 provenance per line), `benchmarks/run_dpsweep.sh`, `benchmarks/run_cell.sh`
 (max-tokens arg), `docs/HANDOFF.md`. No source changes in either repo
 (library sense); no new binaries; engine untouched.
+
+## 2026-09-15: MTP exactness / width-consistency audit + RAM prefix cache (IN PROGRESS)
+
+Branch `feature/mtp-exactness-prefix-cache` in both repos. Binary `e448b2e2`.
+
+### Phase A audit findings (call-path map done)
+
+- **Engine implements EXACT speculative rejection sampling at T>0**
+  (`Qwen38MTPBlockSession.generateRound`, sampling.enabled = temperature > 0):
+  drafts sampled from q = softmax(filters(penalties(headRow))), target
+  p = softmax(filters(penalties(verifyRow))) with identical per-position
+  penalty frequency history; accept r <= min(1, p/q); reject resamples
+  max(0, p-q) (log-space, 1e-10 floor on zeros); bonus sampled from p. The
+  server validation comment ("speculative sampling is not implemented") is
+  STALE — doc drift to fix.
+- **DEFECT F1**: T=0 + non-default penalties + mtp_enabled: the greedy draft
+  round selects raw (unpenalized) target argmaxes; penalties apply only to
+  the first primary after prefill. The documented contract (validation
+  comment) claims serial-depth fallback, but the server never enforces it
+  (`hasNonDefaultPenalties` is computed and unused in the generation path).
+  Fix: force depth 0 when penalties are non-default (small, self-contained,
+  provably correct; matches documented contract; serial penalty path is
+  exactly correct).
+- No per-request seed (global MLXRandom, unseeded per request; no `seed`
+  API field); no logit bias; n>1 rejected. min_p supported [0,1].
+- Rollback state: backbone KV (snapshot/trim + GDN recurrent checkpoint),
+  head KV (trimTrimmable), tokenHistory (penalty history), pendingHidden/
+  Primary/Top2 (repair forward); RNG not rolled back (unneeded for
+  distributional correctness).
+- **Phase B pre-existing**: `RadixKVCacheManager` already implements a
+  token-prefix radix KV cache (LRU-leaf eviction under memory pressure,
+  TTL, config-namespace match, store-on-success only, begin() clones into
+  private session state = CoW). Phase B = audit/harden/benchmark: add
+  identity namespacing, metrics, explicit byte budget; B3/B4 tests +
+  TTFT benchmark.
+
+### Status — Phase A (speculative exactness) COMPLETE
+
+- **F1 fix (server)**: `SamplingParameters.effectiveMTPEnabled` = `mtpEnabled && !hasNonDefaultPenalties`; both `decodeDepth` sites + the MTP sampling-config construction use it. Non-default-penalty requests now run serial target-only (penalties applied to target). Server test added.
+- **A4 math (engine)**: `acceptanceAlpha`, `residualLogits`, `applySamplingFilters` extracted as pure statics on `Qwen38MTPBlockSession`; 8 pure unit tests in `Qwen38MTPKernelTests` (acceptance zero-q floor, residual p-q support / p==q fallback / zero-prob negligible, filter temperature/top-k/top-p/min-p). Bit-identical to the inline behavior.
+- **A4 distributional harness (engine)**: env-gated `testA4DistributionalParity` (QWEN_MTP_DIST_HARNESS=1) — 64 trials/mode at T=0.8/1.0, top-8 carried-mass Δ < 0.08 (gate 0.15). Confirms MTP rejection sampling preserves the target distribution end-to-end.
+- **A3 width matrix**: covered by the prior draft-depth policy sweep (k=1..8 in serial family) — `DRAFT-DEPTH-POLICY.md`.
+- **Contract**: `benchmarks/MTP-CORRECTNESS-CONTRACT.md` (greedy exact modulo near-tie ulp; stochastic exact distribution; penalties rejected; do-not-claim list; reproduction commands).
+- **Dropped**: the global-MLXRandom seeded-categorical kernel test (tests MLX's RNG, races the diagnostic suite under concurrent cross-suite execution).
+- **Gate**: engine `Qwen38MTPKernelTests` (10) + `Qwen38MTPDiagnosticTests` (2) green; server `HTTPServerTests` (122) green. Engine committed before server.
+
+### Plan
+
+A. F1 fix (server) + contract doc + A3 width matrix (engine diagnostic) +
+   A4 unit tests (engine: extract acceptance/residual math, pure tests) +
+   A4 distribution harness (MTP on/off, T=0.8/1.0, N trials, next-token +
+   completion-length distributions).
+B. Radix hardening (namespace, metrics, budget) + B3 tests + B4 TTFT
+   fixtures (4K/16K shared prefix, multi-turn, cold-miss control).
+
+Deliverables: benchmarks/MTP-CORRECTNESS-CONTRACT.md, benchmarks/PREFIX-CACHE.md,
+fixtures + results, updated progress/HANDOFF, engine commits before server
+commits, merge both to main.
