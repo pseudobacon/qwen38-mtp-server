@@ -5,8 +5,8 @@ import MLX
 /// `MLXFast.metalKernel(name:inputNames:outputNames:source:header:...) ->
 /// MLXFast.MLXFastKernel`. Deliberately trivial: it must compile and construct.
 public enum MLXFastProbe {
-    public static func buildProbeKernel() throws -> MLXFast.MLXFastKernel {
-        return try MLXFast.metalKernel(
+    public static func buildProbeKernel() -> MLXFast.MLXFastKernel {
+        return MLXFast.metalKernel(
             name: "qwen38_probe",
             inputNames: ["x"],
             outputNames: ["out"],
