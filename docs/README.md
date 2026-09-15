@@ -74,6 +74,7 @@ produce a headline number.
 | `QWEN_MTP_DRAFT_K` | unset (pinned k = 2) | Pins the per-round draft depth to `min(offer, k)`; `3` is the rollback knob for the pre-flip adaptive default (reproduces the registered k = 3 streams bit-exact). The stored calibration depth (below) is a hint that loses to an explicit `--spec-draft-n-max` or this var |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |
 | `QWEN_MTP_STEP_TRACE` | off | Per-request MTP-STEP-SUMMARY on stderr (rounds / proposed / accepted / avgStepMs / component timings) |
+| `MLX_CHUNKED_PREFILL` | OFF | **Long-context support (32K–64K).** `1` enables chunked causal prefill, bounding the quadratic `[L,L]` scores buffer to `tile × L` (linear) so long prompts complete where the dense path traps at ~24K. Default OFF (bit-identical to the dense path). The server's admission control models the transient buffer and rejects oversized *dense* prefills with HTTP 507 / `prefill_buffer_exceeded`. See `docs/CHUNKED-PREFILL.md` |
 
 ### Draft-depth calibration (measure tokens/s, pick the best depth)
 

@@ -121,11 +121,13 @@ accurate for the **default dense build**.
 
 ## Completion marker
 Fresh checkpoint procedure completed successfully in **both** repositories:
-`2026-09-15T19:13:34+00:00` (server `b756a19`, engine `62c4ac7`; both
+`2026-09-15T19:21:15+00:00` (server `b4374be`, engine `62c4ac7`; both
 `agent-checkpoint.sh` exit 0).
 
 ## Next step (exact)
 None. Phase I (chunked causal prefill) is complete and committed to `main` in
-both repos. All gates green: engine KVCache 118/118 + MTP diagnostic 3/3,
-server 224/224; 8K dense == chunked stream hash; 32K completes chunked, rejected
-dense (507). No follow-up work is required for this task.
+both repos; the roadmap (`progress.md` open item 7, Done list, `docs/README.md`
+runtime knobs) records chunked prefill as the long-context solution for 32K–64K
+(Flash attention not required). All gates green: engine KVCache 118/118 + MTP
+diagnostic 3/3, server 224/224; 8K dense == chunked stream hash; 32K completes
+chunked, rejected dense (507). No follow-up work is required for this task.
