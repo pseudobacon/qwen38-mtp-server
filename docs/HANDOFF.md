@@ -113,7 +113,7 @@ step; all tests are green and both working trees are clean.)
 
 ## Checkpoint markers
 
-- engine: 2026-09-15T02:54:58+01:00
-- server: 2026-09-15T02:54:52+01:00
+- engine: 2026-09-15T02:56:35+01:00
+- server: 2026-09-15T02:56:35+01:00
 
 The fresh-checkpoint procedure completed.
