@@ -1,19 +1,38 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Long-context benchmarking at 8K / 32K / 96K (Phase H) — measurement
-only, no code changes.**
+**COMPLETE: Chunked causal prefill (Phase I).**
 
-Benchmarked the server at agentic-coding context lengths, profiled the
-bottleneck, and wrote `docs/LONG-CONTEXT-BENCHMARKS.md`. **No server, engine,
-kernel, model, or quantization changes** — only fixtures, results, and docs were
-added. Server `main` @ `18ed7d7`; engine `main` @ `4cd8603` (untouched).
+Eliminates the quadratic `[seq × seq]` dense-attention scores buffer that traps
+the process (SIGTRAP) at ~24K+ context. **Default-OFF** (`MLX_CHUNKED_PREFILL=1`
+to enable); the off build is bit-identical to before. Server models the transient
+buffer in admission control (dense quadratic vs chunked linear); oversized dense
+prefills are rejected with HTTP 507 / `prefill_buffer_exceeded`.
+
+Validated: 8K greedy stream hash identical dense vs chunked (`763eccc3…`);
+32K completes with chunked (175.9 s) where dense traps; dense 32K cleanly
+rejected pre-prefill (507, `51.6 GB > 27.1 GB`). Engine KVCache 118/118 + MTP
+3/3, server 224/224 all green. See `docs/CHUNKED-PREFILL.md`.
 
 ## Repository state
-- **Engine** `/Users/cwong/ai/mlx-swift-lm`: `main` @ `4cd8603`, clean. **No
-  engine changes this task.**
-- **Server** `/Users/cwong/ai/qwen38-mtp-server`: `main` @ `18ed7d7`, with the
-  Phase H artifacts added (untracked until this task's commit):
+- **Engine** `/Users/cwong/ai/mlx-swift-lm`: `main` @ `4cd8603`, with Phase I
+  changes (uncommitted until this task's engine commit):
+  - `Libraries/MLXLMCommon/AttentionUtils.swift` — `chunkedCausalPrefill` + gate
+  - `Libraries/MLXLMCommon/KVCache.swift` — `MLXChunkedPrefill`, quantized chunked
+  - `Tests/MLXLMTests/KVCacheTests.swift` — 2 new tests
+- **Server** `/Users/cwong/ai/qwen38-mtp-server`: `main` @ `1a247b4`, with Phase I
+  changes (uncommitted until this task's server commit):
+  - `Sources/HTTPServer/Generation/MemoryAdmission.swift` — transient buffer model
+  - `Sources/HTTPServer/Generation/MLXGenerator.swift` — passes `chunkedPrefillEnabled`
+  - `Sources/HTTPServer/API/OpenAIValidation.swift` — 507 error response
+  - `Sources/HTTPServer/Routes/OpenAIRouter.swift` — catches `TransientBufferFailure`
+  - `Tests/HTTPServerTests/KVCacheConfigTests.swift` — 4 new admission tests
+  - `docs/CHUNKED-PREFILL.md` (new), `progress.md` (Phase I section), this file
+
+## Prior: Phase H long-context benchmarks
+The Phase H findings below (32K/96K infeasible on the dense path, prefill
+dominates, fused GDN not a long-context win) motivated Phase I. They remain
+accurate for the **default dense build**.
   - `benchmarks/make_longctx_fixtures.py` (new)
   - `benchmarks/prompts/longctx-{8k,16k,32k,96k}.txt` (new fixtures)
   - `benchmarks/results/longctx-2026-09-15/{ab-matrix.jsonl,NOTES.txt}` (raw data)
@@ -102,11 +121,11 @@ added. Server `main` @ `18ed7d7`; engine `main` @ `4cd8603` (untouched).
 
 ## Completion marker
 Fresh checkpoint procedure completed successfully in **both** repositories:
-`2026-09-15T17:31:33+01:00` (server `18ed7d7`, engine `4cd8603`; both
+`2026-09-15T19:13:34+00:00` (server `b756a19`, engine `62c4ac7`; both
 `agent-checkpoint.sh` exit 0).
 
 ## Next step (exact)
-Commit the Phase H artifacts to the server repo (fixtures + results +
-`docs/LONG-CONTEXT-BENCHMARKS.md` + `progress.md` + this `docs/HANDOFF.md`),
-merge `main`, and stop. No engine commit is needed (engine untouched). No follow-
-up work is required for this task.
+None. Phase I (chunked causal prefill) is complete and committed to `main` in
+both repos. All gates green: engine KVCache 118/118 + MTP diagnostic 3/3,
+server 224/224; 8K dense == chunked stream hash; 32K completes chunked, rejected
+dense (507). No follow-up work is required for this task.

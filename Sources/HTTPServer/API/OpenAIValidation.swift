@@ -157,6 +157,29 @@ public func openAIMemoryErrorResponse(_ error: MemoryAdmissionPolicy.AdmissionFa
     )
 }
 
+/// Builds the HTTP 507 response for a transient prefill-buffer admission
+/// failure (the quadratic dense scores buffer cannot fit in a single Metal
+/// buffer). Same envelope shape as `openAIMemoryErrorResponse`, with the
+/// `prefill_buffer_exceeded` code.
+public func openAITransientBufferErrorResponse(
+    _ error: MemoryAdmissionPolicy.TransientBufferFailure
+) -> Response {
+    let envelope = OpenAIErrorEnvelope(
+        error: .init(
+            message: error.errorDescription ?? "Prefill buffer exceeds the allocatable limit.",
+            type: "server_error",
+            param: nil,
+            code: "prefill_buffer_exceeded"
+        )
+    )
+    let data = try! JSONEncoder().encode(envelope)
+    return Response(
+        status: .insufficientStorage,
+        headers: ["Content-Type": "application/json; charset=utf-8"],
+        body: .init(data: data)
+    )
+}
+
 /// Validates a `ChatCompletionRequest` against the server configuration and
 /// the capabilities of the current runtime, before any model execution.
 ///

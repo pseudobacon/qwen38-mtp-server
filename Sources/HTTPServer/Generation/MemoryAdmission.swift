@@ -56,6 +56,19 @@ public struct MemoryAdmissionPolicy: Sendable {
     /// quantized KV cache begins. The active generation window stays in FP16
     /// so speculative verification is numerically exact.
     public let tailSize: Int
+    /// Query head count of the full-attention layers (24 for Qwen 3.8 27B).
+    /// Drives the transient prefill scores buffer: the dense path allocates
+    /// `numQueryHeads x L x L x 2` bytes for one layer; the chunked path
+    /// allocates `numQueryHeads x chunkedTileSize x L x 2`.
+    public let numQueryHeads: Int
+    /// Whether chunked causal prefill is enabled (env `MLX_CHUNKED_PREFILL=1`).
+    public let chunkedPrefillEnabled: Bool
+    /// Query rows per chunked tile (mirrors `MLXChunkedPrefill.tileSize`).
+    public let chunkedTileSize: Int
+    /// Metal's hard per-buffer cap (30.15 GiB on this hardware). A single
+    /// scores buffer that exceeds this triggers a Metal allocation failure
+    /// (crash), independent of the total budget.
+    public let metalMaxBufferBytes: Int
 
     public init(
         memoryLimitBytes: Int,
@@ -66,7 +79,11 @@ public struct MemoryAdmissionPolicy: Sendable {
         headDim: Int = Qwen38KVGeometry.headDim,
         keyBits: Int = 16,
         valueBits: Int = 16,
-        tailSize: Int = 1024
+        tailSize: Int = 1024,
+        numQueryHeads: Int = 24,
+        chunkedPrefillEnabled: Bool = false,
+        chunkedTileSize: Int = 512,
+        metalMaxBufferBytes: Int = 30_150_672_384
     ) {
         self.memoryLimitBytes = memoryLimitBytes
         self.systemSafetyReserveBytes = systemSafetyReserveBytes
@@ -77,6 +94,10 @@ public struct MemoryAdmissionPolicy: Sendable {
         self.keyBits = keyBits
         self.valueBits = valueBits
         self.tailSize = tailSize
+        self.numQueryHeads = numQueryHeads
+        self.chunkedPrefillEnabled = chunkedPrefillEnabled
+        self.chunkedTileSize = chunkedTileSize
+        self.metalMaxBufferBytes = metalMaxBufferBytes
     }
 
     /// KV-cache budget left for a request after the model baseline and the
@@ -106,7 +127,36 @@ public struct MemoryAdmissionPolicy: Sendable {
         return tailBytes + quantBytes
     }
 
-    /// Reject a request whose estimated KV growth exceeds the budget.
+    /// Transient prefill scores buffer, in bytes, for a prompt of `L` tokens.
+    ///
+    /// This is the peak *transient* allocation during prefill (one layer's
+    /// scores, freed between layers), on top of the steady-state KV cache:
+    ///
+    /// - Dense path: `numQueryHeads x L x L x 2` bytes (bf16) — quadratic.
+    ///   This is the buffer that overflows the Metal cap at 32K+ context.
+    /// - Chunked path: `numQueryHeads x chunkedTileSize x L x 2` bytes —
+    ///   linear in `L` (bounded, ~0.8 GB at 32K for tile 512).
+    public func transientPrefillBufferBytes(promptTokens L: Int) -> Int {
+        let l = max(0, L)
+        let heads = Double(numQueryHeads)
+        if chunkedPrefillEnabled {
+            return Int(heads * Double(chunkedTileSize) * Double(l) * 2.0)
+        } else {
+            return Int(heads * Double(l) * Double(l) * 2.0)
+        }
+    }
+
+    /// The largest single scores buffer the device can allocate: the Metal
+    /// hard cap with a 10% margin. The transient scores buffer is one buffer
+    /// allocated on top of the KV cache, so the binding constraint is the
+    /// single-buffer cap (a buffer larger than this fails at the Metal
+    /// allocator), independent of the steady-state KV budget.
+    public var safeTransientBufferBytes: Int {
+        metalMaxBufferBytes * 9 / 10
+    }
+
+    /// Reject a request whose estimated KV growth exceeds the budget, or whose
+    /// transient prefill scores buffer cannot fit in a single Metal buffer.
     public func check(promptTokens: Int, completionTokens: Int) throws {
         let growth = kvCacheGrowthBytes(
             promptTokens: promptTokens,
@@ -118,6 +168,16 @@ public struct MemoryAdmissionPolicy: Sendable {
                 budgetBytes: kvBudgetBytes,
                 promptTokens: max(0, promptTokens),
                 completionTokens: max(0, completionTokens)
+            )
+        }
+        let transient = transientPrefillBufferBytes(promptTokens: max(0, promptTokens))
+        guard transient <= safeTransientBufferBytes else {
+            throw TransientBufferFailure(
+                transientBytes: transient,
+                safeBytes: safeTransientBufferBytes,
+                promptTokens: max(0, promptTokens),
+                completionTokens: max(0, completionTokens),
+                chunkedPrefillEnabled: chunkedPrefillEnabled
             )
         }
     }
@@ -133,6 +193,26 @@ public struct MemoryAdmissionPolicy: Sendable {
             "Estimated KV cache \(estimatedBytes) bytes exceeds the "
                 + "memory budget of \(budgetBytes) bytes "
                 + "(prompt \(promptTokens) + completion \(completionTokens) tokens)."
+        }
+    }
+
+    /// A request whose transient prefill scores buffer exceeds the largest
+    /// single Metal buffer. With dense prefill this is the quadratic
+    /// `nQHeads x L^2 x 2` buffer; enabling `MLX_CHUNKED_PREFILL=1` makes it
+    /// linear in `L` and admits the request.
+    public struct TransientBufferFailure: Error, LocalizedError {
+        public let transientBytes: Int
+        public let safeBytes: Int
+        public let promptTokens: Int
+        public let completionTokens: Int
+        public let chunkedPrefillEnabled: Bool
+
+        public var errorDescription: String? {
+            "Estimated transient prefill buffer \(transientBytes) bytes "
+                + "exceeds the allocatable limit of \(safeBytes) bytes "
+                + "(prompt \(promptTokens) + completion \(completionTokens) tokens, "
+                + "chunked prefill \(chunkedPrefillEnabled ? "on" : "off"). Set "
+                + "MLX_CHUNKED_PREFILL=1 to bound the buffer."
         }
     }
 }

@@ -509,7 +509,8 @@ actor MLXGenerator {
             modelBaselineBytes: modelBaselineBytes,
             keyBits: kvScheme.keyBits,
             valueBits: kvScheme.valueBits,
-            tailSize: kvTailSize
+            tailSize: kvTailSize,
+            chunkedPrefillEnabled: ProcessInfo.processInfo.environment["MLX_CHUNKED_PREFILL"] == "1"
         )
         self.memoryRecoveryPolicy = MemoryRecoveryPolicy(
             enabled: memoryRecoveryEnabled,

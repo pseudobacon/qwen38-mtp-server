@@ -675,4 +675,66 @@ final class MemoryAdmissionTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - Transient prefill-buffer admission
+
+    private func transientPolicy(
+        memoryLimitBytes: Int,
+        chunkedPrefillEnabled: Bool,
+        numQueryHeads: Int = 24,
+        chunkedTileSize: Int = 512,
+        metalMaxBufferBytes: Int = 30_150_672_384
+    ) -> MemoryAdmissionPolicy {
+        MemoryAdmissionPolicy(
+            memoryLimitBytes: memoryLimitBytes,
+            systemSafetyReserveBytes: 0,
+            modelBaselineBytes: 0,
+            numQueryHeads: numQueryHeads,
+            chunkedPrefillEnabled: chunkedPrefillEnabled,
+            chunkedTileSize: chunkedTileSize,
+            metalMaxBufferBytes: metalMaxBufferBytes
+        )
+    }
+
+    func testTransientBufferDenseQuadratic() {
+        let policy = transientPolicy(memoryLimitBytes: 1 << 40, chunkedPrefillEnabled: false)
+        // nQHeads(24) x L x L x 2 (one layer's dense scores, bf16).
+        XCTAssertEqual(policy.transientPrefillBufferBytes(promptTokens: 100), 24 * 100 * 100 * 2)
+        XCTAssertEqual(
+            policy.transientPrefillBufferBytes(promptTokens: 32768),
+            24 * 32768 * 32768 * 2
+        )
+    }
+
+    func testTransientBufferChunkedLinear() {
+        let policy = transientPolicy(memoryLimitBytes: 1 << 40, chunkedPrefillEnabled: true)
+        // nQHeads(24) x tile(512) x L x 2 — linear in L.
+        XCTAssertEqual(
+            policy.transientPrefillBufferBytes(promptTokens: 32768),
+            24 * 512 * 32768 * 2
+        )
+    }
+
+    func testCheckRejectsOversizedDensePrefill() {
+        // Dense 32K scores buffer is 51.6 GB > 30.15 GB Metal cap. The KV
+        // growth (8.6 GB) fits the 1 TiB budget, so the *transient* gate trips.
+        let policy = transientPolicy(memoryLimitBytes: 1 << 40, chunkedPrefillEnabled: false)
+        do {
+            try policy.check(promptTokens: 32768, completionTokens: 128)
+            XCTFail("Expected TransientBufferFailure for dense 32K prefill")
+        } catch let error as MemoryAdmissionPolicy.TransientBufferFailure {
+            XCTAssertEqual(error.promptTokens, 32768)
+            XCTAssertFalse(error.chunkedPrefillEnabled)
+            XCTAssertGreaterThan(error.transientBytes, error.safeBytes)
+        } catch {
+            XCTFail("Unexpected error type: \(error)")
+        }
+    }
+
+    func testCheckAdmitsChunkedPrefillAt32K() {
+        // Chunked 32K buffer is 0.8 GB, well under the cap. Same KV growth as
+        // the dense case above, so only the transient gate differs.
+        let policy = transientPolicy(memoryLimitBytes: 1 << 40, chunkedPrefillEnabled: true)
+        XCTAssertNoThrow(try policy.check(promptTokens: 32768, completionTokens: 128))
+    }
 }

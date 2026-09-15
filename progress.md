@@ -1427,3 +1427,39 @@ built by `benchmarks/make_longctx_fixtures.py` (sha256 in
 - Do NOT claim 32K/96K work; they crash / are infeasible on this hardware.
 - N per cell is 3–4 (not 6–10) because each 8K request costs ~30 s and 32K/96K
   cannot complete; means have small spread.
+
+## 2026-09-15: Chunked causal prefill (Phase I) — COMPLETE
+
+Eliminates the quadratic `[seq × seq]` dense-attention scores buffer that traps
+the process (SIGTRAP) at ~24K+ context on this hardware. **Default-OFF**
+(`MLX_CHUNKED_PREFILL=1` to enable); the off build is bit-identical to before.
+
+- **Engine** (`../mlx-swift-lm`):
+  - `MLXChunkedPrefill` config enum in KVCache.swift (`MLX_CHUNKED_PREFILL`, tile 512,
+    min-seq 4096).
+  - `chunkedCausalPrefill` in AttentionUtils.swift: sequential query tiling over the
+    incrementally-grown cache, each tile's fused SDPA with a bottom-right-aligned
+    `.causal` mask (query `s+i` sees keys `[0, s+i]` — exact key set of the dense
+    prefill). Gated in `attentionWithCacheUpdate`'s KVCacheSimple branch (the path
+    the model's full-attention layers actually use in prefill) for a fresh causal
+    prefill (offset 0, L > 4096).
+  - `chunkedCausalQuantizedAttention` + `optSlice` for the quantized-cache variant.
+  - Tests: `testChunkedCausalPrefillMatchesDense` (KVCacheSimple, L 33/64/128/129),
+    `testChunkedCausalMatchesDense` (quantized, L 64/600/1024/1025, nRepeats 1/2).
+- **Server** (this repo):
+  - `MemoryAdmissionPolicy` now models the transient prefill buffer: dense
+    `nQHeads×L²×2` (quadratic) vs chunked `nQHeads×tile×L×2` (linear); a request
+    whose transient buffer exceeds the Metal single-buffer cap ×0.9 is rejected
+    with HTTP 507 / code `prefill_buffer_exceeded` (`TransientBufferFailure`,
+    `openAITransientBufferErrorResponse`, caught in OpenAIRouter).
+  - Construction site passes `chunkedPrefillEnabled` from the env flag.
+  - 4 new MemoryAdmission tests.
+- **Validation**:
+  - 8K greedy stream hash identical dense vs chunked (`763eccc3…`), chunked path
+    genuinely engaged (L > 4096).
+  - 32K completes with chunked (175.9 s) where the dense path traps.
+  - Dense 32K cleanly rejected pre-prefill: 507 (`51.6 GB > 27.1 GB`), 0.17 s.
+  - Engine KVCache 118/118, MTP diagnostic 3/3, server 224/224 all green.
+- Docs: `docs/CHUNKED-PREFILL.md`.
+- Do NOT claim 32K/96K work in the default (dense) build — they are rejected / trap.
+  They work only with `MLX_CHUNKED_PREFILL=1`.

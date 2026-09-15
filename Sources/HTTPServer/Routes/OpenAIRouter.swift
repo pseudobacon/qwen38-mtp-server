@@ -210,6 +210,8 @@ func registerOpenAIRoutes(
                 )
             } catch let error as MemoryAdmissionPolicy.AdmissionFailure {
                 return openAIMemoryErrorResponse(error)
+            } catch let error as MemoryAdmissionPolicy.TransientBufferFailure {
+                return openAITransientBufferErrorResponse(error)
             }
 
         // Admit the request through the single-lane scheduler. This suspends
