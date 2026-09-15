@@ -1,4 +1,4 @@
-# HANDOFF — MTP exactness (Phase A) + prefix cache (Phase B) (COMPLETE, pending merge)
+# HANDOFF — OpenAI-compatible tool calling (Phase C) (COMPLETE, merged to main)
 
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
 > `agent-checkpoint.sh` ran successfully in both repositories (exit 0) and
@@ -7,113 +7,106 @@
 
 ## Objective and acceptance criteria
 
-Two-phase task.
-- **Phase A** — audit speculative-decoding exactness (T=0 greedy
-  width-consistency; T>0 stochastic sampling correctness), produce a
-  compatibility contract, fix small self-contained defects.
-- **Phase B** — audit + harden the bounded, RAM-only, token-prefix
-  KV/session cache for TTFT / prefill-latency improvement (the cache already
-  exists; no SSD, no continuous batching, no kernel/head/quant/weight/MLX
-  changes).
-
-Both phases are code + test + doc; no product-behavior change beyond the
-self-contained F1 defect fix (Phase A) and the cache hardening (Phase B).
+Server-side OpenAI-compatible **function calling** for the Qwen 3.8 MTP server.
+The server must **transport, render, and parse** tool calls and **NEVER execute**
+them. Acceptance: request validation before model execution; `tool_choice`
+`required`/named and `parallel_tool_calls: true` rejected with 400 (not
+silently treated as `auto`); `finish_reason: "tool_calls"` on normal stop;
+malformed tool blocks degrade to content (never throw/crash); tokenization
+and KV caches keyed on tool content; pure-Swift tests for render/parse/
+serialize/validate; docs; full `HTTPServerTests` green.
 
 ## Result
 
-**Phase A (COMPLETE).**
-- T=0 greedy exact (modulo per-width near-tie ulps — pre-existing, documented
-  in DRAFT-DEPTH-POLICY.md). T>0 exact rejection sampling (q/p share the same
-  sampling controls).
-- **F1 defect fixed**: `hasNonDefaultPenalties` was computed but never enforced
-  in depth selection; added `effectiveMTPEnabled` (mtpEnabled &&
-  !hasNonDefaultPenalties) used at both `decodeDepth` sites.
-- **A4**: extracted `acceptanceAlpha`/`residualLogits`/`applySamplingFilters`
-  as pure static methods (bit-identical); 8 math unit tests + an env-gated
-  (`QWEN_MTP_DIST_HARNESS=1`) distributional-parity harness. Top-8 carried-mass
-  Δ: T=0.8 token0 0.047 / token1 0.031; T=1.0 token0 0.016 / token1 0.078 — all
-  under the 0.15 gate. Full-support TVD is informational only (tail-dominated
-  at N=64 over the 248k vocab).
-- Contract: `benchmarks/MTP-CORRECTNESS-CONTRACT.md`.
+**Phase C (COMPLETE, merged).** Phases A (MTP exactness) and B (RAM prefix
+cache) were already complete and merged to `main` before this task (server
+`ea89536`). This task adds Phase C; all changes are in the server repo only —
+the engine (`mlx-swift-lm`) is **untouched** (no engine commit needed).
 
-**Phase B (COMPLETE).**
-- Audited `RadixKVCacheManager` (radix-tree token-prefix store; store-on-
-  success; CoW via begin clone; TTL; LRU-leaf eviction under global memory
-  pressure). Key constraint: recurrent (gated-delta) layers are **not**
-  trimmable → a hit requires the stored history to be an **exact token-prefix**
-  of the new seed → the TTFT win is same-thread multi-turn continuation, not
-  interleaved shared-prefix.
-- Hardened: (1) **namespace** on `CacheEntry`/`RadixNode`, `matchPrefix`
-  requires `node.namespace == namespace`, MLXGenerator threads `cacheNamespace`
-  (model+head+template) into `matchPrefix`+`store` (closes the latent
-  cross-model serve gap); (2) **per-cache byte budget** `maxCacheBytes` (LRU
-  eviction on store; set to `memoryLimitBytes/4`); (3) **metrics** lifetime
-  hits/misses/evictions/stores + `Metrics` snapshot.
-- B3: 3 new `RadixKVCacheManagerTests` (namespaceMismatchMisses,
-  metricsCountHitsMissesEvictionsAndBytes, byteCapEvictsLRUOnStore).
-  `RadixKVCacheManagerTests` **11 green**; full `HTTPServerTests` **125 green**.
-- B4 fixture: `benchmarks/prefix_ttft.py` + `run_prefix_ttft.sh`. The
-  **match-level** proof of cache hits is `RadixKVCacheManagerTests` (hit ratio
-  > 0), not the wall-clock harness (which is entangled with SSE buffering and
-  text round-trip exactness — documented, not cited as a number).
-- Doc: `benchmarks/PREFIX-CACHE.md`.
+- **`finish_reason: "tool_calls"`** via a shared `toolCallFinishReason` helper in
+  `OpenAIRouter.swift`, used by both streaming and non-streaming paths.
+  Streaming now tracks emitted `toolCalls` (the `.toolCall` case previously
+  dropped them). Truncation reasons (`length`, `memory_pressure`) are
+  preserved.
+- **Rejections (400 `unsupported_parameter`):** `tool_choice: "required"` and
+  named `{function:{name}}` (the Qwen template cannot force a tool call);
+  `parallel_tool_calls: true` (no server-controlled parallel mode). `auto`/
+  `none` and `false`/omit accepted.
+- **Validation before model execution:** `validateTools` (type `function`, name
+  `[a-zA-Z0-9_-]` 1–64, unique names, `parameters` a JSON object, ≤ 128 tools),
+  `validateToolChoice`, `validateParallelToolCalls`, `validateToolConversation`
+  (every `tool`/`function` result references a prior assistant `tool_call` id —
+  no orphans, no cross-turn mismatch; assistant ids unique).
+- **Tokenization cache key** (`MLXGenerator.tokenizationCacheKey`, extracted
+  static) now includes assistant `tool_calls` (name|args) and tool-result
+  `tool_call_id`/`name` — closes a cross-conversation contamination gap.
+- **XML parameter newline fix** (`StreamingToolCallParser.parseXMLBlock`): the
+  template places each value on its own line; strip exactly one formatting
+  newline per side, preserving internal newlines.
+- **Docs:** `benchmarks/TOOL-CALLING.md` (internal contract),
+  `docs/TOOL-PROTOCOL.md` (public client contract).
+
+### Tests (pure Swift, no model weights; 43 new)
+
+`StreamingToolCallParserTests` (11), `ToolCallingValidationTests` (17),
+`ToolCallingRenderTests` (7), `ToolCallingHTTPTests` (3), `ToolCallingCacheTests`
+(4), plus 3 `RequestValidationTests` updated for the new orphaned-result rule.
+Full **`HTTPServerTests`: 168 green** (baseline 125 + 43).
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `feature/mtp-exactness-prefix-cache`,
-  HEAD `9bcffbf` (prefix-cache hardening). Working tree clean.
-- `../mlx-swift-lm`: branch `feature/mtp-exactness-prefix-cache`, HEAD `38f2bd2`
-  (A4 harness). Working tree clean. (Engine commit precedes server commit, per
-  protocol.)
-- **Both pending merge to `main`** (auto-merge rule; this is the one remaining
-  step).
+- `qwen38-mtp-server` (this repo): branch `main`, HEAD `a781bad` (Phase C,
+  fast-forward merge of `feature/prompt-tool-calling`, branch deleted). Working
+  tree clean.
+- `../mlx-swift-lm`: branch `main`, HEAD `38f2bd2`. Untouched by this task.
 
 ## Commands / verification
 
 ```
-# engine
-cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests   # 3 green (incl A4 harness, ~108s)
-cd ../mlx-swift-lm && swift test --filter Qwen38MTPKernelTests        # 10 green
-# server
-cd qwen38-mtp-server && swift test --filter RadixKVCacheManagerTests # 11 green
-cd qwen38-mtp-server && swift test --filter HTTPServerTests          # 125 green
-cd qwen38-mtp-server && swift build -c release --product qwen38-mtp-server
+swift build --target HTTPServer          # clean
+swift test --filter HTTPServerTests      # 168 green
+# focused:
+swift test --filter StreamingToolCallParserTests   # 11
+swift test --filter ToolCallingValidationTests     # 17
+swift test --filter ToolCallingRenderTests         # 7
+swift test --filter ToolCallingHTTPTests           # 3
+swift test --filter ToolCallingCacheTests          # 4
 ```
 
 ## Unresolved risks / caveats
 
-- Phase A stochastic MTP is **not** claimed distribution-exact beyond the A4
-  top-8 mass gate (Δ < 0.15); the distribution harness is env-gated and
-  N=64 (not a full-support proof).
-- Phase B end-to-end TTFT is a fixture, not a cited number: the cache hit
-  requires bit-exact token round-trip (text multi-turn not guaranteed) and the
-  wall-clock is entangled with SSE buffering + empty-content deltas. The match-
-  level proof is the radix tests.
-- Cross-session absolute tok/s and TTFT are non-comparable (thermal); ratios
-  within one run only.
+- No tool execution (server parses/returns only); execution is the client's job.
+- `tool_choice` `required`/named are rejected, not emulated (no template
+  mechanism to force a tool call).
+- Parse correctness is guaranteed; model adherence to the tool format is not
+  (malformed output degrades to visible content, request still succeeds).
+- Reasoning-tag marker mismatch (parser `think`/`/think` vs the template
+  marker) is pre-existing and unchanged; it affects the reasoning path
+  identically with and without tools.
 
 ## Do-not-repeat
 
-- Do not claim stochastic MTP exact without the A4 verification.
-- Do not use full-support TVD as the A4 gate — tail-dominated at N=64 over
-  248k vocab; use top-8 carried mass.
-- Do not change production sampling behavior (top-p non-standard transform) as
-  part of the exactness audit.
+- Never execute a tool from the server; transport/render/parse only.
+- Never silently treat an unrepresentable `tool_choice`/`parallel_tool_calls`
+  as `auto` — reject with 400.
+- Never swallow malformed tool blocks — emit them verbatim as content.
+- Keep tool content in both the tokenization cache key and the KV/session cache
+  key so conversations never cross-contaminate.
 - Do not run `head -N` on checkpoint output (SIGPIPE aborts before the marker
   write); redirect to a file.
-- Do not cite cross-session absolute tok/s or TTFT as a conclusion.
-- Do not create top-level `@Test` functions depending on global MLXRandom state
-  — they race other suites under concurrent cross-suite execution.
 
 ## Next step
 
-**Merge both repos to `main`** (auto-merge rule): engine `38f2bd2` first, then
-server `9bcffbf`; delete both feature branches. (This is the only remaining
-step; all tests are green and both working trees are clean.)
+None — Phase C is complete, tested, documented, merged to `main`, and
+checkpointed. A successor session should independently verify (per the resume
+procedure): `git status --short` (clean), `swift test --filter HTTPServerTests`
+(168 green), and confirm `docs/TOOL-PROTOCOL.md` + `benchmarks/TOOL-CALLING.md`
+exist. If new tool-calling scope is requested (e.g. an end-to-end model-in-
+the-loop tool-call harness), that is a new task.
 
 ## Checkpoint markers
 
-- engine: 2026-09-15T02:56:35+01:00
-- server: 2026-09-15T02:56:35+01:00
+- server: 2026-09-15T09:40:18+01:00
+- engine: 2026-09-15T09:40:18+01:00
 
 The fresh-checkpoint procedure completed.
