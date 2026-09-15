@@ -911,3 +911,59 @@ thermal drift (no thermal warning level recorded).
 
 **Files.** Server: `benchmarks/PROFILE-K2.md` §9 (new), this section,
 `docs/HANDOFF.md`. No source changes in either repo; no new binaries.
+
+## Draft-depth policy sweep (2026-09-15, NEGATIVE — k=2 retained)
+
+**Objective.** Decide the speculative draft-depth policy (fixed k=2 vs other
+fixed depth vs bounded adaptive) on end-to-end server measurements, closing
+the last local lever from the verify-tape profile (lever d: "k=2→1 removes
+12.1 ms/round at −1.22 tok/round"). Benchmark-and-decision task; no kernel,
+head, quantization, weight, or MLX source changes.
+
+**Protocol.** Full audit of the depth flag mapping (`--spec-draft-n-max` =
+per-round offer, `QWEN_MTP_DRAFT_K` = pin, actual d = min(offer, pin ?? 2),
+verify width M = d+1). Stage A recon (1 cold cell each) on essay1024 for
+s/k1/k2/k3/k4/k6/k8 — all deterministic, k4+ steeply dominated → cut.
+Stage B primary: s/k1/k2/k3 × 6 interleaved rotated reps (rep 1 warmup) on
+essay1024. Stage C generalization: same 6-rep protocol on specdec1024 and on
+the 128-token interactive regime (essay128, specdec128). Fresh server per
+cell, single binary `e448b2e2…` (all 76 cells), q4 head gate, per-rep
+determinism + phase-sum + constant-depth gates, thermal snapshot per cell.
+New runner `benchmarks/run_dpsweep.sh`; `run_cell.sh` gained an optional
+max-tokens argument (default 1024, existing behavior unchanged).
+
+**Result — k=2 is best in all four modes; keep the default.**
+
+| mode (median reps 2–6) | s | k1 | k2 | k3 | k4/k6/k8 (recon) |
+|---|---|---|---|---|---|
+| essay-1024 tok/s | 16.74 | 19.37 | **22.08** | 20.00 | 19.47 / 14.04 / 10.37 |
+| specdec-1024 tok/s | 15.36 | 18.61 | **21.27** | 20.70 | — |
+| essay-128 tok/s | 15.13 | 19.23 | **24.70** | 21.90 | — |
+| specdec-128 tok/s | 16.77 | 19.99 | **25.04** | 18.77 | — |
+
+k2 wins decode and wall time in 4/4 modes. k1's cheaper round never pays
+(k2 beats k1 by 12–22 %). Diminishing returns begin at k3 (−9.4 % essay /
+−2.7 % specdec, the latter inside noise and never ahead) and collapse at
+k4/k6/k8. No meaningful TTFT difference (identical prefill; first-round
+delta ≤ ~100 ms vs startup variance). No mode in which any other depth wins
+→ no adaptive policy, no separate interactive/throughput mode. No candidate
+clears the positive-change bar (≥ 3 % sustained beyond noise, bit-exact,
+no interactive regression).
+
+**New finding — near-tie width-family streams (pre-existing).** Greedy
+streams are per verify-width family, not globally identical, on specdec-800:
+M=1 `c70882fc…`, M=2 `a3dfa862…`, M=3/M=4 `139acb9d…` (registered). First
+M=1 vs M=3 divergence at completion token 989/1024 (reproduced). Essay
+families all agree for 1024 tokens; specdec 128-token prefixes all agree
+(`6eb4c26a…`). Cause class: per-width accumulation-order ulps flipping a
+rare near-tie argmax. Not a regression from this task; the registered k=2
+product stream is unaffected; cross-width greedy identity is an open item
+(kernel/numerics scope). Streams were gated per family in the sweep; times
+unaffected.
+
+**Files.** Server: `benchmarks/DRAFT-DEPTH-POLICY.md` (protocol, flag map,
+per-family stream table, raw-result locations, result tables, noise caveats,
+recommendation), `benchmarks/results/dpsweep-*.jsonl` (27 files, full
+provenance per line), `benchmarks/run_dpsweep.sh`, `benchmarks/run_cell.sh`
+(max-tokens arg), `docs/HANDOFF.md`. No source changes in either repo
+(library sense); no new binaries; engine untouched.

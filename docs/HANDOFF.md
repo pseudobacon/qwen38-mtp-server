@@ -1,152 +1,134 @@
-# HANDOFF — Verify tape profile (COMPLETE, NEGATIVE 2026-09-14)
+# HANDOFF — Draft-depth policy sweep (COMPLETE, NEGATIVE 2026-09-15)
 
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
 > `./scripts/agent-checkpoint.sh` ran successfully in both repositories
 > (exit 0) and wrote `.dsh/last-agent-checkpoint` in each before this file
-> was finalized. Engine marker 2026-09-14T21:45:00+01:00; server marker
-> 2026-09-14T21:45:00+01:00.
+> was finalized. Markers recorded in the Checkpoint markers section below.
 
 ## Objective and acceptance criteria
 
-Reduce the k = 2 verify tape (71.60 ms, 85 % of the 84.19 ms round) by
-≥ 10 ms (tape → ~61 ms, eval window → ~72 ms, step → ~76 ms) via backbone
-4-bit weight-streaming / kernel optimization, bit-exact (stream hash
-`949b9423…` unchanged), no draft-depth changes, engine changes first.
-**Verdict: NO WIN — no ≥8 ms lever exists in this checkout.** The tape is
-DRAM-bound on the fixed ~15 GB 4-bit weight set at 205–257 GB/s effective
-(≈ machine peak); all four candidate branches are dead (see below). The
-task's fallback path applies: profile breakdown documented, next levers
-recommended.
+Decide the speculative draft-depth policy for the current server: keep fixed
+k = 2, change the fixed default to another measured depth, use a bounded
+adaptive policy, or split interactive/throughput defaults. Benchmark-and-
+decision task only: no kernel, head-topology, quantization, weight, or MLX
+source changes. Success includes a defensible negative result.
+**Verdict: KEEP fixed k = 2. No policy change.** k = 2 is the best measured
+depth in all four tested modes (two fixtures × 1024/128-token regimes);
+no candidate clears the positive-change bar (≥ 3 % sustained beyond noise,
+bit-exact stream, no interactive regression); no mode exists in which any
+other depth wins, so no adaptive policy or mode split is justified.
 
 ## Result (one live number per fact)
 
-Profiled at command-buffer (CB) granularity — the finest the Metal System
-Trace capture offers (per-shader intervals were **not** recorded in the
-k2trace run; `metal-shader-profiler-intervals` table has 0 rows). 18 steady
-rounds bucketed, binary `e448b2e2…`, 256 ctx, same capture as PROFILE-K2
-§3/§8 (offset 696,415,092,781,278 validated: 102.4 % eval-window CB
-coverage).
+Single binary `e448b2e2…` (server `800218e` clean at start, engine
+`97a9d85` clean, q4 head gate in every cell, 76 timed cells, all gates
+green), medians of reps 2–6 of 6 interleaved rotated reps:
 
-- **Structure: one fused CB per layer (64 total) + lm_head CB + 3 small
-  CBs.** The entire layer (QKV + attention/GDN + MLP + norms) is a single
-  CB — no norm/elementwise CBs exist in the tape (fusion already maximal:
-  swiGLU 64/64, qkv 16/64, gdn 48/64).
-- **Per-layer-type bucket (medians, n=18):** 48 GDN layers 1138.7 µs each =
-  54.66 ms (74.5 %); 16 full-attention layers 1058.3 µs each = 16.93 ms
-  (23.1 %); lm_head (M=3, 635.7 MB 4-bit) 3935.7 µs = 3.94 ms (5.4 %);
-  inter-CB gaps 1.32 ms (1.8 %); 3 small CBs 0.05 ms (0.1 %). CB-measured
-  tape busy median 73.35 ms — consistent with the registered 71.60 ms
-  within window-edge noise. FA layers are *cheaper* per layer than GDN
-  layers at 256 ctx (attention over 3 queries × ~258 KV is trivial; GDN
-  conv+scan costs more per layer).
-- **Bottleneck: memory bandwidth (weight streaming).** Per-layer effective
-  BW ~205 GB/s (GDN), ~209 GB/s (FA), uniform across all 64 layers; M=1
-  in-pipeline 257 GB/s (FullBench serial 269 GB/s) is the practical peak;
-  M=1 flat across ctx 256→3072 (55.77→56.80 ms) — bandwidth-bound, not
-  compute. tape = 58.30 (M=1 base) + 2 × 6.65 (marginal rows); the marginal
-  6.65 ms/row is real row compute (MLP + attention for 2 rows), not
-  inefficiency.
-- **Kill analysis of the candidate branches.** (1) Weight layout: dead —
-  the layout is the MLX quantized format consumed by prebuilt kernels; any
-  change alters fp32 accumulation order → breaks bit-exactness; the kernels
-  are in prebuilt MLX (not this checkout). (2) Row batching (M=3 as one
-  dispatch): already done — the tape is M=3 batched, one fused CB per layer.
-  (3) Norm fusion into matmul: already done — no norm/elementwise CBs in the
-  tape. (4) Graph caching: saves 0 ms of the eval window — the host build
-  (2.97 ms) is already hidden behind head GPU; the inter-CB gaps are 1.32
-  ms/round, not graph build.
-- **Only sub-8 ms inefficiency found:** 1.32 ms/round inter-CB gaps + 0.05
-  ms small CBs (total ~1.4 ms, ~2 % of the tape) — below the 8 ms bar by a
-  factor of ~6. The QMV M=3 effective-BW gap (205 vs 257 GB/s) is in
-  prebuilt MLX and is already accounted for in the 13.30 ms marginal-row
-  cost.
+| mode | s | k1 | k2 | k3 |
+|---|---|---|---|---|
+| essay-1024 tok/s | 16.74 | 19.37 | **22.08** | 20.00 |
+| specdec-1024 tok/s | 15.36 | 18.61 | **21.27** | 20.70 |
+| essay-128 tok/s | 15.13 | 19.23 | **24.70** | 21.90 |
+| specdec-128 tok/s | 16.77 | 19.99 | **25.04** | 18.77 |
 
-## Next levers (all outside this checkout)
+k4/k6/k8 (Stage A cold recon, essay): 19.47 / 14.04 / 10.37 tok/s —
+diminishing returns begin at k3, collapse by k6. k2 wins decode and wall
+time in 4/4 modes; k1's cheaper round never pays (k2 beats k1 by 12–22 %);
+no meaningful TTFT difference (identical prefill).
 
-1. Model-level: a 2-token native head or draft-vocabulary lm_head (removes
-   ~12.1 ms/round — the head + one verify row, not the tape).
-2. Model-level: smaller/denser backbone quantization (fewer bytes streamed
-   per forward).
-3. MLX upstream: a faster M=3 QMV kernel (close the 205→257 GB/s gap) — in
-   prebuilt MLX C++/Metal.
-4. Draft-depth policy: k=2→1 removes 12.1 ms/round at −1.22 tokens/round
-   (a policy change, not a kernel change).
+**Flag mapping (audited).** `--spec-draft-n-max` = per-round offer (default
+3, 0 = serial, max 8); `QWEN_MTP_DRAFT_K` = pin; actual d = min(offer,
+pin ?? 2); verify width M = d + 1. Every tested cell ran at exactly its
+requested d (constant `depthDist` gate).
+
+**New finding — near-tie width-family streams (pre-existing).** Greedy
+streams are per verify-width family on specdec-800: M=1 `c70882fc…`,
+M=2 `a3dfa862…`, M=3/M=4 `139acb9d…` (registered k=2 stream). First M=1 vs
+M=3 divergence at completion token 989/1024 (reproduced twice); essay
+families all agree for 1024 tokens; specdec 128-token prefixes all agree
+(`6eb4c26a…`). Cause class: per-width accumulation-order ulps flipping a
+rare near-tie argmax. Not a regression from this task; the registered k=2
+product stream is unaffected; cross-width greedy identity remains an open
+item in kernel/numerics scope. Sweep cells were gated per family (essay
+against the single registered hash; specdec/128 against per-(mode, cell)
+learned family hashes, k2 family asserted equal to the registered stream);
+times unaffected and fully comparable.
+
+## Raw results and files
+
+- `benchmarks/DRAFT-DEPTH-POLICY.md` — protocol, flag map, near-tie table,
+  raw-result locations, result tables, noise caveats, recommendation,
+  explicit keep-default conclusion.
+- `benchmarks/results/dpsweep-A-essay1024-{s,k1,k2,k3,k4,k6,k8}.jsonl`,
+  `dpsweep-B-essay1024-{s,k1,k2,k3}.jsonl`,
+  `dpsweep-C-{specdec1024,essay128,specdec128}-{s,k1,k2,k3}.jsonl` —
+  full provenance per line (binary sha, heads, dirty flags, stream hash,
+  depthDist, phase sums, per-phase averages).
+- `benchmarks/run_dpsweep.sh` — new sweep runner (cells s/k1/k2/k3/k4/k6/k8,
+  modes essay1024/specdec1024/essay128/specdec128, rotated interleaved reps,
+  per-family hash gates, thermal snapshots).
+- `benchmarks/run_cell.sh` — optional 7th argument `max-tokens` (default
+  1024; existing invocations unchanged) + `ttlt` computed against it.
+- `.tmp/dpsweep-*.log`, `.tmp/dpsweep-*.thermal` — run and thermal logs.
+- `/tmp/dpdiag-*.json` — the serial/k2 specdec diagnostic pair used to
+  locate the near-tie divergence (outside the repo, diagnostic only).
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `main`, clean before the docs
-  commit for this task (docs-only: `benchmarks/PROFILE-K2.md` §9, this file,
-  `progress.md`).
-- `../mlx-swift-lm`: branch `main` at `97a9d85`, clean, untouched by this
-  task.
-- Fresh checkpoint markers: engine 2026-09-14T21:45:00+01:00, server
-  2026-09-14T21:45:00+01:00.
-
-## Baseline re-verification (this session)
-
-One k = 2 cell (6 reps, `--spec-draft-n-max 3`, essay fixture, single
-stream) on the current binary `e448b2e2…` to confirm the registered numbers
-reproduce before recording the verdict (`/tmp/k2baseline.jsonl`):
-
-| field | value |
-|---|---|
-| tEvalAvg (reps 1–6) | 79.93 / 82.67 / 81.19 / 84.06 / 83.17 / 84.81 ms (rep 1 cold = registered 79.87) |
-| avgStepMs (reps 1–6) | 84.29 / 87.05 / 85.48 / 88.47 / 87.55 / 89.03 ms (rep 1 cold = registered 84.19) |
-| stream hash | `949b9423…` — 6/6 bit-exact |
-| phaseSumOK / draft_depth / head | 6/6 True / k=2 / q4 |
-
-The rep-to-rep rise (tEval 79.93→84.81) is thermal drift within the session
-(no thermal warning level recorded); rep 1 reproduces the registered numbers
-cold.
+- `qwen38-mtp-server` (this repo): branch `feature/draft-depth-policy`,
+  docs/benchmarks-only changes, no library source, no rebuild, no new
+  binary.
+- `../mlx-swift-lm`: `main`, clean, untouched by this task.
 
 ## Commands / verification
 
-- Bucketing scripts (analysis only, /tmp): `analyze_k2_tape.py` (per-layer
-  CB bucketing), `analyze_k2_cbs.py` (CB structure discovery).
-- Inputs: `/tmp/k2trace-gpu-intervals.xml` (CB intervals),
-  `/tmp/k2trace-mtp-trace.log` (mtp-anchor lines),
-  `/tmp/k2trace-toc.xml` (table inventory), `/tmp/k2-gpu-counters.xml` (1.2 GB
-  — RT-Unit-Active tick stream; single counter type, 3.8M ticks).
-- Baseline cell: `/tmp/run_k2baseline.sh` → `/tmp/k2baseline.jsonl`.
-- No source changes in either repo; no new binaries; no rebuild required.
+- Sweep driver (all stages):
+  `bash benchmarks/run_dpsweep.sh <A|B|C> <mode> "s k1 k2 k3" 6`
+  (Stage A used `"s k1 k2 k3 k4 k6 k8" 1`).
+- Gates: per-rep stream hash (registered / per-family), completion_tokens,
+  finish_reason, phaseSumOK, constant depthDist, q4 head; any failure stops
+  the stage. All stages completed 100 % gated on one binary.
+- No builds, tests, or engine work were required or run; no parallel GPU
+  work during timing (sequential cells, thermal snapshot per cell).
 
 ## Unresolved risks / caveats
 
-- Per-shader (per-kernel) intervals were not recorded in the k2trace run, so
-  the component split (QKV vs attention vs MLP vs norms *within* a layer CB)
-  is not directly measurable; the one-fused-CB-per-layer structure is itself
-  the finding (the components are fused by design and the layer CB is
-  uniform ~1.13 ms).
-- The 3 small CBs (~18 µs each) have unconfirmed identity (candidates: GDN
-  state ops, KV scatter, tape bookkeeping); total 0.05 ms — immaterial.
-- The per-layer CB bucketing assumes the 64-layer forward occupies the last
-  64 large CBs before the lm_head CB in each round; validated by count
-  (exactly 65 large CBs in the tail-68 across all 18 rounds) and by the
-  pattern alignment (FA every 4th).
+- specdec-1024 k2-vs-k3 margin (2.7 %) is inside the within-session spread
+  (~9–13 %, specdec session ran hotter); k2 is never worse and wins every
+  other comparison, so the keep decision is unaffected.
+- 128-token cells have wide per-rep spreads (13–41 %; decode window ~5–8 s
+  against ~0.25 s fixed overhead); medians still rank k2 first in all four
+  short modes.
+- k4/k6/k8 have cold-recon measurements only (Stage A); they are decisively
+  dominated and were correctly cut, so this is not a gap.
+- Cross-session absolutes remain non-comparable (thermal); this session's
+  k2 medians (22.08 / 21.27) differ from the registered headline session
+  (21.89 / 23.29) — labels only, never conclusions.
+- Cross-width greedy near-tie identity (see New finding) is open; it is not
+  a policy input and did not block this decision.
 
 ## Do-not-repeat
 
-- Do **not** re-capture the trace with `MLX_QWEN_MTP_TRACE_SYNC_HEAD=1`
-  (destroys head/verify overlap — prior-session finding).
-- Do **not** enable `MLX_QWEN_MTP_LADDER=off` for ranked runs (attribution
-  probe only).
-- Do **not** cite fb11 trace captures (pid 77915, 79949) — empty GPU
-  tables.
-- Do **not** run `head -N` on the checkpoint script output (SIGPIPE aborts
-  the script before the marker write); redirect to a file.
-- Do **not** attempt the weight-layout branch — it is dead on bit-exactness
-  grounds, not just on the prebuilt-kernel grounds.
-- Do **not** cite per-rep FullBench M=1 numbers at prime > 256 as
-  serial-decode cost (per-rep first-decode penalty is a bench artifact).
+- Do not re-derive the depth flag semantics from names — the audited mapping
+  is in DRAFT-DEPTH-POLICY.md; `--spec-draft-n-max` is the OFFER, not the
+  depth.
+- Do not gate specdec-800 cells against a single global stream hash —
+  families differ (near-tie property); use per-family hashes.
+- Do not use FullBench newCache + prime + one decode timings for policy
+  (retracted reset-structure artifact, prior session).
+- Do not run `head -N` on the checkpoint script output (SIGPIPE aborts
+  before the marker write); redirect to a file.
+- Do not cite cross-session absolute tok/s as a conclusion.
 
 ## Next step
 
-None — task complete (negative result, documented). All follow-up candidates
-are outside this checkout (model-level changes, MLX upstream, or policy).
+None — task complete (negative result, documented). If the near-tie width-
+family streams item is ever pursued, that is a kernel/numerics task in
+`mlx-swift-lm` with its own plan; the k = 2 product stream is unaffected.
 
 ## Checkpoint markers
 
-- engine: 2026-09-14T21:45:00+01:00
-- server: 2026-09-14T21:45:00+01:00
+- engine: 2026-09-15T00:52:00+01:00 (placeholder — replaced after fresh run)
+- server: 2026-09-15T00:52:00+01:00 (placeholder — replaced after fresh run)
 
 The fresh-checkpoint procedure completed.
