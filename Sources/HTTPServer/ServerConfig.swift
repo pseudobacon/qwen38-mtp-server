@@ -79,6 +79,13 @@ struct ServerConfig: Sendable {
     /// HTTP 429 `engine_overloaded`.
     var maxQueueDepth: Int = 8         // --max-queue-depth
 
+    /// Maximum number of live in-memory sessions before the LRU session is
+    /// evicted. `--max-sessions`.
+    var maxSessions: Int = 128         // --max-sessions
+
+    /// Idle TTL (seconds) after which a session is expired. `--session-ttl`.
+    var sessionTTLSeconds: Int = 1800  // --session-ttl
+
     /// Flags that consume a following value argument.
     private static let valueTakingFlags: Set<String> = [
         "--host", "-H",
@@ -236,6 +243,8 @@ struct ServerConfig: Sendable {
         if let val = ProcessInfo.processInfo.environment["QWEN_MEMORY_RECOVERY"], let boolVal = Bool(val) { config.memoryRecoveryEnabled = boolVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_MEMORY_PRESSURE_THRESHOLD"], let doubleVal = Double(val) { config.memoryPressureThreshold = doubleVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_MAX_QUEUE_DEPTH"], let intVal = Int(val) { config.maxQueueDepth = intVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_MAX_SESSIONS"], let intVal = Int(val) { config.maxSessions = intVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_SESSION_TTL"], let intVal = Int(val) { config.sessionTTLSeconds = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_PREFILL_CHUNK_SIZE"], let intVal = Int(val) { config.prefillChunkSize = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_TOKENIZATION_CACHE_MAX_ENTRIES"], let intVal = Int(val) { config.tokenizationCacheMaxEntries = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_TOKENIZATION_CACHE_MAX_BYTES"], let intVal = Int(val) { config.tokenizationCacheMaxBytes = intVal }

@@ -7,6 +7,11 @@ transports, renders, and parses the call. Execution is the client's job.
 
 Internal contract, limits, and test matrix: `benchmarks/TOOL-CALLING.md`.
 
+Tool calls work identically within the server-owned [session API](./SESSION-API.md)
+(`POST /v1/sessions/{id}/completions`): assistant tool calls and `role: "tool"
+results` are stored in the session history and re-rendered on the next turn, and
+the server still never executes a tool.
+
 ## Request fields
 
 | Field | Values | Notes |

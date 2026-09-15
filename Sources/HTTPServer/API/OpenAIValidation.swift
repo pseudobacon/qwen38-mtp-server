@@ -58,6 +58,26 @@ public struct OpenAIErrorEnvelope: Codable, Sendable {
     public let error: ErrorDetail
 }
 
+/// Builds an OpenAI-shaped error envelope with an arbitrary HTTP status.
+/// Reused by the session endpoints (404/409) which are not 400s.
+public func openAIStatusErrorResponse(
+    status: HTTPStatus,
+    message: String,
+    type: String = "invalid_request_error",
+    param: String? = nil,
+    code: String
+) -> Response {
+    let envelope = OpenAIErrorEnvelope(
+        error: .init(message: message, type: type, param: param, code: code)
+    )
+    let data = try! JSONEncoder().encode(envelope)
+    return Response(
+        status: status,
+        headers: ["Content-Type": "application/json; charset=utf-8"],
+        body: .init(data: data)
+    )
+}
+
 /// Builds the HTTP 400 response for an `OpenAIRequestError`.
 public func openAIErrorResponse(_ error: OpenAIRequestError) -> Response {
     let envelope = OpenAIErrorEnvelope(

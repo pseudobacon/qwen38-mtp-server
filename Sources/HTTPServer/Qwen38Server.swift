@@ -111,6 +111,13 @@ struct QwenServer {
         //     the model executor or the SSE stream.
         let metricsCollector = MetricsCollector()
 
+        // 5b. Process-local, in-memory session store for the conversation API.
+        //     Bounded by LRU cap and idle TTL; no disk persistence.
+        let sessionStore = SessionStore(
+            maxSessions: config.maxSessions,
+            defaultTTL: TimeInterval(config.sessionTTLSeconds)
+        )
+
         // 5. Store config for use in request handlers
         app.storage[ServerConfigKey.self] = config
 
@@ -157,7 +164,8 @@ struct QwenServer {
                 scheduler: scheduler,
                 runtimeState: runtimeState,
                 generator: generator,
-                metricsCollector: metricsCollector
+                metricsCollector: metricsCollector,
+                sessionStore: sessionStore
             )
 
             try await app.execute()

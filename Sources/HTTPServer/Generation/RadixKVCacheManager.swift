@@ -375,6 +375,41 @@ public actor RadixKVCacheManager {
         return leaf.prefixTokens * Self.estimatedBytesPerToken
     }
 
+    /// Best-effort removal of the stateful leaf whose full prefix exactly
+    /// equals `tokens` (and which has no children). Returns the number of
+    /// leaves removed (0 or 1). Does nothing when no such leaf exists — e.g.
+    /// the entry was evicted, was split into an internal node plus a leaf,
+    /// or was never stored. This is shared-pool removal: a session deletion
+    /// releases its prefix only when no other entry shares it.
+    public func remove(tokens: [Int], namespace: String) -> Int {
+        guard !tokens.isEmpty else { return 0 }
+        guard let path = self.findLeafPath(tokens: tokens, node: self.root, path: [], consumed: 0) else {
+            return 0
+        }
+        self.removeLeaf(path: path)
+        return 1
+    }
+
+    /// Finds the child-index path to a stateful, childless node whose full
+    /// prefix exactly equals `tokens`, if one exists.
+    private func findLeafPath(tokens: [Int], node: RadixNode, path: [Int], consumed: Int) -> [Int]? {
+        if consumed == tokens.count {
+            return (node.children.isEmpty && node.cache != nil) ? path : nil
+        }
+        guard consumed < tokens.count else { return nil }
+        for (i, child) in node.children.enumerated() {
+            let seg = child.tokens
+            guard consumed + seg.count <= tokens.count else { continue }
+            guard tokens[consumed..<(consumed + seg.count)] == seg[...] else { continue }
+            if let result = self.findLeafPath(
+                tokens: tokens, node: child, path: path + [i], consumed: consumed + seg.count
+            ) {
+                return result
+            }
+        }
+        return nil
+    }
+
     /// The child-index path from the root to the LRU leaf, plus that leaf's
     /// full prefix length.
     private func findLRULeaf() -> (path: [Int], prefixTokens: Int)? {

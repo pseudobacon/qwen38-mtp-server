@@ -19,7 +19,8 @@ enum GenerationFragment: Sendable {
     case finished(
         reason: String,
         promptTokens: Int,
-        completionTokens: Int
+        completionTokens: Int,
+        tokenIDs: [Int]
     )
 
     /// Generator-side telemetry for one generation. Never written to SSE;
@@ -682,6 +683,31 @@ actor MLXGenerator {
         }
     }
 
+    /// Returns the seed token IDs for a request (rendered through the chat
+    /// template), for diagnostic bookkeeping such as a session's stored
+    /// prefix. CPU-only and tokenization-cached. Returns `[]` on failure.
+    func promptTokenIDs(
+        request: ChatCompletionRequest,
+        samplingParams: SamplingParameters
+    ) -> [Int] {
+        (try? applyChatTemplateWithCache(
+            messages: request.messages,
+            enableThinking: samplingParams.enableThinking,
+            tools: request.tools,
+            toolChoice: request.tool_choice
+        ))?.tokenIDs ?? []
+    }
+
+    /// Best-effort release of a stored radix-cache prefix (e.g. on session
+    /// deletion). The entry is shared with the global pool and matched by
+    /// token sequence; this removes it only if it is a leaf that is not
+    /// shared with other entries. Returns the number of nodes removed.
+    @discardableResult
+    func releaseCachedPrefix(tokens: [Int]) async -> Int {
+        guard !tokens.isEmpty else { return 0 }
+        return await kvCacheManager.remove(tokens: tokens, namespace: cacheNamespace)
+    }
+
     func tokenizationCacheStats() -> TokenizationCache.Stats {
         tokenizationCache.stats()
     }
@@ -729,7 +755,7 @@ actor MLXGenerator {
         } catch {
             logger.logString(.error, "Failed to apply chat template: \(error)")
             return AsyncStream { continuation in
-                continuation.yield(.finished(reason: "error", promptTokens: 0, completionTokens: 0))
+                continuation.yield(.finished(reason: "error", promptTokens: 0, completionTokens: 0, tokenIDs: []))
                 continuation.finish()
             }
         }
@@ -745,6 +771,7 @@ actor MLXGenerator {
                 let tokenizer = inferenceContext.tokenizer
                 
                 var emitted = 0
+                var completionTokenIDs: [Int] = []
                 var promptTokens = 0
                 var prefillSeconds = 0.0
                 var decodeSeconds = 0.0
@@ -996,6 +1023,7 @@ actor MLXGenerator {
                                 }
 
                                 emitted += validTokens.count
+                                completionTokenIDs += validTokens
                                 if !done && emitted >= maxTokens {
                                     finishReason = "length"
                                     done = true
@@ -1043,7 +1071,8 @@ actor MLXGenerator {
                         .finished(
                             reason: finishReason,
                             promptTokens: promptTokens,
-                            completionTokens: emitted
+                            completionTokens: emitted,
+                            tokenIDs: completionTokenIDs
                         )
                     )
 

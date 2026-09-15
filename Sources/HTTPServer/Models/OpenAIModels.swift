@@ -2,7 +2,7 @@ import Foundation
 
 struct ChatCompletionRequest: Codable, Sendable {
     let model: String
-    let messages: [ChatMessage]
+    var messages: [ChatMessage]
 
     var stream: Bool?
 
@@ -47,6 +47,11 @@ struct ChatCompletionRequest: Codable, Sendable {
     var tools: [ToolSpec]?
     var tool_choice: ToolChoice?
     var parallel_tool_calls: Bool?
+
+    // When true, the assistant message includes `token_ids` (the exact
+    // committed completion token IDs). Diagnostic only; absent by default.
+    // Works on both the stateless and session completion endpoints.
+    var include_token_ids: Bool? = nil
 }
 
 struct StreamOptions: Codable, Sendable {
@@ -102,8 +107,14 @@ struct ChatMessage: Codable, Sendable {
     /// renders tool results from `content` only.
     let name: String?
 
+    /// Diagnostic completion token IDs for this assistant turn. Present only
+    /// when the request set `include_token_ids: true`. These are the exact
+    /// committed target token IDs (excluding stop tokens); they are NOT a
+    /// request-side splice input and are not validated for splicing.
+    let token_ids: [Int]?
+
     enum CodingKeys: String, CodingKey {
-        case role, content, reasoning, reasoning_content, tool_calls, tool_call_id, name
+        case role, content, reasoning, reasoning_content, tool_calls, tool_call_id, name, token_ids
     }
 
     init(
@@ -113,7 +124,8 @@ struct ChatMessage: Codable, Sendable {
         reasoning_content: String? = nil,
         tool_calls: [ToolCall]? = nil,
         tool_call_id: String? = nil,
-        name: String? = nil
+        name: String? = nil,
+        token_ids: [Int]? = nil
     ) {
         self.role = role
         self.content = content
@@ -122,6 +134,7 @@ struct ChatMessage: Codable, Sendable {
         self.tool_calls = tool_calls
         self.tool_call_id = tool_call_id
         self.name = name
+        self.token_ids = token_ids
     }
 
     func encode(to encoder: Encoder) throws {
@@ -133,6 +146,7 @@ struct ChatMessage: Codable, Sendable {
         if let tool_calls = tool_calls, !tool_calls.isEmpty { try container.encode(tool_calls, forKey: .tool_calls) }
         if let tool_call_id = tool_call_id { try container.encode(tool_call_id, forKey: .tool_call_id) }
         if let name = name { try container.encode(name, forKey: .name) }
+        if let token_ids = token_ids { try container.encode(token_ids, forKey: .token_ids) }
     }
 }
 
@@ -354,6 +368,11 @@ struct ChatCompletionResponse: Codable, Sendable {
     let model: String
     let choices: [CompletionChoice]
     let usage: Usage?
+
+    /// The session this completion belongs to. Present only for session
+    /// completions (`POST /v1/sessions/{id}/completions`); absent for the
+    /// stateless endpoint.
+    var session_id: String? = nil
 }
 
 struct CompletionChoice: Codable, Sendable {
@@ -402,6 +421,57 @@ struct ChatCompletionChunk: Codable, Sendable {
         try container.encode(choices, forKey: .choices)
         if let usage = usage { try container.encode(usage, forKey: .usage) }
     }
+}
+
+// MARK: - Session API
+
+/// The committed result of one successful completion, passed to a session's
+/// `onFinished` callback. `content`/`reasoningContent`/`toolCalls` describe
+/// the assistant turn (no token IDs — the stored history is for re-rendering
+/// only). `completionTokenIDs` + `seedTokens` reconstruct the stored prefix
+/// (diagnostic). `promptTokens`/`completionTokens` update the token count.
+struct CompletionCommit: Sendable {
+    let content: String?
+    let reasoningContent: String?
+    let toolCalls: [ToolCall]
+    let completionTokenIDs: [Int]
+    let seedTokens: [Int]
+    let promptTokens: Int
+    let completionTokens: Int
+
+    /// The assistant message to append to the session history (no token IDs).
+    var assistantMessage: ChatMessage {
+        ChatMessage(
+            role: "assistant",
+            content: content,
+            reasoning_content: reasoningContent,
+            tool_calls: toolCalls.isEmpty ? nil : toolCalls
+        )
+    }
+}
+
+/// Request to create a session: `POST /v1/sessions`.
+struct SessionCreateRequest: Codable, Sendable {
+    let model: String?
+    let initial_messages: [ChatMessage]?
+    let ttl_seconds: Int?
+}
+
+/// Session metadata returned by create/inspect. `object` is `"session"`.
+/// No token IDs are exposed here.
+struct SessionObject: Codable, Sendable {
+    let id: String
+    let object: String
+    let created: Int
+    var last_accessed: Int? = nil
+    let model: String
+    let token_count: Int
+    var ttl_seconds: Int? = nil
+}
+
+/// Response to `DELETE /v1/sessions/{id}`.
+struct SessionDeleteResponse: Codable, Sendable {
+    let deleted: Bool
 }
 
 struct Model: Codable, Sendable {

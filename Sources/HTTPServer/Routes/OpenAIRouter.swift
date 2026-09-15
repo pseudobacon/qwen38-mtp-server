@@ -32,7 +32,8 @@ func registerOpenAIRoutes(
     scheduler: GenerationScheduler?,
     runtimeState: ModelRuntimeState,
     generator: MLXGenerator?,
-    metricsCollector: MetricsCollector
+    metricsCollector: MetricsCollector,
+    sessionStore: SessionStore
 ) {
     // Aggregate server metrics over the bounded rolling window. Read-only:
     // it never touches the model executor or the generation lane.
@@ -68,7 +69,7 @@ func registerOpenAIRoutes(
         // the scheduler is available. This stops admitting new
         // request streams during `.draining`, `.failed`, `.warming`,
         // `.initializing`, and `.memoryDegraded`.
-        guard await runtimeState.isReady(), let scheduler else {
+        guard await runtimeState.isReady(), let scheduler, let generator else {
             return await readyzResponse(runtimeState)
         }
 
@@ -96,6 +97,39 @@ func registerOpenAIRoutes(
 
         let serverConfig = app.storage[ServerConfigKey.self] ?? ServerConfig()
 
+        return try await performChatCompletion(
+            app: app,
+            request: request,
+            serverConfig: serverConfig,
+            runtimeState: runtimeState,
+            scheduler: scheduler,
+            generator: generator,
+            metricsCollector: metricsCollector,
+            logger: req.logger,
+            sessionID: nil,
+            onFinished: nil
+        )
+    }
+
+    // Shared completion pipeline for the stateless and session endpoints.
+    // `request` is the fully-rendered request (messages already merged for a
+    // session). `sessionID` (when set) is echoed on the non-streaming
+    // response. `onFinished` (when set) is invoked exactly once with the
+    // outcome: `(success, commit)`; on success `commit` carries the assistant
+    // message fields and the committed token IDs.
+    @Sendable
+    func performChatCompletion(
+        app: Application,
+        request: ChatCompletionRequest,
+        serverConfig: ServerConfig,
+        runtimeState: ModelRuntimeState,
+        scheduler: GenerationScheduler,
+        generator: MLXGenerator,
+        metricsCollector: MetricsCollector,
+        logger: Logger,
+        sessionID: String?,
+        onFinished: (@Sendable (Bool, CompletionCommit?) async -> Void)?
+    ) async throws -> Response {
         // Validate the request against the server configuration and the
         // capabilities of the current runtime, before any model execution.
         // Every rejection is an OpenAI-shaped 400.
@@ -128,7 +162,7 @@ func registerOpenAIRoutes(
         logMessage += " temperature=\(temperature) topP=\(topP) topK=\(topK)"
         logMessage += " minP=\(minP) enableThinking=\(enableThinking)"
         logMessage += " mtpEnabled=\(mtpEnabled)"
-        req.logger.debug("\(logMessage)")
+        logger.debug("\(logMessage)")
 
         let responseId = "chatcmpl-\(UUID().uuidString)"
         let timestamp = Int(Date().timeIntervalSince1970)
@@ -139,14 +173,11 @@ func registerOpenAIRoutes(
         // generator and to every matching `cancelGeneration` call.
         let generationID = GenerationID()
 
-        // Capture the logger before the body task: `Request` is not Sendable,
-        // but `Logger` is.
-        let logger = req.logger
-
         // Whether the caller asked for a usage report. For streaming this
         // gates the dedicated usage-only chunk; for non-streaming the usage is
         // always included in the single response.
         let includeUsage = request.stream_options?.include_usage == true
+        let includeTokenIDs = request.include_token_ids == true
 
         // Memory-aware admission control: estimate the prompt token count
         // (CPU-only tokenization, no model forward) and check the estimated
@@ -154,13 +185,10 @@ func registerOpenAIRoutes(
         // BEFORE scheduling and BEFORE any model execution, so an over-budget
         // request is rejected with an OpenAI-shaped 507 without touching the
         // single-lane queue or the model.
-        if let generator {
             let promptTokens = await generator.estimatePromptTokens(
                 request: request,
                 samplingParams: samplingParams
             )
-            let contextWindow = samplingParams.contextWindow
-            let maxTokens = samplingParams.maxTokens
             let promptTokenBudget = max(0, contextWindow - maxTokens)
             let effectivePromptTokens = min(promptTokens, promptTokenBudget)
 
@@ -177,7 +205,6 @@ func registerOpenAIRoutes(
             } catch let error as MemoryAdmissionPolicy.AdmissionFailure {
                 return openAIMemoryErrorResponse(error)
             }
-        }
 
         // Admit the request through the single-lane scheduler. This suspends
         // without blocking the HTTP thread until the lane is free. If the
@@ -271,6 +298,9 @@ func registerOpenAIRoutes(
                         // generator-side measurements yielded at stream end.
                         var finalReason = "stop"
                         var finalUsage: Usage?
+                        var finalTokenIDs: [Int] = []
+                        var streamContent = ""
+                        var streamReasoning = ""
                         var firstContentTime: ContinuousClock.Instant?
                         var generatorMetrics: GenerationMetrics?
                         var toolCalls: [ToolCall] = []
@@ -335,6 +365,7 @@ func registerOpenAIRoutes(
                                     if firstContentTime == nil {
                                         firstContentTime = .now
                                     }
+                                    streamContent += content
                                     let chunk = ChatCompletionChunk(
                                         id: responseId,
                                         object: "chat.completion.chunk",
@@ -360,6 +391,7 @@ func registerOpenAIRoutes(
                                     if firstContentTime == nil {
                                         firstContentTime = .now
                                     }
+                                    streamReasoning += reasoning
                                     let chunk = ChatCompletionChunk(
                                         id: responseId,
                                         object: "chat.completion.chunk",
@@ -381,7 +413,7 @@ func registerOpenAIRoutes(
                                     )
                                     try await writeSSE(chunk)
 
-                                case .finished(let reason, let promptTokens, let completionTokens):
+                                case .finished(let reason, let promptTokens, let completionTokens, let completionTokenIDs):
                                     // When the model produced one or more tool
                                     // calls and terminated normally ("stop"),
                                     // the finish reason is "tool_calls"
@@ -390,6 +422,7 @@ func registerOpenAIRoutes(
                                         toolCallCount: toolCalls.count,
                                         finishedReason: reason
                                     )
+                                    finalTokenIDs = completionTokenIDs
                                     if includeUsage {
                                         finalUsage = Usage(
                                             prompt_tokens: promptTokens,
@@ -446,7 +479,8 @@ func registerOpenAIRoutes(
                                             role: nil,
                                             content: nil,
                                             reasoning: nil,
-                                            reasoning_content: nil
+                                            reasoning_content: nil,
+                                            token_ids: includeTokenIDs ? finalTokenIDs : nil
                                         ),
                                         finish_reason: finalReason
                                     )
@@ -476,6 +510,22 @@ func registerOpenAIRoutes(
                             // Close response stream
                             _ = try await writer.write(.end).get()
 
+                            if let onFinished {
+                                let seedTokens = await generator.promptTokenIDs(
+                                    request: request, samplingParams: samplingParams
+                                )
+                                let commit = CompletionCommit(
+                                    content: streamContent,
+                                    reasoningContent: streamReasoning.isEmpty ? nil : streamReasoning,
+                                    toolCalls: toolCalls,
+                                    completionTokenIDs: finalTokenIDs,
+                                    seedTokens: seedTokens,
+                                    promptTokens: finalUsage?.prompt_tokens ?? 0,
+                                    completionTokens: finalUsage?.completion_tokens ?? 0
+                                )
+                                await onFinished(true, commit)
+                            }
+
                             recordMetrics()
                         } catch {
                             // A write failed: cancel only the matching generation
@@ -486,6 +536,9 @@ func registerOpenAIRoutes(
                             logger.warning(
                                 "SSE write failed for generation \(generationID); error=\(error.localizedDescription)"
                             )
+                            if let onFinished {
+                                await onFinished(false, nil)
+                            }
                             recordMetrics()
                         }
                         // Always release the lane, whether the generation
@@ -502,6 +555,7 @@ func registerOpenAIRoutes(
         var finishReason = "stop"
         var usage: Usage?
         var toolCalls: [ToolCall] = []
+        var completionTokenIDs: [Int] = []
         var firstFragmentTime: ContinuousClock.Instant?
         var generatorMetrics: GenerationMetrics?
         var metricsRecorded = false
@@ -556,8 +610,9 @@ func registerOpenAIRoutes(
                     content += text
                 case .reasoning(let text):
                     reasoningContent += text
-                case .finished(let reason, let promptTokens, let completionTokens):
+                case .finished(let reason, let promptTokens, let completionTokens, let tokenIDs):
                     finishReason = reason
+                    completionTokenIDs = tokenIDs
                     usage = Usage(
                         prompt_tokens: promptTokens,
                         completion_tokens: completionTokens,
@@ -588,6 +643,25 @@ func registerOpenAIRoutes(
         // Never fabricate a successful completion after cancellation.
         try Task.checkCancellation()
 
+        // Notify the session (if any) of a successful completion. The stored
+        // assistant message carries no token IDs (it is for re-rendering);
+        // token IDs are diagnostic-only and live on the API response.
+        if let onFinished {
+            let seedTokens = await generator.promptTokenIDs(
+                request: request, samplingParams: samplingParams
+            )
+            let commit = CompletionCommit(
+                content: content,
+                reasoningContent: reasoningContent.isEmpty ? nil : reasoningContent,
+                toolCalls: toolCalls,
+                completionTokenIDs: completionTokenIDs,
+                seedTokens: seedTokens,
+                promptTokens: usage?.prompt_tokens ?? 0,
+                completionTokens: usage?.completion_tokens ?? 0
+            )
+            await onFinished(true, commit)
+        }
+
         let response = ChatCompletionResponse(
             id: responseId,
             object: "chat.completion",
@@ -601,7 +675,8 @@ func registerOpenAIRoutes(
                         content: content,
                         reasoning: nil,
                         reasoning_content: reasoningContent.isEmpty ? nil : reasoningContent,
-                        tool_calls: toolCalls.isEmpty ? nil : toolCalls
+                        tool_calls: toolCalls.isEmpty ? nil : toolCalls,
+                        token_ids: includeTokenIDs ? completionTokenIDs : nil
                     ),
                     finish_reason: toolCallFinishReason(
                         toolCallCount: toolCalls.count,
@@ -609,7 +684,8 @@ func registerOpenAIRoutes(
                     )
                 )
             ],
-            usage: usage
+            usage: usage,
+            session_id: sessionID
         )
 
         let json = try JSONEncoder().encode(response)
@@ -621,6 +697,138 @@ func registerOpenAIRoutes(
             ],
             body: .init(data: Data(json))
         )
+    }
+
+    // MARK: - Session API
+    //
+    // Sessions are process-local, in-memory conversation owners. A session
+    // guarantees conversation ownership and history continuity; it does NOT
+    // guarantee a KV-cache hit (the prefix is re-rendered and the radix cache
+    // is consulted opportunistically, exactly like the stateless path).
+
+    // POST /v1/sessions — create an empty session.
+    app.post("v1", "sessions") { req async throws -> Response in
+        guard await runtimeState.isReady() else {
+            return await readyzResponse(runtimeState)
+        }
+        let session = await sessionStore.create()
+        let data = try JSONEncoder().encode(session)
+        return Response(
+            status: .created,
+            headers: ["Content-Type": "application/json; charset=utf-8"],
+            body: .init(data: Data(data))
+        )
+    }
+
+    // GET /v1/sessions/:id — inspect a session (history + token count).
+    app.get("v1", "sessions", ":id") { req async throws -> Response in
+        guard await runtimeState.isReady() else {
+            return await readyzResponse(runtimeState)
+        }
+        guard let id = req.parameters.get("id"),
+              let session = await sessionStore.session(id) else {
+            return openAIStatusErrorResponse(
+                status: .notFound,
+                message: "Session not found",
+                code: "session_not_found"
+            )
+        }
+        let data = try JSONEncoder().encode(session)
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json; charset=utf-8"],
+            body: .init(data: Data(data))
+        )
+    }
+
+    // DELETE /v1/sessions/:id — delete a session and release its cached prefix.
+    app.delete("v1", "sessions", ":id") { req async throws -> Response in
+        guard await runtimeState.isReady(), let generator else {
+            return await readyzResponse(runtimeState)
+        }
+        guard let id = req.parameters.get("id") else {
+            return openAIStatusErrorResponse(
+                status: .badRequest, message: "Missing session id", code: "invalid_value"
+            )
+        }
+        let freedPrefix = await sessionStore.delete(id)
+        if let tokens = freedPrefix, !tokens.isEmpty {
+            await generator.releaseCachedPrefix(tokens: tokens)
+        }
+        let data = try JSONEncoder().encode(SessionDeleteResponse(deleted: true))
+        return Response(
+            status: .ok,
+            headers: ["Content-Type": "application/json; charset=utf-8"],
+            body: .init(data: Data(data))
+        )
+    }
+
+    // POST /v1/sessions/:id/completions — generate within a session. The body is
+    // a normal chat-completion request whose `messages` are the new turn(s);
+    // they are appended to the session history, and the assistant reply is
+    // committed back on success.
+    app.post("v1", "sessions", ":id", "completions") { req async throws -> Response in
+        guard await runtimeState.isReady(), let scheduler, let generator else {
+            return await readyzResponse(runtimeState)
+        }
+        guard let id = req.parameters.get("id") else {
+            return openAIStatusErrorResponse(
+                status: .badRequest, message: "Missing session id", code: "invalid_value"
+            )
+        }
+        let decoded: ChatCompletionRequest
+        do {
+            decoded = try req.content.decode(ChatCompletionRequest.self)
+        } catch {
+            return openAIErrorResponse(
+                OpenAIRequestError(
+                    message: "Request body is not valid JSON.",
+                    param: nil,
+                    code: "invalid_value"
+                )
+            )
+        }
+        guard let baseMessages = await sessionStore.messages(id) else {
+            return openAIStatusErrorResponse(
+                status: .notFound, message: "Session not found", code: "session_not_found"
+            )
+        }
+        guard await sessionStore.beginCompletion(id) else {
+            return openAIStatusErrorResponse(
+                status: .conflict,
+                message: "Session already has an in-flight completion",
+                code: "session_busy"
+            )
+        }
+        var request = applyNoThinkSlashCommand(to: decoded)
+        let requestPart = request.messages
+        request.messages = baseMessages + requestPart
+        let serverConfig = app.storage[ServerConfigKey.self] ?? ServerConfig()
+        do {
+            return try await performChatCompletion(
+                app: app,
+                request: request,
+                serverConfig: serverConfig,
+                runtimeState: runtimeState,
+                scheduler: scheduler,
+                generator: generator,
+                metricsCollector: metricsCollector,
+                logger: req.logger,
+                sessionID: id,
+                onFinished: { success, commit in
+                    if success, let commit {
+                        await sessionStore.finishCompletion(
+                            id, requestMessages: requestPart, commit: commit
+                        )
+                    } else {
+                        await sessionStore.abortCompletion(id)
+                    }
+                }
+            )
+        } catch {
+            await sessionStore.abortCompletion(id)
+            throw error
+        }
     }
 }
 

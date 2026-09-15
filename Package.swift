@@ -57,6 +57,7 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "MLX", package: "mlx-swift"),
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "Tokenizers", package: "swift-transformers"),
             ]
         ),
     ]

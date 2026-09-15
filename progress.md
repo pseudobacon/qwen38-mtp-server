@@ -1106,3 +1106,82 @@ cache key, `--tools-enabled`); this change set closes the identified gaps.
 swift build --target HTTPServer
 swift test --filter HTTPServerTests   # 168 green
 ```
+
+## 2026-09-15: Session API + token-ID echo (Phase D) — COMPLETE
+
+Server-owned conversation sessions and an optional `include_token_ids`
+response extension, so multi-turn clients can own the conversation history
+server-side and (optionally) read back the exact committed token IDs.
+**Server repo only; engine untouched** (no kernel, head, quantization, or
+weight changes).
+
+### Design gate (resolved before implementation)
+
+- `docs/SESSION-BOUNDARIES.md`: the load-bearing token-boundary analysis. A
+  session re-render shares a **full** token prefix in non-thinking mode and a
+  **partial** prefix in thinking mode (integer-token evidence in
+  `TokenBoundaryTests`, `QWEN_RUN_WEIGHTS=1`). Therefore a session **does not
+  guarantee a cache hit**; reuse is opportunistic and identical in kind to a
+  token-faithful stateless client. No token splicing, no Jinja-template
+  duplication in Swift, no request-side `token_ids`.
+
+### What was done (server repo only)
+
+- **`include_token_ids`** (stateless + session): `include_token_ids: Bool?` on
+  `ChatCompletionRequest`; when `true`, `choices[0].message.token_ids`
+  (non-streaming) / final delta `token_ids` (streaming) carry the exact
+  committed target token IDs. Diagnostic only; absent by default; NOT a
+  request-side splice input.
+- **`ChatMessage.token_ids`**: `let token_ids: [Int]?`, custom encode omits
+  nil; request schema unchanged (decode accepts/ignores it).
+- **Session store** (`SessionStore` actor, new): process-local, in-memory,
+  LRU-capped (`--max-sessions`, default 128) + idle-TTL (`--session-ttl`,
+  default 1800 s). Owns the message history, a diagnostic cached prefix
+  (`seed + completion` token IDs), a per-session in-flight flag, and a token
+  count. No disk persistence, no cross-process sharing.
+- **Session routes** (`POST/GET/DELETE /v1/sessions[/:id]`,
+  `POST /v1/sessions/:id/completions`): create/inspect/delete + one-turn
+  completion. Completion merges stored history + the new turn, re-renders, and
+  on success commits the assistant turn back (via `onFinished`); on failure
+  nothing is committed. `session_id` echoed on non-streaming responses.
+  `DELETE` best-effort releases the radix prefix (leaf removal only).
+- **`CompletionCommit`**: carries the assistant-turn fields + committed token
+  IDs; `assistantMessage` builds the stored history message (NO token IDs —
+  history is for re-rendering only).
+- **Router extraction**: the stateless completion body extracted into
+  `@Sendable performChatCompletion(app:request:serverConfig:runtimeState:
+  scheduler:generator:metricsCollector:logger:sessionID:onFinished:)` shared by
+  both the stateless and session endpoints (also a compiler-fragility win for
+  the large closure).
+- **Radix** (`RadixKVCacheManager.remove`): best-effort leaf removal used by
+  session delete.
+- **Config** (`ServerConfig`): `maxSessions`, `sessionTTLSeconds` (+
+  `QWEN_MAX_SESSIONS` / `QWEN_SESSION_TTL`).
+- **Docs**: `docs/SESSION-API.md` (client contract + curl/Python examples),
+  `docs/SESSION-BOUNDARIES.md` (design note), `docs/TOOL-PROTOCOL.md` cross-ref.
+
+### Tests (pure Swift, no model weights; 13 new + 1 gated boundary test)
+
+- `SessionStoreTests` (6): create/exists/inspect/delete, completion lifecycle
+  (in-flight serialization + history continuity), delete releases cached
+  prefix, aborted completion commits nothing, LRU eviction, TTL expiration.
+- `TokenIDEchoTests` (7): `token_ids` omitted-when-nil + round-trip, commit
+  assistant message carries no token IDs, empty tool calls collapse to nil,
+  `session_id` round-trip, `include_token_ids` decode.
+- `TokenBoundaryTests` (gated `QWEN_RUN_WEIGHTS=1`): full non-thinking prefix,
+  partial thinking divergence.
+- **Full `HTTPServerTests`: 182 green** (168 → 182).
+
+### Do-not-claim
+
+- Session = conversation ownership + history continuity, **not** a cache hit.
+- No token splicing, no template duplication, no request-side `token_ids`.
+- No disk persistence, no auth, no cross-process sharing, no continuous
+  batching.
+
+### Reproduction
+
+```
+swift build --target HTTPServer
+swift test --filter HTTPServerTests   # 182 green
+```
