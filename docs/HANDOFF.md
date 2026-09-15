@@ -16,6 +16,15 @@ L>4096 for pc=0 but not per-512-chunk for pc=512). pc=0 is slower than pc=512
 (205 s vs 117 s at 32K), so this is a robustness fix, not a perf change. Engine
 `45df72a`, server `54f167c` (docs). Engine 7/7 + server 111/111 green.
 
+**Follow-up (Option B, profiling only, no code change):** the 32K prefill
+per-phase GPU breakdown (eval-synchronized timing, `MLX_CHUNKED_PREFILL=1`,
+pc=512, gated on L>100 to isolate the prefill from MTP verify): **FFN ~50% /
+GDN block ~27% / full-attention block ~23% / other ~0%**; top cost centers are the
+FFN (largest), the GDN block, and the full-attention block — all O(L) 4-bit
+GEMM/scan, none the O(L²) attention. The full-attn QKV/SDPA/O sub-split was not
+captured (compiled fast path). Engine left byte-identical to main. See
+`docs/PREFILL-PROFILE.md`.
+
 ### Prior: Flash-attention feasibility analysis (Phase I follow-up)
 
 Evaluated integrating a flash-attention kernel for prefill. **Decision: do not
