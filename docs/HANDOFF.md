@@ -1,9 +1,9 @@
-# HANDOFF — Fused GDN prework kernel (MLX_QWEN_FUSED_GDN) (IN PROGRESS — engine merged, server docs pending)
+# HANDOFF — Fused GDN prework kernel (MLX_QWEN_FUSED_GDN) (COMPLETE, merged to main)
 
-> **Checkpoint status.** The fresh-checkpoint procedure **must** be run via
-> `./scripts/agent-checkpoint.sh` before this file is finalized (it writes
-> `.dsh/last-agent-checkpoint` in each repo). Markers in the Checkpoint
-> markers section below.
+> **Checkpoint status.** The fresh-checkpoint procedure **completed**:
+> `agent-checkpoint.sh` ran successfully (exit 0) in both repositories and
+> wrote `.dsh/last-agent-checkpoint` in each before this file was finalized.
+> Markers in the Checkpoint markers section below.
 
 ## Objective and acceptance criteria
 
@@ -113,12 +113,16 @@ MLX_QWEN_FUSED_GDN=1 swift test --filter Qwen38MTPDiagnosticTests  # hashes matc
 
 ## Next step
 
-Complete the server commit (`progress.md` + this `docs/HANDOFF.md`), merge
-`qwen38-mtp-server` `feature/prompt-fused-gdn` to `main`, delete the branch,
-then run `./scripts/agent-checkpoint.sh` in both repos and record the fresh
-checkpoint markers below.
+None — the fused GDN kernel is complete, bit-exact (proven), tested, documented,
+and merged to `main` in both repos, and checkpointed. A successor session should
+independently verify (per the resume procedure): `git status --short` (clean) in
+both repos, `swift test --filter Qwen35FusedGDNProjectionTests` (17 green), and
+`swift test --filter Qwen38MTPDiagnosticTests` (3/3). To exercise the kernel
+live, set `MLX_QWEN_FUSED_GDN=1` (off by default).
 
 ## Checkpoint markers
 
-- server: (pending — run `./scripts/agent-checkpoint.sh` in `qwen38-mtp-server`)
-- engine: (pending — run `./scripts/agent-checkpoint.sh` in `mlx-swift-lm`)
+- server: 2026-09-15T14:59:00+01:00 (HEAD `757eabc`)
+- engine: 2026-09-15T14:59:03+01:00 (HEAD `4cd8603`)
+
+The fresh-checkpoint procedure completed.
