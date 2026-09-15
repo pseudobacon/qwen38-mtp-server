@@ -1185,3 +1185,71 @@ weight changes).
 swift build --target HTTPServer
 swift test --filter HTTPServerTests   # 182 green
 ```
+
+## 2026-09-15: Draft-depth calibration (wall-clock tokens/s per depth) — COMPLETE
+
+Operator-facing calibration mode that measures wall-clock decode throughput at
+several speculative draft depths and selects the fastest per model, storing the
+winner. **Server repo + one engine init hook.** No kernel, head topology,
+quantization, weight, or sampling-semantics changes. Off by default.
+
+### What was done
+
+- **Engine** (`Qwen38MTPBlockSession`, `mlx-swift-lm`): new optional
+  `draftDepth: Int?` init param (pinned per-round depth). Pinned depth takes
+  highest priority in `draftPolicy` (pinned → `QWEN_MTP_DRAFT_K` → default 2),
+  above the offer cap. This lets the server sweep depths 0..3 in one process
+  (the env var is a process-global static; the per-session pin is not).
+  `nil` path is unchanged (engine diagnostic 3/3 green).
+- **Server — model-free core** (`SpecDraftCalibration`, new): `DepthBenchmark`,
+  `ModelCalibration`, `SpecDraftCalibrationFile` (Codable); `parseDepths`,
+  `selectOptimalDepth` (max tok/s, ties → lower depth), `load`/`save` (pretty
+  JSON, missing/corrupt → nil), `report`, `iso8601Now`.
+- **Server — `ServerConfig`**: `--spec-draft-calibrate` (off by default),
+  `--spec-draft-calibrate-depths` (default `0,1,2,3`),
+  `--spec-draft-calibrate-tokens` (default 100),
+  `--spec-draft-calibration-file` (default `./spec-draft-calibration.json`),
+  `--spec-draft-n-max` now sets `specDraftNMaxExplicit`; `QWEN_MTP_DRAFT_K` read
+  into `specDraftK`. `resolvedForcedDraftDepth(storedCalibratedDepth:)` encodes
+  the precedence: explicit `--spec-draft-n-max` > `QWEN_MTP_DRAFT_K` > stored >
+  default 2.
+- **Server — `MLXGenerator`**: `forcedDraftK: Int?` init param (passed to both
+  production sessions); `calibrateDraftDepths(depths:tokens:)` sweeps pinned
+  sessions (decode-only timing, greedy, acceptance from `accepted/rejected`
+  counters); `applyCalibratedDepth(_:)` sets the pin for the running process.
+- **Server — `Qwen38Server`**: loads the store, resolves the forced k, passes
+  it to the generator; on `--spec-draft-calibrate`, runs the sweep after warmup,
+  logs the report, applies the winner, and saves the store (merge, keyed by
+  canonical model id). Calibration failure is non-fatal (serves at resolved k).
+- **Docs**: `docs/DEPTH-CALIBRATION.md` (usage, config format, resolution
+  precedence, caveats, future runtime-adaptation roadmap), `docs/README.md`
+  (example commands + runtime-knobs note), `progress.md`.
+
+### Tests (pure Swift, no model weights; 17 new)
+
+- `DraftCalibrationTests` (17): `parseDepths` (basic/trim/dedupe/out-of-range/
+  empty), `selectOptimalDepth` (max/empty/tie→lower), `report` format,
+  store round-trip / missing-file→nil / corrupt-file→nil,
+  `resolvedForcedDraftDepth` precedence (default/env/stored/explicit-n-max),
+  `iso8601Now` format.
+- **Full `HTTPServerTests`: 199 green** (182 → 199). Engine `Qwen38MTPDiagnosticTests` 3/3 green.
+
+### Do-not-claim
+
+- Wall-clock throughput measurement, **not** a 1024-token benchmark cell; do
+  not cite calibration tok/s as a headline number.
+- Depth selection never changes correctness (greedy output is bit-identical
+  across depths; it only changes tokens verified per round).
+- The stored depth is a **hint**: an explicit `--spec-draft-n-max` or
+  `QWEN_MTP_DRAFT_K` overrides it. `--spec-draft-n-max 0` disables MTP.
+- Online runtime adaptation (rolling acceptance → depth) is **documented as
+  future, not implemented**.
+
+### Reproduction
+
+```
+swift build --target HTTPServer
+swift test --filter DraftCalibrationTests   # 17 green
+swift test --filter HTTPServerTests        # 199 green
+cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests  # 3/3
+```

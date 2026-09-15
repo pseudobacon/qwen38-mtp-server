@@ -328,6 +328,15 @@ actor MLXGenerator {
     let mtpHeadPath: String
     let maxDraftDepth: Int
 
+    /// The per-round draft depth to pin in every session (the "forced k"),
+    /// distinct from `maxDraftDepth` (the offer cap). Resolved at startup from
+    /// the stored calibrated depth, `QWEN_MTP_DRAFT_K`, or the default; it can
+    /// be updated by the calibration sweep (`applyCalibratedDepth`) and is read
+    /// at session-creation time, so the change takes effect for subsequent
+    /// generations. `nil` lets the engine fall back to its env/static schedule.
+    /// Actor-isolated; mutated only from the calibration entry point.
+    private var forcedDraftK: Int?
+
     private let model: any Qwen38MTPTarget
     private let tokenizer: any MLXLMCommon.Tokenizer
     private let stopTokens: Set<Int>
@@ -350,6 +359,7 @@ actor MLXGenerator {
         modelPath: String = "./weights",
         mtpHeadPath: String = "./mtp-head",
         maxDraftDepth: Int = MLXFastConstants.qwenMTPMaxDepth,
+        forcedDraftK: Int? = nil,
         runtimeState: ModelRuntimeState? = nil,
         memoryLimitBytes: Int = 32 * 1024 * 1024 * 1024,
         systemSafetyReserveBytes: Int = 2 * 1024 * 1024 * 1024,
@@ -365,6 +375,7 @@ actor MLXGenerator {
         self.modelPath = modelPath
         self.mtpHeadPath = mtpHeadPath
         self.maxDraftDepth = maxDraftDepth
+        self.forcedDraftK = forcedDraftK
         self.logger = logger
 
         self.cacheNamespace = Self.cacheNamespace(modelPath: modelPath, mtpHeadPath: mtpHeadPath)
@@ -433,17 +444,16 @@ actor MLXGenerator {
         }
         print("MLXLM: MTP head selected: \(headURL.path) — \(headVariant)")
         // Load-time engagement proof for the draft depth (post-W4 queue,
-        // 2026-09-14): the session's default policy pins k = 2
-        // (Qwen38MTPBlockSession.defaultDraftDepth); QWEN_MTP_DRAFT_K
-        // overrides. Effective k = min(offer cap, forced ?? default).
-        let forcedDraftK = ProcessInfo.processInfo.environment["QWEN_MTP_DRAFT_K"]
-            .flatMap { Int($0) }
-        let effectiveDraftK = Swift.min(
-            maxDraftDepth, forcedDraftK ?? Qwen38MTPBlockSession.defaultDraftDepth)
+        // 2026-09-14): the effective per-round depth k = min(offer cap,
+        // forced ?? default). `self.forcedDraftK` is the resolved forced k
+        // (calibrated depth / QWEN_MTP_DRAFT_K / default), passed in from the
+        // server; when nil the engine falls back to its env/static schedule.
+        let resolvedForcedK = forcedDraftK ?? Qwen38MTPBlockSession.defaultDraftDepth
+        let effectiveDraftK = Swift.min(maxDraftDepth, resolvedForcedK)
         print("MLXLM: MTP draft depth: k=\(effectiveDraftK)"
-            + (forcedDraftK.map { " (forced via QWEN_MTP_DRAFT_K=\($0))" }
+            + (forcedDraftK.map { " (forced k=\($0); offer cap \(maxDraftDepth))" }
                ?? " (default \(Qwen38MTPBlockSession.defaultDraftDepth); offer cap "
-                  + "\(maxDraftDepth); override QWEN_MTP_DRAFT_K)"))
+                  + "\(maxDraftDepth))"))
 
         let (loadedModel, loadedTokenizer) = try Qwen38MTPHeadAttachment.withHeadAttached(
             backboneDirectory: targetURL,
@@ -499,6 +509,104 @@ actor MLXGenerator {
 
     func recordMemoryRecovery() {
         memoryRecoveryCount += 1
+    }
+
+    /// Update the per-round draft-depth pin after a calibration sweep. Takes
+    /// effect for subsequent generations (read at session-creation time).
+    func applyCalibratedDepth(_ k: Int) {
+        self.forcedDraftK = k
+        logger.info("Calibrated draft depth applied: k=\(k) (offer cap \(maxDraftDepth))")
+    }
+
+    /// The fixed calibration prompt: a continuation prompt that elicits a long
+    /// decode at temperature 0 (deterministic). The prefill cost is amortized
+    /// over the per-depth token budget, so the measurement is dominated by the
+    /// decode (the phase the draft depth affects).
+    static let calibrationPrompt = "Write a long, detailed story about a lighthouse keeper. Begin:"
+
+    /// Run the wall-clock draft-depth calibration sweep. For each depth, a
+    /// fresh session is pinned to that depth and runs `tokens` committed tokens
+    /// from a fixed prompt; per-depth wall-clock throughput (tokens/s) and
+    /// acceptance rate are returned. Model-free selection/formatting live in
+    /// `SpecDraftCalibration`; this is the only part that needs the model.
+    func calibrateDraftDepths(depths: [Int], tokens: Int) throws -> [DepthBenchmark] {
+        let seedTokens = try applyChatTemplate(
+            messages: [ChatMessage(role: "user", content: Self.calibrationPrompt)],
+            enableThinking: false,
+            tools: nil,
+            toolChoice: nil
+        )
+        guard !seedTokens.isEmpty else {
+            throw MLXFastError.invalidInput("calibration prompt tokenized to zero tokens")
+        }
+
+        var results: [DepthBenchmark] = []
+        for depth in depths {
+            results.append(try calibrateOneDepth(depth: depth, tokens: tokens, seedTokens: seedTokens))
+        }
+        return results
+    }
+
+    private func calibrateOneDepth(depth: Int, tokens: Int, seedTokens: [Int]) throws -> DepthBenchmark {
+        var genParams = GenerateParameters()
+        genParams.maxTokens = tokens
+        genParams.temperature = 0.0
+        genParams.topP = 1.0
+        genParams.topK = 1
+        genParams.minP = 0.0
+
+        let session = try Qwen38MTPBlockSession(
+            model: model,
+            stopTokens: stopTokens,
+            generateParameters: genParams,
+            sampling: MTPSamplingConfig(
+                temperature: 0.0,
+                topP: 1.0,
+                topK: 1,
+                minP: 0.0,
+                repetitionPenalty: 1.0,
+                presencePenalty: 0.0,
+                frequencyPenalty: 0.0
+            ),
+            historyLimit: 8192,
+            prefillChunkSize: 512,
+            draftDepth: depth
+        )
+        _ = try session.begin(seedTokens: seedTokens)
+
+        // Time only the decode (begin/prefill is excluded): the draft depth
+        // changes per-round draft proposals, not the one-time prefill.
+        var committed = 0
+        var done = false
+        let start = DispatchTime.now()
+        while committed < tokens && !done {
+            let result = try session.generateRound(depth: depth)
+            for token in result.tokens {
+                if stopTokens.contains(token) {
+                    done = true
+                    break
+                }
+                committed += 1
+                if committed >= tokens { break }
+            }
+        }
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1e9
+        let accepted = session.acceptedDraftTotal
+        let rejected = session.rejectedDraftTotal
+        session.release()
+
+        let tps = elapsed > 0 ? Double(committed) / elapsed : 0.0
+        let acceptance = (accepted + rejected) > 0
+            ? Double(accepted) / Double(accepted + rejected)
+            : nil
+
+        return DepthBenchmark(
+            depth: depth,
+            tokens: committed,
+            seconds: elapsed,
+            tokensPerSecond: tps,
+            acceptanceRate: acceptance
+        )
     }
 
     private func toSendableValue(_ value: Any) -> (any Sendable)? {
@@ -740,6 +848,7 @@ actor MLXGenerator {
         let registry = self.cancellationRegistry
         let stopTokens = self.stopTokens
         let maxDraftDepth = self.maxDraftDepth
+        let forcedDraftK = self.forcedDraftK
         let memoryRecoveryPolicy = self.memoryRecoveryPolicy
         let memoryAdmissionPolicy = self.memoryAdmissionPolicy
         let logger = self.logger
@@ -886,7 +995,8 @@ actor MLXGenerator {
                             frequencyPenalty: samplingParams.frequencyPenalty
                         ),
                         historyLimit: samplingParams.contextWindow,
-                        prefillChunkSize: samplingParams.prefillChunkSize
+                        prefillChunkSize: samplingParams.prefillChunkSize,
+                        draftDepth: forcedDraftK
                     )
 
                     defer { currentSession.release() }
@@ -1148,6 +1258,7 @@ actor MLXGenerator {
     ) async throws -> [Int] {
         let stopTokens = self.stopTokens
         let maxDraftDepth = self.maxDraftDepth
+        let forcedDraftK = self.forcedDraftK
         let inferenceContext = InferenceContext(model: self.model, tokenizer: self.tokenizer)
         let model = inferenceContext.model
 
@@ -1186,7 +1297,8 @@ actor MLXGenerator {
                 frequencyPenalty: samplingParams.frequencyPenalty
             ),
             historyLimit: samplingParams.contextWindow,
-            prefillChunkSize: samplingParams.prefillChunkSize
+            prefillChunkSize: samplingParams.prefillChunkSize,
+            draftDepth: forcedDraftK
         )
 
         _ = try session.begin(seedTokens: effectiveSeedTokens)

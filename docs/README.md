@@ -31,12 +31,12 @@ cd mlx-swift-lm && swift build --target MLXLLM
 swift build --configuration release --product qwen38-mtp-server
 
 # Tests (current counts)
-swift test --filter Qwen38MTPDiagnosticTests         # 2/2 (~70 s) — logit alignment + acceptance (91.02% at the pinned width-5 offer) + wide-verify serial family
+swift test --filter Qwen38MTPDiagnosticTests         # 3/3 (~70 s) — logit alignment + acceptance (91.02% at the pinned width-5 offer) + wide-verify serial family
 swift test --filter Qwen38SDPAExactnessTests          # 4/4 — SDPA exactness chunk unit suite (Phase 4, Bug B)
 swift test --filter Qwen35FusedSwiGLUProjectionTests  # 9/9
 swift test --filter Qwen35FusedQKVProjectionTests     # 9/9
 swift test --filter Qwen35FusedGDNProjectionTests    # 15/15
-swift test --filter HTTPServerTests                  # 121 passed, 0 failed
+swift test --filter HTTPServerTests                  # 199 passed, 0 failed
 
 # Benchmark matrix
 bash benchmarks/run_matrix.sh verify   # §0 fixture provenance check (both pinned fixtures)
@@ -71,9 +71,27 @@ produce a headline number.
 | `MLX_QWEN_FOUR_GDN` | ON | GDN 4-projection input fusion |
 | `MLX_COMPILED_DECODE` | ON | `compile(shapeless: true)` activation micro-fusions (opt-out for the Tahoe Metal JIT bug) |
 | `MLX_QWEN_MTP_HEAD_QUANT` | ON | 4-bit draft head `<QWEN_MTP_HEAD>/q4`; the tree is **required** by default (missing → loud startup failure); `0`/`false`/`off` = explicit BF16 rollback |
-| `QWEN_MTP_DRAFT_K` | unset (pinned k = 2) | Pins the per-round draft depth to `min(offer, k)`; `3` is the rollback knob for the pre-flip adaptive default (reproduces the registered k = 3 streams bit-exact) |
+| `QWEN_MTP_DRAFT_K` | unset (pinned k = 2) | Pins the per-round draft depth to `min(offer, k)`; `3` is the rollback knob for the pre-flip adaptive default (reproduces the registered k = 3 streams bit-exact). The stored calibration depth (below) is a hint that loses to an explicit `--spec-draft-n-max` or this var |
 | `QWEN35_QMV_ARM` | `liveSums` | `table` selects the xsums sum-table QMV arm |
 | `QWEN_MTP_STEP_TRACE` | off | Per-request MTP-STEP-SUMMARY on stderr (rounds / proposed / accepted / avgStepMs / component timings) |
+
+### Draft-depth calibration (measure tokens/s, pick the best depth)
+
+Wall-clock calibration is **off by default**. Run it once to find the fastest
+draft depth on this machine and store the winner:
+
+```bash
+# Sweep depths 0..3 at 100 tokens each, print the table, save the winner, serve at it.
+qwen38-mtp-server serve --model ./weights \
+  --spec-draft-calibrate \
+  --spec-draft-calibrate-depths 0,1,2,3 \
+  --spec-draft-calibrate-tokens 100
+```
+
+The winner is written to `./spec-draft-calibration.json` (per model) and applied
+immediately. On later startups (no `--spec-draft-calibrate`) the stored depth is
+used as a **hint** — an explicit `--spec-draft-n-max` or `QWEN_MTP_DRAFT_K`
+overrides it. Full semantics and caveats: `docs/DEPTH-CALIBRATION.md`.
 
 ## Recommended configuration (current main, 2026-09-14)
 

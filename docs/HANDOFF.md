@@ -1,4 +1,4 @@
-# HANDOFF — Session API + token-ID echo (Phase D) (COMPLETE, merged to main)
+# HANDOFF — Draft-depth calibration (wall-clock tokens/s per depth) (COMPLETE, merged to main)
 
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
 > `agent-checkpoint.sh` ran successfully (exit 0) in both repositories and
@@ -7,122 +7,123 @@
 
 ## Objective and acceptance criteria
 
-A **server-owned conversation/session API** for `qwen38-mtp-server` plus an
-optional `include_token_ids` response extension, so multi-turn clients can
-own the history server-side and (optionally) read back the exact committed
-token IDs. Acceptance: session CRUD + one-turn completion; `include_token_ids`
-echoes committed target token IDs (stateless and session); TTL/LRU-bounded
-process-local sessions (no disk, no cross-process); honest cache semantics
-(a session guarantees conversation ownership, NOT a cache hit); no token
-splicing / no Jinja template duplication / no request-side `token_ids`;
-pure-Swift tests; docs; full `HTTPServerTests` green; engine untouched.
+A **draft-depth calibration mode** for `qwen38-mtp-server` that measures
+wall-clock decode throughput at several speculative draft depths and selects
+the fastest one per model, storing the winner in a JSON config and serving at
+it. Acceptance: `--spec-draft-calibrate` flag + startup benchmark loop (off by
+default); JSON config storage (`spec-draft-calibration.json`, per model); the
+stored depth is a **hint** overridable by `--spec-draft-n-max`; runtime
+adaptation documented as future (not implemented); pure-Swift tests; docs +
+README example commands; no kernel/head/quantization/weight/sampling changes;
+full `HTTPServerTests` green; engine diagnostic suite green.
 
 ## Result
 
-**Phase D (COMPLETE, merged to main).** Server repo only — the engine
-(`mlx-swift-lm`) is **untouched** (no engine commit; HEAD unchanged at
-`2028d66`).
+**Calibration (COMPLETE, merged to main).** Engine: one small init hook
+(`draftDepth` pin). Server: the calibration surface. No kernel, head topology,
+quantization, weight, or sampling-semantics changes. Off by default.
 
-- **`include_token_ids`**: `include_token_ids: Bool?` on `ChatCompletionRequest`;
-  when `true`, `choices[0].message.token_ids` (non-streaming) / final delta
-  `token_ids` (streaming) carry the exact committed target token IDs.
-  Diagnostic only, absent by default, NOT a request-side splice input.
-- **`ChatMessage.token_ids`**: `let token_ids: [Int]?`, custom encode omits
-  nil; request schema unchanged.
-- **`SessionStore` actor** (new): process-local, in-memory, LRU-capped
-  (`--max-sessions`, default 128) + idle-TTL (`--session-ttl`, default 1800 s).
-  Owns the message history, a diagnostic cached prefix (seed + completion
-  token IDs), a per-session in-flight flag, and a token count. No disk, no
-  cross-process, no auth.
-- **Session routes**: `POST /v1/sessions`, `GET /v1/sessions/:id`,
-  `DELETE /v1/sessions/:id`, `POST /v1/sessions/:id/completions`. Completion
-  merges stored history + the new turn, re-renders, and commits the assistant
-  turn on success (via `onFinished`); nothing committed on failure (409 if a
-  completion is already in flight). `session_id` echoed on non-streaming
-  responses. `DELETE` best-effort releases the radix prefix (leaf removal only).
-- **`CompletionCommit`**: assistant-turn fields + committed token IDs;
-  `assistantMessage` builds the stored history message (NO token IDs).
-- **Router**: the completion body extracted into `@Sendable
-  performChatCompletion(app:request:serverConfig:runtimeState:scheduler:
-  generator:metricsCollector:logger:sessionID:onFinished:)`, shared by the
-  stateless and session endpoints (also a compiler-fragility win for the large
-  closure).
-- **`RadixKVCacheManager.remove`**: best-effort leaf removal for session delete.
-- **Config**: `maxSessions`, `sessionTTLSeconds` (+ `QWEN_MAX_SESSIONS` /
-  `QWEN_SESSION_TTL`).
-- **Docs**: `docs/SESSION-API.md` (client contract + curl/Python examples),
-  `docs/SESSION-BOUNDARIES.md` (design gate: token-boundary analysis),
-  `docs/TOOL-PROTOCOL.md` cross-ref.
+- **Engine** (`Qwen38MTPBlockSession`, `mlx-swift-lm`, commit `d01535d`): new
+  optional `draftDepth: Int?` init param (pinned per-round depth). Pinned depth
+  takes highest priority in `draftPolicy` (pinned → `QWEN_MTP_DRAFT_K` →
+  default 2), above the offer cap. Lets the server sweep depths 0..3 in one
+  process (the env var is a process-global static; the per-session pin is not).
+  `nil` path unchanged (engine diagnostic 3/3 green).
+- **`SpecDraftCalibration`** (new, server): `DepthBenchmark`, `ModelCalibration`,
+  `SpecDraftCalibrationFile` (Codable); `parseDepths`, `selectOptimalDepth`
+  (max tok/s, ties → lower depth), `load`/`save` (pretty JSON; missing/corrupt →
+  nil), `report`, `iso8601Now`.
+- **`ServerConfig`**: `--spec-draft-calibrate` (off by default),
+  `--spec-draft-calibrate-depths` (default `0,1,2,3`),
+  `--spec-draft-calibrate-tokens` (default 100),
+  `--spec-draft-calibration-file` (default `./spec-draft-calibration.json`);
+  `--spec-draft-n-max` now sets `specDraftNMaxExplicit`; `QWEN_MTP_DRAFT_K` read
+  into `specDraftK`. `resolvedForcedDraftDepth(storedCalibratedDepth:)`:
+  explicit `--spec-draft-n-max` > `QWEN_MTP_DRAFT_K` > stored > default 2.
+- **`MLXGenerator`**: `forcedDraftK: Int?` init param (passed to both
+  production sessions); `calibrateDraftDepths(depths:tokens:)` (sweeps pinned
+  sessions, decode-only wall-clock, greedy, acceptance from accepted/rejected
+  counters); `applyCalibratedDepth(_:)` (sets the pin for the running process).
+- **`Qwen38Server`**: loads the store, resolves the forced k, passes it to the
+  generator; on `--spec-draft-calibrate`, runs the sweep after warmup, logs the
+  report, applies the winner, saves the store (keyed by canonical model id).
+  Calibration failure is non-fatal (serves at the resolved k).
+- **Docs**: `docs/DEPTH-CALIBRATION.md` (usage, config format, resolution
+  precedence, caveats, future runtime-adaptation roadmap), `docs/README.md`
+  (example commands + runtime-knobs note + test counts), `progress.md`.
 
-### Tests (pure Swift, no model weights; 13 new + 1 gated)
+### Tests (pure Swift, no model weights; 17 new)
 
-- `SessionStoreTests` (6): CRUD, completion lifecycle (in-flight serialization
-  + history continuity), delete releases cached prefix, aborted completion
-  commits nothing, LRU eviction, TTL expiration.
-- `TokenIDEchoTests` (7): `token_ids` omitted-when-nil + round-trip, commit
-  assistant message carries no token IDs, empty tool calls collapse to nil,
-  `session_id` round-trip, `include_token_ids` decode.
-- `TokenBoundaryTests` (gated `QWEN_RUN_WEIGHTS=1`): full non-thinking prefix,
-  partial thinking divergence.
-- **Full `HTTPServerTests`: 182 green** (168 → 182).
+- `DraftCalibrationTests` (17): `parseDepths` (basic/trim/dedupe/out-of-range/
+  empty), `selectOptimalDepth` (max/empty/tie→lower), `report` format, store
+  round-trip / missing→nil / corrupt→nil, `resolvedForcedDraftDepth` precedence
+  (default/env/stored/explicit-n-max), `iso8601Now` format.
+- **Full `HTTPServerTests`: 199 green** (182 → 199). Engine
+  `Qwen38MTPDiagnosticTests` 3/3 green.
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `main`, HEAD `220d68b` (Phase D,
-  fast-forward merge of `feature/prompt-session-api`, branch deleted). Working
-  tree clean (except this `docs/HANDOFF.md` update).
-- `../mlx-swift-lm`: branch `main`, HEAD `2028d66`. Untouched by this task.
+- `qwen38-mtp-server` (this repo): branch `main`, HEAD `148fa47` before this
+  task; the calibration commit is the fast-forward merge of
+  `feature/prompt-draft-calibrate` (branch deleted). Working tree clean (except
+  this `docs/HANDOFF.md` update).
+- `../mlx-swift-lm`: branch `main`; HEAD `d01535d` (the `draftDepth` pin), the
+  fast-forward merge of `feature/prompt-draft-calibrate` (branch deleted).
 
 ## Commands / verification
 
 ```
-swift build --target HTTPServer          # clean
-swift test --filter HTTPServerTests      # 182 green
-# focused:
-swift test --filter SessionStoreTests    # 6
-swift test --filter TokenIDEchoTests     # 7
-# gated (real tokenizer, no model):
-QWEN_RUN_WEIGHTS=1 QWEN_MODEL_PATH=./weights swift test --filter TokenBoundaryTests
+swift build --target HTTPServer          # clean, no warnings
+swift test --filter DraftCalibrationTests # 17 green
+swift test --filter HTTPServerTests      # 199 green
+cd ../mlx-swift-lm && swift build --target MLXLLM   # clean
+cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests  # 3/3
+# live (optional, needs weights):
+#   qwen38-mtp-server serve --model ./weights --spec-draft-calibrate
 ```
 
 ## Unresolved risks / caveats
 
-- A session = conversation ownership + history continuity, **not** a cache hit.
-  Reuse is opportunistic and mode-dependent (full non-thinking, partial
-  thinking) — see `docs/SESSION-BOUNDARIES.md`. Do not market a TTFT win.
-- No token splicing, no Jinja template duplication in Swift, no request-side
-  `token_ids` (request message schema unchanged).
-- Sessions are process-local/in-memory: no disk persistence, no auth, no
-  cross-process sharing, no continuous batching.
-- `include_token_ids` returns the completion token IDs (diagnostic); they are
-  not validated for splicing and are not a request input.
+- Wall-clock throughput measurement, **not** a 1024-token benchmark cell. Do
+  not cite calibration tok/s as a headline number; it is only for in-session
+  relative depth ranking.
+- Depth selection never changes correctness: greedy output is bit-identical
+  across depths (speculative decoding changes tokens-per-round, never which
+  tokens are committed).
+- The stored depth is a **hint**: an explicit `--spec-draft-n-max` or
+  `QWEN_MTP_DRAFT_K` overrides it. `--spec-draft-n-max 0` disables MTP.
+- Online runtime adaptation (rolling acceptance → depth) is **documented as
+  future, not implemented**.
 
 ## Do-not-repeat
 
-- Do not treat a session as a guaranteed cache-hit mechanism.
-- Do not hand-construct user/assistant/tool suffix tokens in Swift, duplicate
-  the Jinja chat template, or add request-side `token_ids`.
-- Do not persist sessions to disk, add auth, share across processes, or batch.
+- Do not cite the calibration tok/s as a headline number (wall-clock, 50–100
+  tokens, not the benchmark protocol).
+- Do not claim depth selection changes correctness (greedy is bit-identical
+  across depths).
+- Do not treat the stored depth as authoritative over an explicit
+  `--spec-draft-n-max` or `QWEN_MTP_DRAFT_K`.
 - Do not run `head -N` on checkpoint output (SIGPIPE aborts before the marker
   write); redirect to a file.
 - The `agent-checkpoint.sh` script must be run **inside** each actual git repo
-  (the `qwen38-mlx-server` symlink wrapper is not a worktree), not from the
-  wrapper root.
+  (the `qwen38-mlx-server` symlink wrapper is not a worktree), invoked by its
+  full path from the repo directory.
+- Engine commit precedes server commit; both merged to `main`, feature branches
+  deleted.
 
 ## Next step
 
-None — Phase D is complete, tested, documented, merged to `main`, and
-checkpointed. A successor session should independently verify (per the resume
-procedure): `git status --short` (clean), `swift test --filter HTTPServerTests`
-(182 green), and confirm `docs/SESSION-API.md` + `docs/SESSION-BOUNDARIES.md`
-exist. If end-to-end model-in-the-loop session testing (live multi-turn over
-HTTP) is requested, that is a new task (the pure-Swift suite covers the actor,
-serialization, and token-boundary contract; the live HTTP path is exercised by
-the radix benchmark + the live-server harness).
+None — the calibration mode is complete, tested, documented, merged to `main`,
+and checkpointed. A successor session should independently verify (per the
+resume procedure): `git status --short` (clean) in both repos,
+`swift test --filter HTTPServerTests` (199 green), and
+`swift test --filter Qwen38MTPDiagnosticTests` (3/3). If an **online** runtime
+adaptive depth policy is requested, that is the documented-future work in
+`docs/DEPTH-CALIBRATION.md` (not implemented).
 
 ## Checkpoint markers
 
-- server: 2026-09-15T12:28:51+01:00
-- engine: 2026-09-15T12:28:51+01:00
+- server: 2026-09-15T13:20:43+01:00
+- engine: 2026-09-15T13:20:42+01:00
 
 The fresh-checkpoint procedure completed.

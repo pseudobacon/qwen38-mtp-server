@@ -66,6 +66,19 @@ struct QwenServer {
             return
         }
 
+        // 4b2. Load the draft-depth calibration store and resolve the
+        //      effective forced draft depth (the per-round k). Precedence:
+        //      explicit `--spec-draft-n-max`, then `QWEN_MTP_DRAFT_K`, then the
+        //      stored calibrated depth (a hint), then the engine default. An
+        //      explicit `--spec-draft-n-max` overrides the stored depth.
+        let calibrationStore = SpecDraftCalibration.load(path: config.specDraftCalibrationFile)
+        let storedCalibratedDepth = calibrationStore?.models[ServerConfig.canonicalModelID]?.optimalDepth
+        let resolvedForcedK = config.resolvedForcedDraftDepth(storedCalibratedDepth: storedCalibratedDepth)
+        let resolutionLog = "Draft depth resolution: forced k=\(resolvedForcedK) (offer cap \(config.specDraftNMax), "
+            + "stored calibrated \(storedCalibratedDepth.map { String($0) } ?? "none"), "
+            + "calibration file \(config.specDraftCalibrationFile))"
+        app.logger.info("\(resolutionLog)")
+
         // 4c. Instantiate the MLX generator actor with config. All blocking
         //     MLX work is confined to this actor; the HTTP layer only consumes
         //     the `AsyncStream` it yields. The generator transitions the state
@@ -79,6 +92,7 @@ struct QwenServer {
                 modelPath: config.model,
                 mtpHeadPath: config.mtpHead,
                 maxDraftDepth: config.specDraftNMax,
+                forcedDraftK: resolvedForcedK,
                 runtimeState: runtimeState,
                 memoryLimitBytes: config.memoryLimitGB * 1024 * 1024 * 1024,
                 systemSafetyReserveBytes: config.systemSafetyReserveGB * 1024 * 1024 * 1024,
@@ -96,6 +110,47 @@ struct QwenServer {
             _ = await runtimeState.transition(to: .failed(error.localizedDescription))
             app.logger.error("Model startup failed: \(error)")
             generator = nil
+        }
+
+        // 4d. Draft-depth calibration (off by default). Runs at startup, before
+        //     serving, so it never blocks a live request. Sweeps the configured
+        //     depths, prints the table, saves the store, and applies the winner
+        //     to the running generator. A failure here is non-fatal: the server
+        //     continues serving at the resolved forced depth.
+        if config.specDraftCalibrate, let gen = generator {
+            do {
+                let results = try await gen.calibrateDraftDepths(
+                    depths: config.specDraftCalibrateDepths,
+                    tokens: config.specDraftCalibrateTokens)
+                let optimal = SpecDraftCalibration.selectOptimalDepth(results)
+                let report = SpecDraftCalibration.report(
+                    optimal: optimal, results: results,
+                    tokens: config.specDraftCalibrateTokens)
+                app.logger.info("\(report)")
+                if let optimal, let optimalRow = results.first(where: { $0.depth == optimal }) {
+                    await gen.applyCalibratedDepth(optimal)
+                    var file = calibrationStore ?? SpecDraftCalibrationFile()
+                    let hardwareLabel: String
+                    #if os(macOS)
+                    hardwareLabel = "macOS/Apple-Silicon"
+                    #else
+                    hardwareLabel = "Linux"
+                    #endif
+                    file.models[ServerConfig.canonicalModelID] = ModelCalibration(
+                        optimalDepth: optimal,
+                        calibratedAt: SpecDraftCalibration.iso8601Now(),
+                        acceptanceRate: optimalRow.acceptanceRate,
+                        contextLength: config.ctxSize,
+                        hardware: hardwareLabel,
+                        results: results
+                    )
+                    try SpecDraftCalibration.save(file, to: config.specDraftCalibrationFile)
+                    app.logger.info(
+                        "Saved draft-depth calibration to \(config.specDraftCalibrationFile)")
+                }
+            } catch {
+                app.logger.error("Draft-depth calibration failed: \(error)")
+            }
         }
 
         // 4c. Instantiate the single-lane generation scheduler. It is a

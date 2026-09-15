@@ -39,6 +39,20 @@ struct ServerConfig: Sendable {
 
     // MTP & KV Cache
     var specDraftNMax: Int = 3         // --spec-draft-n-max (0 = disabled)
+    /// True when `--spec-draft-n-max` was provided on the command line (as
+    /// opposed to the default). An explicit value overrides the stored
+    /// calibrated depth (the stored depth is only a hint).
+    var specDraftNMaxExplicit: Bool = false
+    /// The per-round draft depth pinned by the `QWEN_MTP_DRAFT_K` environment
+    /// variable (a process-global static in the engine). Read here so the
+    /// startup depth resolution has a single source of truth. `nil` if unset.
+    var specDraftK: Int? = nil
+
+    // Draft-depth calibration (off by default; runs at startup before serving)
+    var specDraftCalibrate: Bool = false            // --spec-draft-calibrate
+    var specDraftCalibrateDepths: [Int] = [0, 1, 2, 3]   // --spec-draft-calibrate-depths
+    var specDraftCalibrateTokens: Int = 100         // --spec-draft-calibrate-tokens
+    var specDraftCalibrationFile: String = SpecDraftCalibration.defaultPath  // --spec-draft-calibration-file
     var cacheTypeK: String = "kvarn8"     // --cache-type-k, -ctk
     var cacheTypeV: String = "kvarn4"     // --cache-type-v, -ctv
     /// Maximum number of tokens in a single prefill forward pass. Long prompts
@@ -103,6 +117,9 @@ struct ServerConfig: Sendable {
         "--presence-penalty",
         "--frequency-penalty",
         "--spec-draft-n-max",
+        "--spec-draft-calibrate-depths",
+        "--spec-draft-calibrate-tokens",
+        "--spec-draft-calibration-file",
         "--prefill-chunk-size",
         "--cache-type-k", "-ctk",
         "--cache-type-v", "-ctv",
@@ -119,6 +136,7 @@ struct ServerConfig: Sendable {
         "--help",
         "--tools-enabled",
         "--tools-disabled",
+        "--spec-draft-calibrate",
     ]
 
     /// The subset of `CommandLine.arguments` that Vapor's
@@ -196,7 +214,23 @@ struct ServerConfig: Sendable {
             case "--frequency-penalty":
                 if index + 1 < args.count, let val = Float(args[index + 1]) { config.frequencyPenalty = val }
             case "--spec-draft-n-max":
-                if index + 1 < args.count, let val = Int(args[index + 1]) { config.specDraftNMax = val }
+                if index + 1 < args.count, let val = Int(args[index + 1]) {
+                    config.specDraftNMax = val
+                    config.specDraftNMaxExplicit = true
+                }
+            case "--spec-draft-calibrate":
+                config.specDraftCalibrate = true
+            case "--spec-draft-calibrate-depths":
+                if index + 1 < args.count {
+                    let parsed = SpecDraftCalibration.parseDepths(args[index + 1])
+                    config.specDraftCalibrateDepths = parsed.isEmpty ? [0, 1, 2, 3] : parsed
+                }
+            case "--spec-draft-calibrate-tokens":
+                if index + 1 < args.count, let val = Int(args[index + 1]), val > 0 {
+                    config.specDraftCalibrateTokens = val
+                }
+            case "--spec-draft-calibration-file":
+                if index + 1 < args.count { config.specDraftCalibrationFile = args[index + 1] }
             case "--prefill-chunk-size":
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.prefillChunkSize = val }
             case "--cache-type-k", "-ctk":
@@ -246,6 +280,7 @@ struct ServerConfig: Sendable {
         if let val = ProcessInfo.processInfo.environment["QWEN_MAX_SESSIONS"], let intVal = Int(val) { config.maxSessions = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_SESSION_TTL"], let intVal = Int(val) { config.sessionTTLSeconds = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_PREFILL_CHUNK_SIZE"], let intVal = Int(val) { config.prefillChunkSize = intVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_MTP_DRAFT_K"], let intVal = Int(val) { config.specDraftK = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_TOKENIZATION_CACHE_MAX_ENTRIES"], let intVal = Int(val) { config.tokenizationCacheMaxEntries = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_TOKENIZATION_CACHE_MAX_BYTES"], let intVal = Int(val) { config.tokenizationCacheMaxBytes = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_TOKENIZATION_CACHE_TTL_SECONDS"], let intVal = Int(val) { config.tokenizationCacheTTLSeconds = intVal }
@@ -284,6 +319,29 @@ struct ServerConfig: Sendable {
         return nil // f16 or default
     }
 
+    /// The engine's pinned default per-round draft depth (k = 2, post-W4).
+    /// Kept as a local constant so `ServerConfig` stays free of an MLXLLM
+    /// import; it must track `Qwen38MTPBlockSession.defaultDraftDepth`.
+    static let defaultDraftDepth = 2
+
+    /// Resolve the effective per-round draft depth (the "forced k") to pin in
+    /// each session, given the stored calibrated depth (from the calibration
+    /// file). Precedence:
+    ///   1. `--spec-draft-n-max` (when explicitly set) — operator override.
+    ///   2. `QWEN_MTP_DRAFT_K` env (an explicit pin).
+    ///   3. The stored calibrated optimal depth (the hint).
+    ///   4. The engine default (k = 2).
+    /// The engine's draft policy then caps this by the offer cap
+    /// (`specDraftNMax`), so an explicit `--spec-draft-n-max` also bounds a
+    /// deeper stored/env depth. The stored depth is therefore a hint: it only
+    /// wins when neither explicit override is present.
+    func resolvedForcedDraftDepth(storedCalibratedDepth: Int?) -> Int {
+        if specDraftNMaxExplicit { return specDraftNMax }
+        if let k = specDraftK { return k }
+        if let d = storedCalibratedDepth { return d }
+        return Self.defaultDraftDepth
+    }
+
     static func printHelp() {
         print("""
         Qwen 3.8 MTP Server - OpenAI-compatible API server with speculative decoding
@@ -320,6 +378,24 @@ struct ServerConfig: Sendable {
                                             k = 2 (post-W4 queue, 2026-09-14); override
                                             it with QWEN_MTP_DRAFT_K (k = 3 is the
                                             rollback knob for the pre-flip default).
+                                            When set explicitly, this value also OVERRIDES
+                                            the stored calibrated depth (a hint).
+
+         DRAFT-DEPTH CALIBRATION (off by default; runs at startup, before
+                                            serving — see docs/DEPTH-CALIBRATION.md):
+            --spec-draft-calibrate          Run the wall-clock calibration sweep and
+                                            select the optimal depth, then continue
+                                            serving at that depth.
+            --spec-draft-calibrate-depths <list>
+                                            Comma-separated depths to sweep
+                                            (default: 0,1,2,3; each in 0..8).
+            --spec-draft-calibrate-tokens <int>
+                                            Tokens to generate per depth (default: 100).
+            --spec-draft-calibration-file <path>
+                                            The JSON store of per-model optimal depths
+                                            (default: ./spec-draft-calibration.json).
+                                            Loaded at startup; the selected depth is
+                                            saved here on calibration.
             --prefill-chunk-size <int>      Max tokens per prefill forward pass (default: 512,
                                             0 = single-pass prefill)
             --cache-type-k, -ctk <type>     KV cache K type: f16, f32, q8_0, q4_0, q4_1, q2_0,
