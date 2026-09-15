@@ -9,6 +9,15 @@
 import Foundation
 import Vapor
 
+/// Computes the OpenAI `finish_reason` for a chat completion given the number
+/// of tool calls produced and the generator's terminal reason. When one or
+/// more tool calls were produced and the model terminated normally ("stop"),
+/// the reason is `tool_calls` (OpenAI semantics); otherwise the generator's
+/// reason ("stop"/"length"/"memory_pressure") is preserved.
+func toolCallFinishReason(toolCallCount: Int, finishedReason: String) -> String {
+    toolCallCount > 0 && finishedReason == "stop" ? "tool_calls" : finishedReason
+}
+
 /// Registers OpenAI-compatible routes on `app`, backed by `generator` and
 /// the single-lane `scheduler`. Every chat-completion request (streaming or
 /// non-streaming) is admitted through `scheduler.schedule`, which bounds the
@@ -264,6 +273,7 @@ func registerOpenAIRoutes(
                         var finalUsage: Usage?
                         var firstContentTime: ContinuousClock.Instant?
                         var generatorMetrics: GenerationMetrics?
+                        var toolCalls: [ToolCall] = []
 
                         /// Builds the per-request metrics and records them in
                         /// the collector asynchronously. Fire-and-forget: the
@@ -372,7 +382,14 @@ func registerOpenAIRoutes(
                                     try await writeSSE(chunk)
 
                                 case .finished(let reason, let promptTokens, let completionTokens):
-                                    finalReason = reason
+                                    // When the model produced one or more tool
+                                    // calls and terminated normally ("stop"),
+                                    // the finish reason is "tool_calls"
+                                    // (OpenAI semantics).
+                                    finalReason = toolCallFinishReason(
+                                        toolCallCount: toolCalls.count,
+                                        finishedReason: reason
+                                    )
                                     if includeUsage {
                                         finalUsage = Usage(
                                             prompt_tokens: promptTokens,
@@ -391,6 +408,7 @@ func registerOpenAIRoutes(
                                     // `delta.tool_calls` entries; each completed
                                     // call is emitted as a single delta with the
                                     // full call (id, type, function name + args).
+                                    toolCalls.append(call)
                                     let chunk = ChatCompletionChunk(
                                         id: responseId,
                                         object: "chat.completion.chunk",
@@ -585,7 +603,10 @@ func registerOpenAIRoutes(
                         reasoning_content: reasoningContent.isEmpty ? nil : reasoningContent,
                         tool_calls: toolCalls.isEmpty ? nil : toolCalls
                     ),
-                    finish_reason: finishReason
+                    finish_reason: toolCallFinishReason(
+                        toolCallCount: toolCalls.count,
+                        finishedReason: finishReason
+                    )
                 )
             ],
             usage: usage

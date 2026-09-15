@@ -607,10 +607,12 @@ actor MLXGenerator {
         tools: [ToolSpec]?,
         toolChoice: ToolChoice?
     ) throws -> (tokenIDs: [Int], wasHit: Bool) {
-        let toolsKey = tools?.map { $0.toJSONString() }.joined(separator: "|") ?? "none"
-        let choiceKey = toolChoice.map { String(describing: $0) } ?? "auto"
-        let msgsKey = messages.map { "\($0.role ?? ""):\($0.content ?? ""):\($0.reasoning_content ?? "")" }.joined(separator: "||")
-        let promptCacheString = "thinking=\(enableThinking)|choice=\(choiceKey)|tools=\(toolsKey)|msgs=\(msgsKey)"
+        let promptCacheString = Self.tokenizationCacheKey(
+            messages: messages,
+            enableThinking: enableThinking,
+            tools: tools,
+            toolChoice: toolChoice
+        )
 
         let key = TokenizationCache.Key(
             namespace: cacheNamespace,
@@ -632,6 +634,34 @@ actor MLXGenerator {
 
         tokenizationCache.insert(key: key, tokenIDs: tokenIDs)
         return (tokenIDs, false)
+    }
+
+    /// Builds the tokenization-cache key string for a rendered prompt. It must
+    /// capture everything the chat template renders into the prompt, including
+    /// the tool schemas, the `tool_choice` resolution, and assistant
+    /// `tool_calls` (rendered as the XML function/parameter block) plus
+    /// tool-result `tool_call_id`/`name`. Omitting any of these would let two
+    /// conversations that differ only in a rendered field share one cached
+    /// tokenized prompt.
+    static func tokenizationCacheKey(
+        messages: [ChatMessage],
+        enableThinking: Bool,
+        tools: [ToolSpec]?,
+        toolChoice: ToolChoice?
+    ) -> String {
+        let toolsKey = tools?.map { $0.toJSONString() }.joined(separator: "|") ?? "none"
+        let choiceKey = toolChoice.map { String(describing: $0) } ?? "auto"
+        let msgsKey = messages.map { msg -> String in
+            let calls = (msg.tool_calls ?? [])
+                .map { "\($0.function.name)|\($0.function.arguments ?? "")" }
+                .joined(separator: ",")
+            let role = msg.role?.lowercased() ?? ""
+            let toolID = (role == "tool" || role == "function")
+                ? "[\(msg.tool_call_id ?? "")#\(msg.name ?? "")]"
+                : ""
+            return "\(msg.role ?? ""):\(msg.content ?? ""):\(msg.reasoning_content ?? ""):\(calls)\(toolID)"
+        }.joined(separator: "||")
+        return "thinking=\(enableThinking)|choice=\(choiceKey)|tools=\(toolsKey)|msgs=\(msgsKey)"
     }
 
     func estimatePromptTokens(

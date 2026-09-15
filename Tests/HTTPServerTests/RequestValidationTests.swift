@@ -26,6 +26,23 @@ private func message(
     )
 }
 
+/// An assistant message carrying a single tool call, used as the prior
+/// call that a `role: "tool"` result must reference.
+private func assistantToolCallMessage(id: String, name: String) -> ChatMessage {
+    ChatMessage(
+        role: "assistant",
+        content: nil,
+        tool_calls: [
+            ToolCall(
+                id: id,
+                type: "function",
+                index: nil,
+                function: ToolCall.ToolCallFunction(name: name, arguments: "{}")
+            )
+        ]
+    )
+}
+
 /// A minimal valid request.
 private func validRequest(
     model: String = ServerConfig.canonicalModelID,
@@ -121,11 +138,13 @@ func unsupportedMessageRoleIsRejected() {
 @Test
 func toolRoleIsAccepted() throws {
     // `role: "tool"` carries a tool result; `tool_call_id` and `name` are
-    // optional and accepted.
+    // optional and accepted. The tool result must reference a prior assistant
+    // tool call (no orphaned tool results).
     let params = try ChatCompletionRequestValidator.validate(
         request: validRequest(
             messages: [
                 message(role: "user", content: "What is the weather?"),
+                assistantToolCallMessage(id: "call_123", name: "get_weather"),
                 ChatMessage(
                     role: "tool",
                     content: "Sunny, 25C",
@@ -147,6 +166,7 @@ func functionRoleIsAccepted() throws {
         request: validRequest(
             messages: [
                 message(role: "user", content: "What is the weather?"),
+                assistantToolCallMessage(id: "call_123", name: "get_weather"),
                 ChatMessage(
                     role: "function",
                     content: "Sunny, 25C",
@@ -167,6 +187,7 @@ func toolMessageDecodesWithToolCallIdAndName() throws {
       "model": "\(ServerConfig.canonicalModelID)",
       "messages": [
         {"role": "user", "content": "What is the weather?"},
+        {"role": "assistant", "content": null, "tool_calls": [{"id": "call_123", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]},
         {"role": "tool", "content": "Sunny, 25C", "tool_call_id": "call_123", "name": "get_weather"}
       ]
     }
@@ -175,13 +196,14 @@ func toolMessageDecodesWithToolCallIdAndName() throws {
         ChatCompletionRequest.self,
         from: Data(json.utf8)
     )
-    let toolMessage = request.messages[1]
+    let toolMessage = request.messages[2]
     #expect(toolMessage.role == "tool")
     #expect(toolMessage.content == "Sunny, 25C")
     #expect(toolMessage.tool_call_id == "call_123")
     #expect(toolMessage.name == "get_weather")
 
-    // The validator accepts the decoded request.
+    // The validator accepts the decoded request (tool result references the
+    // prior assistant tool call).
     _ = try ChatCompletionRequestValidator.validate(
         request: request,
         serverConfig: ServerConfig()

@@ -282,7 +282,13 @@
 
                 let afterPEnd = afterP[pEnd.upperBound...]
                 guard let pClose = afterPEnd.range(of: "</parameter>") else { return nil }
-                let value = String(afterPEnd[..<pClose.lowerBound])
+                var value = String(afterPEnd[..<pClose.lowerBound])
+                // The chat template places each parameter value on its own line
+                // (`<parameter=K>\nVALUE\n</parameter>`); strip exactly the one
+                // formatting newline on each side, preserving any internal
+                // newlines (multi-line values are supported).
+                if value.hasPrefix("\n") { value.removeFirst() }
+                if value.hasSuffix("\n") { value.removeLast() }
 
                 pairs.append((key, value))
                 searchStart = pClose.upperBound

@@ -157,12 +157,29 @@ public enum ChatCompletionRequestValidator {
     /// Maximum length, in characters, of a single stop sequence.
     public static let maxStopSequenceLength = 64
 
+    /// Maximum number of tool definitions a single request may provide.
+    public static let maxToolCount = 128
+
+    /// Maximum length, in characters, of a single tool function name.
+    public static let maxToolNameLength = 64
+
+    /// Tool function names must match `[a-zA-Z0-9_-]` (1...maxToolNameLength).
+    static func isValidToolName(_ name: String) -> Bool {
+        (!name.isEmpty)
+            && name.count <= maxToolNameLength
+            && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+    }
+
     static func validate(
         request: ChatCompletionRequest,
         serverConfig: ServerConfig
     ) throws -> SamplingParameters {
         try validateModel(request: request, serverConfig: serverConfig)
         try validateMessages(request: request)
+        try validateTools(request: request)
+        try validateToolChoice(request: request)
+        try validateParallelToolCalls(request: request)
+        try validateToolConversation(request: request)
         try validateMaxTokens(request: request, serverConfig: serverConfig)
         try validateContextWindow(request: request, serverConfig: serverConfig)
         // `fromRequest` resolves the KV-cache configuration against the
@@ -236,6 +253,145 @@ public enum ChatCompletionRequestValidator {
                     param: "messages",
                     code: "invalid_value"
                 )
+            }
+        }
+    }
+
+    // MARK: - Tools
+
+    /// Validates the `tools` array: each entry must be `type == "function"`
+    /// with a well-formed, unique function name, and an optional `parameters`
+    /// that is a JSON object. Size and name policy are enforced so malformed
+    /// schemas are rejected before any model execution.
+    private static func validateTools(request: ChatCompletionRequest) throws {
+        guard let tools = request.tools, !tools.isEmpty else { return }
+
+        if tools.count > maxToolCount {
+            throw OpenAIRequestError(
+                message: "'tools' may contain at most \(maxToolCount) definitions; got \(tools.count).",
+                param: "tools",
+                code: "invalid_value"
+            )
+        }
+
+        var seenNames = Set<String>()
+        for (index, tool) in tools.enumerated() {
+            guard tool.type == "function" else {
+                throw OpenAIRequestError(
+                    message: "tools[\(index)].type must be \"function\"; got \"\(tool.type)\".",
+                    param: "tools",
+                    code: "invalid_value"
+                )
+            }
+            let name = tool.function.name
+            guard isValidToolName(name) else {
+                throw OpenAIRequestError(
+                    message: "tools[\(index)].function.name '\(name)' must match [a-zA-Z0-9_-] (1-\(maxToolNameLength) characters).",
+                    param: "tools",
+                    code: "invalid_value"
+                )
+            }
+            guard seenNames.insert(name).inserted else {
+                throw OpenAIRequestError(
+                    message: "Duplicate tool name '\(name)' in 'tools'.",
+                    param: "tools",
+                    code: "invalid_value"
+                )
+            }
+            if let parameters = tool.function.parameters {
+                guard case .object = parameters else {
+                    throw OpenAIRequestError(
+                        message: "tools[\(index)].function.parameters must be a JSON object.",
+                        param: "tools",
+                        code: "invalid_value"
+                    )
+                }
+            }
+        }
+    }
+
+    /// `tool_choice` may only be `auto` (omit) or `none`. The Qwen 3.8 tool
+    /// template has no mechanism to force a tool call or a specific named
+    /// tool, so `required` and named selection are rejected with a clear 400
+    /// rather than silently treated as `auto`.
+    private static func validateToolChoice(request: ChatCompletionRequest) throws {
+        guard let choice = request.tool_choice else { return }
+        switch choice {
+        case .auto, .none:
+            return
+        case .required:
+            throw OpenAIRequestError(
+                message: "'tool_choice: \"required\"' is not supported by the Qwen 3.8 tool template (it cannot force a tool call). Omit tool_choice (auto) or use 'none'.",
+                param: "tool_choice",
+                code: "unsupported_parameter"
+            )
+        case .function(let name):
+            throw OpenAIRequestError(
+                message: "Named 'tool_choice' (\"\(name)\") is not supported by the Qwen 3.8 tool template (it cannot force a specific tool). Omit tool_choice (auto) or use 'none'.",
+                param: "tool_choice",
+                code: "unsupported_parameter"
+            )
+        }
+    }
+
+    /// `parallel_tool_calls` is not a server-controlled toggle: the Qwen 3.8
+    /// tool template has no parallel-call mode, and whether the model emits
+    /// multiple tool calls in one assistant message is up to the model. Only
+    /// `false` and omit are accepted; `true` is rejected clearly.
+    private static func validateParallelToolCalls(request: ChatCompletionRequest) throws {
+        if request.parallel_tool_calls == true {
+            throw OpenAIRequestError(
+                message: "'parallel_tool_calls: true' is not supported by the Qwen 3.8 tool template (no parallel-call mode toggle). Omit the field or pass false.",
+                param: "parallel_tool_calls",
+                code: "unsupported_parameter"
+            )
+        }
+    }
+
+    /// Conversation sequencing for tool calls and results:
+    /// - every `role: "tool"` (or `"function"`) message must carry a
+    ///   non-empty `tool_call_id` that references a prior assistant `tool_calls`
+    ///   entry (no orphaned tool results, no cross-turn mismatch);
+    /// - assistant `tool_calls` IDs must be unique within and across messages.
+    private static func validateToolConversation(request: ChatCompletionRequest) throws {
+        var assistantCallIDs = Set<String>()
+        for (index, message) in request.messages.enumerated() {
+            let rawRole = (message.role ?? "").lowercased()
+            let role = rawRole == "function" ? "tool" : rawRole
+
+            if role == "assistant" {
+                let callIDs = (message.tool_calls ?? []).compactMap { $0.id }
+                if Set(callIDs).count != callIDs.count {
+                    throw OpenAIRequestError(
+                        message: "messages[\(index)] (assistant) has duplicate tool call IDs.",
+                        param: "messages",
+                        code: "invalid_value"
+                    )
+                }
+                for id in callIDs {
+                    guard assistantCallIDs.insert(id).inserted else {
+                        throw OpenAIRequestError(
+                            message: "Duplicate tool call ID '\(id)' across messages.",
+                            param: "messages",
+                            code: "invalid_value"
+                        )
+                    }
+                }
+            } else if role == "tool" {
+                guard let callID = message.tool_call_id, !callID.isEmpty else {
+                    throw OpenAIRequestError(
+                        message: "messages[\(index)] (tool) is missing a non-empty tool_call_id.",
+                        param: "messages",
+                        code: "invalid_value"
+                    )
+                }
+                guard assistantCallIDs.contains(callID) else {
+                    throw OpenAIRequestError(
+                        message: "messages[\(index)] (tool) references tool_call_id '\(callID)' that does not match a prior assistant tool call (orphaned tool result).",
+                        param: "messages",
+                        code: "invalid_value"
+                    )
+                }
             }
         }
     }

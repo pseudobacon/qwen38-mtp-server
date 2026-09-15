@@ -46,6 +46,7 @@ struct ChatCompletionRequest: Codable, Sendable {
     // Tool calling
     var tools: [ToolSpec]?
     var tool_choice: ToolChoice?
+    var parallel_tool_calls: Bool?
 }
 
 struct StreamOptions: Codable, Sendable {
