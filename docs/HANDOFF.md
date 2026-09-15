@@ -1,7 +1,22 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Flash-attention feasibility analysis (Phase I follow-up).**
+**COMPLETE: pc=0 single-pass prefill trap fix (engine-only).**
+
+`--prefill-chunk-size 0` (single-pass prefill) fatal-`[reshape]`'d on an empty
+chunk (both prefill loops computed `start=0, end=min(0+0,count)=0`). Extracted
+the partition into a pure `Qwen38MTPBlockSession.prefillChunkRanges(count:chunkSize:)`
+that guards `chunkSize==0` (one full-range chunk); the `chunkSize>0` branch is
+mathematically identical to the old inline loop, so the **default pc=512 path is
+byte-identical** (no perf regression). 4 unit tests + real-model validation:
+pc=0 no longer traps at 8K/16K/32K, bit-exact with pc=512 at 8K/16K, and 32K
+diverges at the first token (the expected Phase 1 Bug A FP-accumulation-order
+sensitivity to the prefill split — the engine chunked-SDPA gate engages at
+L>4096 for pc=0 but not per-512-chunk for pc=512). pc=0 is slower than pc=512
+(205 s vs 117 s at 32K), so this is a robustness fix, not a perf change. Engine
+`45df72a`, server `54f167c` (docs). Engine 7/7 + server 111/111 green.
+
+### Prior: Flash-attention feasibility analysis (Phase I follow-up)
 
 Evaluated integrating a flash-attention kernel for prefill. **Decision: do not
 integrate** (see `docs/FLASH-ATTENTION.md`). Evidence:
@@ -9,11 +24,11 @@ integrate** (see `docs/FLASH-ATTENTION.md`). Evidence:
   kernel is decode-only).
 - A true flash kernel's online softmax is **not bit-exact** (Phase 1, Bug A),
   which the task required.
-- **Measured** the full-attention SDPA share of the 32K prefill (temporary
-  env-gated timer, engine left byte-identical to main): **~0.04%** (0.05 s of a
-  114.9 s prefill). The `prefillChunkSize=512` default splits prefill into L=512
-  passes, so the O(L) projections / 48 GDN layers / FFN dominate. A flash kernel
-  only touches attention, so it cannot reach the >20% prefill-speedup target.
+- An early "~0.04%" SDPA figure was **CPU enqueue time, not GPU time** (MLX
+  enqueues Metal commands asynchronously) — invalidated; the per-phase GPU split
+  is unmeasured. Valid wall-time signal: prefill is near-optimal at the default
+  `prefillChunkSize=512` (119 s; pc=8192 is 55% slower; pc=0 was the trap now
+  fixed).
 - Chunked prefill already enables 128K+ (per-tile buffer 3.2 GB @128K).
 
 Server suite 0 failures; engine byte-identical to main. Server commit `c16f166`.
