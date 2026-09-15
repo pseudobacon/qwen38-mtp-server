@@ -1,0 +1,16 @@
+Long-context benchmark raw notes (2026-09-15)
+Server: qwen38-mtp-server, HEAD 18ed7d7, release binary sha256 eb999c031ed237879f5c50038c0bf5987f5a2cc0e584290bce040bd628bcfb8b
+Engine: mlx-swift-lm HEAD 4cd8603 (untouched)
+Model: Qwen3.8-27B 4-bit, 64 layers (16 full-attention + 48 GDN), 4 KV heads, head_dim 256
+Metal max buffer: 30150672384 bytes (30.2 GB)
+
+Fixtures (raw tokens, no template; prompt_tokens incl template reported by run_cell.sh):
+  longctx-8k.txt  ~8192  sha 5dc0e344...
+  longctx-16k.txt ~16384 (built from 32k prefix)
+  longctx-32k.txt ~32768 sha 385f5573...
+  longctx-96k.txt ~98304 sha a2a031c1...
+
+KEY: prefill attention buffer is quadratic (seq^2). 32K -> 51577363200 bytes (51.6GB) > 30.2GB -> SIGTRAP crash.
+Max feasible ~24K. 96K infeasible (~464GB).
+ab-matrix.jsonl = fused GDN on/off + draft depth k=1/2/3 at 8K (client TTFT/full/decode + server decodeSeconds/avgStepMs/acceptedPerStep).
+All content_sha256 identical across configs (bit-exact).

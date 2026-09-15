@@ -1,0 +1,28 @@
+{"tag": "off_k2_r1", "ttft_s": 27.807, "full_s": 30.116, "decode_s": 2.309, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k2_r1","server_decodeSeconds":6.6677,"server_avgStepMs":266.6288,"server_acceptedPerStep":1.5600}
+{"tag": "off_k2_r2", "ttft_s": 24.794, "full_s": 27.05, "decode_s": 2.256, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k2_r2","server_decodeSeconds":3.3134,"server_avgStepMs":132.4673,"server_acceptedPerStep":1.5600}
+{"tag": "off_k2_r3", "ttft_s": 27.549, "full_s": 29.865, "decode_s": 2.316, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k2_r3","server_decodeSeconds":5.2182,"server_avgStepMs":208.6602,"server_acceptedPerStep":1.5600}
+{"tag": "off_k2_r4", "ttft_s": 28.007, "full_s": 30.304, "decode_s": 2.297, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k2_r4","server_decodeSeconds":6.1627,"server_avgStepMs":246.4388,"server_acceptedPerStep":1.5600}
+{"tag": "on_k2_r1", "ttft_s": 28.315, "full_s": 30.743, "decode_s": 2.428, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"on_k2_r1","server_decodeSeconds":4.0919,"server_avgStepMs":163.6026,"server_acceptedPerStep":1.5600}
+{"tag": "on_k2_r2", "ttft_s": 29.941, "full_s": 32.26, "decode_s": 2.32, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"on_k2_r2","server_decodeSeconds":6.1897,"server_avgStepMs":247.5051,"server_acceptedPerStep":1.5600}
+{"tag": "on_k2_r3", "ttft_s": 29.872, "full_s": 32.313, "decode_s": 2.441, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"on_k2_r3","server_decodeSeconds":5.1893,"server_avgStepMs":207.5014,"server_acceptedPerStep":1.5600}
+{"tag": "on_k2_r4", "ttft_s": 32.61, "full_s": 35.509, "decode_s": 2.899, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"on_k2_r4","server_decodeSeconds":6.7944,"server_avgStepMs":271.6783,"server_acceptedPerStep":1.5600}
+{"tag": "off_k1_r1", "ttft_s": 35.869, "full_s": 39.384, "decode_s": 3.516, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k1_r1","server_decodeSeconds":7.2355,"server_avgStepMs":199.7898,"server_acceptedPerStep":0.8056}
+{"tag": "off_k1_r2", "ttft_s": 31.24, "full_s": 34.671, "decode_s": 3.432, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k1_r2","server_decodeSeconds":6.5575,"server_avgStepMs":182.0978,"server_acceptedPerStep":0.8056}
+{"tag": "off_k1_r3", "ttft_s": 30.75, "full_s": 34.188, "decode_s": 3.438, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k1_r3","server_decodeSeconds":6.2308,"server_avgStepMs":173.0263,"server_acceptedPerStep":0.8056}
+{"tag": "off_k3_r1", "ttft_s": 33.102, "full_s": 35.432, "decode_s": 2.33, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k3_r1","server_decodeSeconds":7.3374,"server_avgStepMs":384.3341,"server_acceptedPerStep":2.4211}
+{"tag": "off_k3_r2", "ttft_s": 28.002, "full_s": 30.424, "decode_s": 2.422, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k3_r2","server_decodeSeconds":3.4783,"server_avgStepMs":183.0049,"server_acceptedPerStep":2.4211}
+{"tag": "off_k3_r3", "ttft_s": 27.83, "full_s": 30.283, "decode_s": 2.453, "content_chars": 276, "usage": null, "content_sha256": "377c6fdac34be6d4747a88a6375134c7d33b0fb9aec51a1cd862804d22bcf7e4"}
+{"tag":"off_k3_r3","server_decodeSeconds":3.5204,"server_avgStepMs":185.2168,"server_acceptedPerStep":2.4211}

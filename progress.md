@@ -1381,3 +1381,49 @@ stats; window bound; config validation; the `ServerConfig` → policy mapping
 - Throughput is wall-clock for the safety signal, not a benchmark cell.
 - Off by default; with the flag off the policy is never created and the
   `MetricsSummary` fields are nil (backward compatible).
+
+## 2026-09-15: Long-context benchmarking at 8K/32K/96K (Phase H) — COMPLETE (measurement only)
+
+Benchmarking/profiling task, **no code changes** (server, engine, kernels, model,
+quantization all untouched). Release binary built from `main` (`18ed7d7`).
+Full write-up: `docs/LONG-CONTEXT-BENCHMARKS.md`. Raw lines:
+`benchmarks/results/longctx-2026-09-15/ab-matrix.jsonl`.
+
+### Fixtures
+Deterministic real Swift source (server+engine, 479 files, 1.76M-token corpus),
+truncated at token boundaries: `benchmarks/prompts/longctx-{8k,16k,32k,96k}.txt`,
+built by `benchmarks/make_longctx_fixtures.py` (sha256 in
+`benchmarks/results/longctx-2026-09-15/NOTES.txt`).
+
+### Headline findings
+- **32K and 96K are infeasible.** The prefill attention buffer is a dense
+  `[seq × seq]` allocation (quadratic). At 32K it requests 51,577,363,200 bytes
+  (51.6 GB) > the 30,150,672,384-byte (30.2 GB) Metal max buffer →
+  `[metal::malloc] ... greater than the maximum allowed buffer size` → SIGTRAP
+  crash (reproducible). 96K would be ~464 GB. **Max feasible prompt ≈ 24K tokens.**
+- **Prefill dominates** request time: ~27 s at 8K of a ~30 s request (~90 %).
+  Prefill throughput ~275 tok/s, ~linear in seq (8K 27 s, 16K 59 s).
+- **Fused GDN does NOT pay off at long context.** Bit-exact (identical token
+  stream on/off) and not faster at 8K (full_s 29.3 s off vs 32.7 s on). The
+  launch count is per verify round (draft-depth dependent), not per context
+  token, so it does not accumulate with context; and prefill (not decode) is the
+  cost.
+- **k = 2 remains optimal at 8K** (full_s k1 36.1 / k2 29.3 / k3 32.0 s), matching
+  short context.
+- **Prefix/session caching ≈ 7 % TTFT win only** (8K cold 27.3 s → warm ~25 s):
+  the gated-delta recurrent layers are not resumable from a token-prefix, so the
+  prefill is effectively recomputed each request.
+- **All configs bit-exact** (identical content sha256) across fused on/off,
+  k=1/2/3, and repeated requests.
+- **Memory:** peak RSS ~15.25 GB at 8K (~15 GB weights + ~0.5 GB KV). Steady-state
+  fits 32K under the 44 GB limit; the crash is the *transient* quadratic prefill
+  buffer, which admission control does not model.
+- **Decode is GPU-eval-bound** (~89 ms/round tEvalMs of ~93 ms stepMs at 8K);
+  host/graph overhead is small. First verify round after prefill is a one-time ~4 s.
+
+### Do-not-claim
+- Do NOT cite cross-session absolute tok/s; numbers here are one environment.
+- Do NOT claim the fused GDN is a wall-clock win (it is not, at any context).
+- Do NOT claim 32K/96K work; they crash / are infeasible on this hardware.
+- N per cell is 3–4 (not 6–10) because each 8K request costs ~30 s and 32K/96K
+  cannot complete; means have small spread.

@@ -1,0 +1,1522 @@
+=====/Users/cwong/ai/mlx-swift-lm/Libraries/BenchmarkHelpers/BenchmarkHelpers.swift=====
+// Shared benchmark logic for measuring model loading, tokenizer performance,
+// and download performance.
+// Integration packages inject their own Downloader and TokenizerLoader.
+
+import Foundation
+import MLX
+import MLXEmbedders
+import MLXLLM
+import MLXLMCommon
+import MLXVLM
+
+// MARK: - No-Op Tokenizer
+
+/// A tokenizer loader that returns a stub tokenizer. Useful for benchmarking
+/// model loading in downloader integration packages that don't provide a
+/// real tokenizer.
+public struct NoOpTokenizerLoader: TokenizerLoader {
+    public init() {}
+
+    public func load(from directory: URL) async throws -> any Tokenizer {
+        NoOpTokenizer()
+    }
+}
+
+private struct NoOpTokenizer: Tokenizer {
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] { [] }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { "" }
+    func convertTokenToId(_ token: String) -> Int? { nil }
+    func convertIdToToken(_ id: Int) -> String? { nil }
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] {
+        throw MLXLMCommon.TokenizerError.missingChatTemplate
+    }
+}
+
+// MARK: - Stats
+
+public struct BenchmarkStats: Sendable {
+    public let mean: Double
+    public let median: Double
+    public let stdDev: Double
+    public let min: Double
+    public let max: Double
+
+    public init(times: [Double]) {
+        precondition(!times.isEmpty, "BenchmarkStats requires at least one timing measurement")
+        let sorted = times.sorted()
+        self.min = sorted.first!
+        self.max = sorted.last!
+        let mean = times.reduce(0, +) / Double(times.count)
+        self.mean = mean
+        self.median = sorted[sorted.count / 2]
+
+        let squaredDiffs = times.map { ($0 - mean) * ($0 - mean) }
+        self.stdDev = sqrt(squaredDiffs.reduce(0, +) / Double(times.count))
+    }
+
+    public func printSummary(label: String) {
+        print("\(label) results:")
+        print("  Mean:   \(String(format: "%.1f", mean))ms")
+        print("  Median: \(String(format: "%.1f", median))ms")
+        print("  StdDev: \(String(format: "%.1f", stdDev))ms")
+        print("  Range:  \(String(format: "%.1f", min))-\(String(format: "%.1f", max))ms")
+    }
+}
+
+// MARK: - Benchmark Text
+
+public enum BenchmarkDefaults {
+    public static let textSource = BenchmarkTextSource.prideAndPrejudice
+    public static let tokenizationTextCharacterCount = 20_000
+    public static let decodingTextCharacterCount = 200_000
+    public static let loadingRuns = 7
+    public static let downloadRuns = 7
+    public static let tokenizationRuns = 25
+    public static let decodingRuns = 25
+    public static let decodesPerRun = 10
+}
+
+public struct BenchmarkTextSource: Sendable {
+    public let name: String
+    public let url: URL
+    public let contentStartMarker: String?
+
+    public init(name: String, url: URL, contentStartMarker: String? = nil) {
+        self.name = name
+        self.url = url
+        self.contentStartMarker = contentStartMarker
+    }
+
+    public static let prideAndPrejudice = BenchmarkTextSource(
+        name: "pride-and-prejudice",
+        url: URL(string: "https://www.gutenberg.org/ebooks/1342.txt.utf-8")!,
+        contentStartMarker: "It is a truth universally acknowledged"
+    )
+}
+
+public enum BenchmarkTextError: LocalizedError {
+    case invalidResponse(URL)
+    case decodeFailed(URL)
+    case contentStartMarkerNotFound(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidResponse(let url):
+            return "Unexpected response while fetching benchmark text from \(url.absoluteString)."
+        case .decodeFailed(let url):
+            return "Failed to decode benchmark text from \(url.absoluteString) as UTF-8."
+        case .contentStartMarkerNotFound(let marker):
+            return "Benchmark text start marker not found: '\(marker)'."
+        }
+    }
+}
+
+private func benchmarkTextCacheURL(for source: BenchmarkTextSource) -> URL {
+    FileManager.default.temporaryDirectory
+        .appending(component: "BenchmarkHelpers", directoryHint: .isDirectory)
+        .appending(component: "\(source.name).txt")
+}
+
+private func normalizeBenchmarkText(_ text: String) -> String {
+    text.replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+}
+
+private func trimmedBenchmarkText(_ text: String, source: BenchmarkTextSource) throws -> String {
+    guard let marker = source.contentStartMarker else {
+        return text
+    }
+    guard let markerRange = text.range(of: marker) else {
+        throw BenchmarkTextError.contentStartMarkerNotFound(marker)
+    }
+    return String(text[markerRange.lowerBound...])
+}
+
+private func fetchBenchmarkText(source: BenchmarkTextSource) async throws -> String {
+    let cacheURL = benchmarkTextCacheURL(for: source)
+    let fileManager = FileManager.default
+
+    if fileManager.fileExists(atPath: cacheURL.path) {
+        let cached = try String(contentsOf: cacheURL, encoding: .utf8)
+        return try trimmedBenchmarkText(normalizeBenchmarkText(cached), source: source)
+    }
+
+    let (data, response) = try await URLSession.shared.data(from: source.url)
+    guard let httpResponse = response as? HTTPURLResponse,
+        (200 ..< 300).contains(httpResponse.statusCode)
+    else {
+        throw BenchmarkTextError.invalidResponse(source.url)
+    }
+    guard let downloaded = String(data: data, encoding: .utf8) else {
+        throw BenchmarkTextError.decodeFailed(source.url)
+    }
+
+    try fileManager.createDirectory(
+        at: cacheURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try downloaded.write(to: cacheURL, atomically: true, encoding: .utf8)
+
+    return try trimmedBenchmarkText(normalizeBenchmarkText(downloaded), source: source)
+}
+
+/// Load benchmark text from a remote public-domain source and cache it locally in the temporary directory.
+public func loadBenchmarkText(
+    source: BenchmarkTextSource = BenchmarkDefaults.textSource,
+    characterCount: Int = 20_000
+) async throws -> String {
+    precondition(characterCount > 0, "characterCount must be greater than zero")
+    let text = try await fetchBenchmarkText(source: source)
+    return String(text.prefix(characterCount))
+}
+
+public func loadTokenizationBenchmarkText(
+    source: BenchmarkTextSource = BenchmarkDefaults.textSource
+) async throws -> String {
+    try await loadBenchmarkText(
+        source: source,
+        characterCount: BenchmarkDefaults.tokenizationTextCharacterCount
+    )
+}
+
+public func loadDecodingBenchmarkText(
+    source: BenchmarkTextSource = BenchmarkDefaults.textSource
+) async throws -> String {
+    try await loadBenchmarkText(
+        source: source,
+        characterCount: BenchmarkDefaults.decodingTextCharacterCount
+    )
+}
+
+private func resolveTokenizerDirectory(
+    from downloader: any Downloader,
+    configuration: MLXLMCommon.ModelConfiguration,
+    useLatest: Bool
+) async throws -> URL {
+    switch configuration.tokenizerSource {
+    case .id(let id, let revision):
+        return try await downloader.download(
+            id: id,
+            revision: revision,
+            matching: tokenizerDownloadPatterns,
+            useLatest: useLatest,
+            progressHandler: { _ in }
+        )
+    case .directory(let directory):
+        return directory
+    case nil:
+        switch configuration.id {
+        case .id(let id, let revision):
+            return try await downloader.download(
+                id: id,
+                revision: revision,
+                matching: tokenizerDownloadPatterns,
+                useLatest: useLatest,
+                progressHandler: { _ in }
+            )
+        case .directory(let directory):
+            return directory
+        }
+    }
+}
+
+private func loadTokenizerForBenchmark(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: MLXLMCommon.ModelConfiguration,
+    useLatest: Bool
+) async throws -> any Tokenizer {
+    let tokenizerDirectory = try await resolveTokenizerDirectory(
+        from: downloader,
+        configuration: configuration,
+        useLatest: useLatest
+    )
+    return try await tokenizerLoader.load(from: tokenizerDirectory)
+}
+
+// MARK: - Benchmark Runners
+
+/// Benchmark tokenizer loading without downloading model weights or initializing a model.
+public func benchmarkTokenizerLoading(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: MLXLMCommon.ModelConfiguration = .init(id: "mlx-community/Qwen3-0.6B-4bit"),
+    useLatest: Bool = false,
+    runs: Int = BenchmarkDefaults.loadingRuns
+) async throws -> BenchmarkStats {
+    let tokenizerDirectory = try await resolveTokenizerDirectory(
+        from: downloader,
+        configuration: configuration,
+        useLatest: useLatest
+    )
+
+    _ = try await tokenizerLoader.load(from: tokenizerDirectory)
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try await tokenizerLoader.load(from: tokenizerDirectory)
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print("Tokenizer load run \(i): \(String(format: "%.1f", elapsed))ms")
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+/// Benchmark tokenization on a preloaded tokenizer without initializing a model.
+public func benchmarkTokenization(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: MLXLMCommon.ModelConfiguration = .init(id: "mlx-community/Qwen3-0.6B-4bit"),
+    text: String = "The quick brown fox jumps over the lazy dog.",
+    addSpecialTokens: Bool = true,
+    useLatest: Bool = false,
+    runs: Int = BenchmarkDefaults.tokenizationRuns
+) async throws -> BenchmarkStats {
+    let tokenizer = try await loadTokenizerForBenchmark(
+        from: downloader,
+        using: tokenizerLoader,
+        configuration: configuration,
+        useLatest: useLatest
+    )
+
+    _ = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        let tokenIds = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print(
+            "Tokenization run \(i): \(String(format: "%.1f", elapsed))ms (\(tokenIds.count) tokens)"
+        )
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+/// Benchmark decoding on a preloaded tokenizer without initializing a model.
+public func benchmarkDecoding(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: MLXLMCommon.ModelConfiguration = .init(id: "mlx-community/Qwen3-0.6B-4bit"),
+    text: String = "The quick brown fox jumps over the lazy dog.",
+    addSpecialTokens: Bool = true,
+    skipSpecialTokens: Bool = false,
+    useLatest: Bool = false,
+    runs: Int = BenchmarkDefaults.decodingRuns,
+    decodesPerRun: Int = BenchmarkDefaults.decodesPerRun
+) async throws -> BenchmarkStats {
+    precondition(decodesPerRun > 0, "decodesPerRun must be greater than zero")
+
+    let tokenizer = try await loadTokenizerForBenchmark(
+        from: downloader,
+        using: tokenizerLoader,
+        configuration: configuration,
+        useLatest: useLatest
+    )
+    let tokenIds = tokenizer.encode(text: text, addSpecialTokens: addSpecialTokens)
+
+    _ = tokenizer.decode(tokenIds: tokenIds, skipSpecialTokens: skipSpecialTokens)
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        var decoded = ""
+        let start = CFAbsoluteTimeGetCurrent()
+        for _ in 0 ..< decodesPerRun {
+            decoded = tokenizer.decode(tokenIds: tokenIds, skipSpecialTokens: skipSpecialTokens)
+        }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000 / Double(decodesPerRun)
+        times.append(elapsed)
+        print(
+            "Decoding run \(i): \(String(format: "%.1f", elapsed))ms avg over \(decodesPerRun)x "
+                + "(\(decoded.count) chars)"
+        )
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+/// Benchmark LLM model loading. Performs a warm-up run, then measures `runs` timed loads.
+public func benchmarkLLMLoading(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    modelId: String = "mlx-community/Qwen3-0.6B-4bit",
+    runs: Int = BenchmarkDefaults.loadingRuns
+) async throws -> BenchmarkStats {
+    let config = MLXLMCommon.ModelConfiguration(id: modelId)
+
+    _ = try await LLMModelFactory.shared.load(
+        from: downloader, using: tokenizerLoader, configuration: config
+    ) { _ in }
+    Memory.clearCache()
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try await LLMModelFactory.shared.load(
+            from: downloader, using: tokenizerLoader, configuration: config
+        ) { _ in }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print("LLM load run \(i): \(String(format: "%.1f", elapsed))ms")
+        Memory.clearCache()
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+/// Benchmark VLM model loading. Performs a warm-up run, then measures `runs` timed loads.
+public func benchmarkVLMLoading(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    modelId: String = "mlx-community/Qwen2-VL-2B-Instruct-4bit",
+    runs: Int = BenchmarkDefaults.loadingRuns
+) async throws -> BenchmarkStats {
+    let config = MLXLMCommon.ModelConfiguration(id: modelId)
+
+    _ = try await VLMModelFactory.shared.load(
+        from: downloader, using: tokenizerLoader, configuration: config
+    ) { _ in }
+    Memory.clearCache()
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try await VLMModelFactory.shared.load(
+            from: downloader, using: tokenizerLoader, configuration: config
+        ) { _ in }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print("VLM load run \(i): \(String(format: "%.1f", elapsed))ms")
+        Memory.clearCache()
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+/// Benchmark embedding model loading. Performs a warm-up run, then measures `runs` timed loads.
+public func benchmarkEmbeddingLoading(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    configuration: ModelConfiguration = .init(
+        id: "mlx-community/Qwen3-Embedding-0.6B-8bit"),
+    runs: Int = BenchmarkDefaults.loadingRuns
+) async throws -> BenchmarkStats {
+    _ = try await EmbedderModelFactory.shared.loadContainer(
+        from: downloader, using: tokenizerLoader, configuration: configuration
+    ) { _ in }
+    Memory.clearCache()
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try await EmbedderModelFactory.shared.loadContainer(
+            from: downloader, using: tokenizerLoader, configuration: configuration
+        ) { _ in }
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print("Embedding load run \(i): \(String(format: "%.1f", elapsed))ms")
+        Memory.clearCache()
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+// MARK: - Download Benchmarks
+
+/// Benchmark download cache hit performance. Ensures the model is cached with a warm-up
+/// download, then measures repeated cache lookups.
+public func benchmarkDownloadCacheHit(
+    from downloader: any Downloader,
+    modelId: String = "mlx-community/Qwen3-0.6B-4bit",
+    runs: Int = BenchmarkDefaults.downloadRuns
+) async throws -> BenchmarkStats {
+    let patterns = modelDownloadPatterns
+
+    // Warm-up: ensure the model is cached
+    _ = try await downloader.download(
+        id: modelId, revision: "main", matching: patterns,
+        useLatest: false, progressHandler: { _ in })
+
+    var times: [Double] = []
+    for i in 1 ... runs {
+        let start = CFAbsoluteTimeGetCurrent()
+        _ = try await downloader.download(
+            id: modelId, revision: "main", matching: patterns,
+            useLatest: false, progressHandler: { _ in })
+        let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+        times.append(elapsed)
+        print("Download cache hit run \(i): \(String(format: "%.1f", elapsed))ms")
+    }
+
+    return BenchmarkStats(times: times)
+}
+
+// MARK: - LLM Generation Benchmarks
+
+/// Combined prefill and decode timing for an LLM generation run.
+public struct LLMGenerationStats: Sendable {
+    public let promptTokenCount: Int
+    public let generationTokenCount: Int
+    /// Prefill latency per run, in milliseconds.
+    public let promptTimeStats: BenchmarkStats
+    /// Decode latency per run, in milliseconds (covers all generated tokens).
+    public let generateTimeStats: BenchmarkStats
+
+    public init(
+        promptTokenCount: Int,
+        generationTokenCount: Int,
+        promptTimeStats: BenchmarkStats,
+        generateTimeStats: BenchmarkStats
+    ) {
+        self.promptTokenCount = promptTokenCount
+        self.generationTokenCount = generationTokenCount
+        self.promptTimeStats = promptTimeStats
+        self.generateTimeStats = generateTimeStats
+    }
+
+    /// Median prefill throughput in tokens per second.
+    public var prefillTokensPerSecond: Double {
+        Double(promptTokenCount) / (promptTimeStats.median / 1000.0)
+    }
+
+    /// Median decode throughput in tokens per second.
+    public var decodeTokensPerSecond: Double {
+        Double(generationTokenCount) / (generateTimeStats.median / 1000.0)
+    }
+
+    public func printSummary(label: String) {
+        print("\(label) results:")
+        print(
+            "  Prefill: \(promptTokenCount) tokens, "
+                + "\(String(format: "%.2f", prefillTokensPerSecond)) tok/s "
+                + "(median \(String(format: "%.1f", promptTimeStats.median))ms, "
+                + "stddev \(String(format: "%.1f", promptTimeStats.stdDev))ms)"
+        )
+        print(
+            "  Decode:  \(generationTokenCount) tokens, "
+                + "\(String(format: "%.2f", decodeTokensPerSecond)) tok/s "
+                + "(median \(String(format: "%.1f", generateTimeStats.median))ms, "
+                + "stddev \(String(format: "%.1f", generateTimeStats.stdDev))ms)"
+        )
+    }
+}
+
+public enum LLMGenerationBenchmarkError: LocalizedError {
+    case missingCompletionInfo
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingCompletionInfo:
+            return
+                "LLM generation stream completed without emitting GenerateCompletionInfo."
+        }
+    }
+}
+
+/// Benchmark prefill and decode performance for an LLM. Performs a warm-up run
+/// (loading + first generation) to reach steady-state, then measures `runs` timed
+/// trials and reports prefill/decode throughput.
+///
+/// Uses ``BenchmarkDefaults/textSource`` for the prompt by default; pass an
+/// explicit `prompt` to override. `temperature` defaults to 0 so trials are
+/// deterministic and tps comparisons are reproducible across runs.
+public func benchmarkLLMGeneration(
+    from downloader: any Downloader,
+    using tokenizerLoader: any TokenizerLoader,
+    modelId: String = "mlx-community/Qwen3-0.6B-4bit",
+    prompt: String? = nil,
+    promptCharacterCount: Int = 4_000,
+    maxTokens: Int = 64,
+    runs: Int = BenchmarkDefaults.loadingRuns
+) async throws -> LLMGenerationStats {
+    let configuration = MLXLMCommon.ModelConfiguration(id: modelId)
+    let container = try await LLMModelFactory.shared.loadContainer(
+        from: downloader, using: tokenizerLoader, configuration: configuration
+    ) { _ in }
+
+    let benchmarkPrompt: String
+    if let prompt = prompt {
+        benchmarkPrompt = prompt
+    } else {
+        benchmarkPrompt = try await loadBenchmarkText(characterCount: promptCharacterCount)
+    }
+
+    let parameters = GenerateParameters(maxTokens: maxTokens, temperature: 0)
+
+    // Warm-up: prime caches and weights. UserInput is `sending`, so build a
+    // fresh instance for each call.
+    do {
+        let warmInput = try await container.prepare(input: UserInput(prompt: benchmarkPrompt))
+        let warmStream = try await container.generate(
+            input: warmInput, parameters: parameters)
+        for await _ in warmStream {}
+    }
+
+    var promptTimes: [Double] = []
+    var generateTimes: [Double] = []
+    var promptTokenCount = 0
+    var generationTokenCount = 0
+
+    for i in 1 ... runs {
+        let input = try await container.prepare(input: UserInput(prompt: benchmarkPrompt))
+        let stream = try await container.generate(input: input, parameters: parameters)
+        var info: GenerateCompletionInfo?
+        for await item in stream {
+            if case .info(let i) = item { info = i }
+        }
+        guard let completion = info else {
+            throw LLMGenerationBenchmarkError.missingCompletionInfo
+        }
+        promptTokenCount = completion.promptTokenCount
+        generationTokenCount = completion.generationTokenCount
+        let promptMs = completion.promptTime * 1000
+        let generateMs = completion.generateTime * 1000
+        promptTimes.append(promptMs)
+        generateTimes.append(generateMs)
+        print(
+            "Generation run \(i): "
+                + "prefill \(completion.promptTokenCount) tok / "
+                + "\(String(format: "%.1f", promptMs))ms "
+                + "(\(String(format: "%.2f", completion.promptTokensPerSecond)) tok/s), "
+                + "decode \(completion.generationTokenCount) tok / "
+                + "\(String(format: "%.1f", generateMs))ms "
+                + "(\(String(format: "%.2f", completion.tokensPerSecond)) tok/s)"
+        )
+    }
+
+    return LLMGenerationStats(
+        promptTokenCount: promptTokenCount,
+        generationTokenCount: generationTokenCount,
+        promptTimeStats: BenchmarkStats(times: promptTimes),
+        generateTimeStats: BenchmarkStats(times: generateTimes)
+    )
+}
+
+=====/Users/cwong/ai/mlx-swift-lm/Libraries/FullBench/main.swift=====
+// fullbench — standalone micro-benchmark for the FULL-MODEL forward at the
+// verify widths that the k=2 speculative round and the serial control use.
+//
+// Purpose: in-session resolution of the M=1 -> M=3 premium of the k=2
+// round's blocking eval (Phase 4 of the k=2 decomposition task). The trace
+// (Phase 3) puts ~80 ms of GPU inside the eval window; the algebra (Phase 2)
+// measures serial tE ~59 ms and k=2 tE ~80-104 ms in separate thermal states.
+// This bench measures both shapes back-to-back in ONE process so the M
+// premium is a single-session number with no cross-session thermal label.
+//
+// Shapes (exact in-pipeline calls, Qwen38MTPBlockSession):
+//   M=1 serial : callWithHidden(input [1,1], cache, nConfirmed: 0)
+//   M>=2 verify: callWithHiddenAndNormed(input [1,M], cache, nConfirmed: 1)
+//   + a top-2 stand-in (max + argMax over the vocab axis; the in-pipeline
+//     linearTopTwoRows MSL/native path costs the same reduction within
+//     ~0.2 ms) + the per-round cache-state eval bundle, as in the session.
+//
+// The cache is primed with `--prime` tokens (untimed) so KV/GDN state is
+// warm like a mid-session round, then each width is measured on the
+// growing cache in ascending M order (the session's own order).
+//
+//   fullbench --model <dir> [--prime 2048] [--widths 1,2,3,4]
+//             [--reps 10] [--warmup 2]
+
+import Foundation
+import MLX
+import MLXLLM
+import MLXLMCommon
+
+// MARK: - No-op tokenizer
+
+private struct NoOpTokenizer: Tokenizer, Sendable {
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] { [] }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { "" }
+    func convertTokenToId(_ token: String) -> Int? { nil }
+    func convertIdToToken(_ id: Int) -> String? { nil }
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] { [] }
+}
+
+private struct NoOpTokenizerLoader: TokenizerLoader, Sendable {
+    func load(from directory: URL) async throws -> any Tokenizer {
+        NoOpTokenizer()
+    }
+}
+
+// MARK: - Args
+
+struct FullBenchArgs {
+    var modelDir: String = "./weights"
+    var prime: Int = 2048
+    var widths: [Int] = [1, 2, 3, 4]
+    var reps: Int = 10
+    var warmup: Int = 2
+    var hold: Int = 0
+    /// SDPA micro-bench mode: comma-separated K list. Skips model load.
+    var sdpa: [Int]? = nil
+    /// Serial mode: prime with `prime` tokens, then `reps` back-to-back M=1
+    /// decodes on the SAME growing cache (mirrors the server serial cell).
+    var serial: Bool = false
+}
+
+func parseArgs(_ argv: [String]) -> FullBenchArgs {
+    var a = FullBenchArgs()
+    var i = 1
+    while i < argv.count {
+        switch argv[i] {
+        case "--model": i += 1; a.modelDir = argv[i]
+        case "--prime": i += 1; a.prime = Int(argv[i])!
+        case "--widths":
+            i += 1
+            a.widths = argv[i].split(separator: ",").compactMap { Int($0) }
+            guard !a.widths.isEmpty else { fatalError("fullbench: bad --widths") }
+        case "--reps": i += 1; a.reps = Int(argv[i])!
+        case "--warmup": i += 1; a.warmup = Int(argv[i])!
+        case "--hold": i += 1; a.hold = Int(argv[i])!
+        case "--sdpa":
+            i += 1
+            a.sdpa = argv[i].split(separator: ",").compactMap { Int($0) }
+        case "--serial": a.serial = true
+        default:
+            fatalError("fullbench: unknown argument \(argv[i])")
+        }
+        i += 1
+    }
+    return a
+}
+
+// MARK: - SDPA micro-bench
+
+/// Isolate the host+GPU cost of one qL=1 GQA SDPA op as a function of K.
+/// Shape mirrors the 16 full-attention layers: N_q=24, N_kv=4 (gqa 6),
+/// D=256, bf16. Phase A times host op construction only; phase B times
+/// construct + blocking eval (host enqueue + GPU).
+private func runSDPABench(ks: [Int], reps: Int) {
+    let nq = 24, nkv = 4, d = 256
+    let scale = 1.0 / (Float(d)).squareRoot()
+    for K in ks {
+        // Content is irrelevant to timing; zeros suffice.
+        let q = MLXArray.zeros([1, nq, 1, d], dtype: .bfloat16)
+        let k = MLXArray.zeros([1, nkv, K, d], dtype: .bfloat16)
+        let v = MLXArray.zeros([1, nkv, K, d], dtype: .bfloat16)
+        MLX.eval([q, k, v])
+
+        // Phase A: host construction cost (no eval).
+        var buildNs: [UInt64] = []
+        for _ in 0 ..< reps {
+            let t0 = DispatchTime.now()
+            _ = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: scale, mask: nil)
+            buildNs.append(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds)
+        }
+
+        // Phase B: construct + blocking eval (host enqueue + GPU + sync).
+        var evalNs: [UInt64] = []
+        for _ in 0 ..< reps {
+            let t0 = DispatchTime.now()
+            let o = MLXFast.scaledDotProductAttention(queries: q, keys: k, values: v, scale: scale, mask: nil)
+            MLX.eval([o])
+            evalNs.append(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds)
+        }
+        print(String(
+            format: "sdpa K=%d  build=%.3f ms  eval=%.3f ms  (n=%d)",
+            K, Double(median(buildNs)) / 1e6, Double(median(evalNs)) / 1e6, reps))
+    }
+}
+
+// MARK: - Load
+
+private final class LoadBox: @unchecked Sendable {
+    var result: Result<ModelContainer, Error>?
+}
+
+func loadModel(modelDir: String) throws -> ModelContainer {
+    let modelURL = URL(fileURLWithPath: modelDir)
+    guard FileManager.default.fileExists(atPath: modelURL.path) else {
+        fatalError("fullbench: model directory not found: \(modelDir)")
+    }
+    print("fullbench: loading backbone ...")
+    // The checkpoint's tensors are named for the multimodal wrapper
+    // (`language_model.*`) while config.json declares the bare text model;
+    // the documented hook (Load.swift) strips that prefix. No-op for
+    // checkpoints that do not carry it.
+    _primaryWeightKeyPrefixStrip = "language_model."
+    let t0 = DispatchTime.now()
+    let semaphore = DispatchSemaphore(value: 0)
+    let box = LoadBox()
+    Task.detached {
+        do {
+            box.result = .success(
+                try await LLMModelFactory.shared.loadContainer(
+                    from: modelURL, using: NoOpTokenizerLoader()))
+        } catch {
+            box.result = .failure(error)
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    guard let result = box.result else {
+        throw ModelFactoryError.invalidConfiguration("load box empty")
+    }
+    let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+    print("fullbench: loaded in \(loadMs) ms")
+    return try result.get()
+}
+
+// MARK: - Helpers
+
+func median(_ xs: [UInt64]) -> Double {
+    let s = xs.sorted()
+    let n = s.count
+    return n % 2 == 1
+        ? Double(s[n / 2])
+        : Double(s[n / 2 - 1] + s[n / 2]) / 2.0
+}
+
+/// Deterministic synthetic token ids (content is irrelevant to timing).
+func synthTokens(_ rows: Int, seed: Int) -> MLXArray {
+    MLXArray((0 ..< rows).map { Int32((seed + $0 * 7919) % 150000) })
+        .reshaped([1, rows])
+}
+
+@main
+struct FullBench {
+    /// Emit absolute-uptime anchors per timed call (for xctrace bucketing).
+    static let anchors =
+        ProcessInfo.processInfo.environment["FULLBENCH_ANCHORS"] == "1"
+
+    static func main() async {
+        let args = parseArgs(CommandLine.arguments)
+
+        if let ks = args.sdpa {
+            runSDPABench(ks: ks, reps: args.reps)
+            return
+        }
+
+        let serialMode = args.serial
+
+        let container = try! loadModel(modelDir: args.modelDir)
+        let prime = args.prime
+        let widths = args.widths.sorted()
+
+        try! await container.perform { (context: ModelContext) async throws in
+            guard let m = context.model as? any Qwen38MTPTarget else {
+                fatalError("fullbench: model is not Qwen38MTPTarget")
+            }
+
+            // One warm round per shape (compiles + first-touch), untimed.
+            do {
+                let cache = try! m.newCache(parameters: nil)
+                _ = m.callWithHidden(
+                    input: LMInput.Text(tokens: synthTokens(prime, seed: 1)),
+                    cache: cache, nConfirmed: 0)
+                MLX.eval(cache.flatMap { $0.state })
+                for M in widths {
+                    let t = synthTokens(M, seed: 100 + M)
+                    if M == 1 {
+                        let (logits, _) = m.callWithHidden(
+                            input: LMInput.Text(tokens: t),
+                            cache: cache, nConfirmed: 0)
+                        let row = logits[0..., logits.dim(1) - 1 ..< logits.dim(1), 0...]
+                        _ = MLX.eval(
+                            cache.flatMap { $0.state }
+                            + [argMax(row, axis: -1), row.max(axis: -1)])
+                    } else {
+                        let (logits, _, _) = m.callWithHiddenAndNormed(
+                            input: LMInput.Text(tokens: t),
+                            cache: cache, nConfirmed: 1)
+                        _ = MLX.eval(
+                            cache.flatMap { $0.state }
+                            + [argMax(logits, axis: -1), logits.max(axis: -1)])
+                    }
+                }
+            }
+            print("fullbench: warm complete")
+
+            struct Sample { var build: [UInt64]; var eval: [UInt64] }
+            var byWidth: [Int: Sample] = [:]
+            widths.forEach { byWidth[$0] = Sample(build: [], eval: []) }
+
+            // Serial mode: one cache, prime once, then back-to-back M=1
+            // decodes on the growing cache (the server serial cell shape).
+            if serialMode {
+                let cache = try! m.newCache(parameters: nil)
+                _ = m.callWithHidden(
+                    input: LMInput.Text(tokens: synthTokens(prime, seed: 1)),
+                    cache: cache, nConfirmed: 0)
+                MLX.eval(cache.flatMap { $0.state })
+                print("fullbench: serial mode — prime=\(prime) then \(args.reps) M=1 decodes")
+                let bucket = 64
+                var bucketCount = 0
+                var bucketNs: [UInt64] = []
+                var allNs: [UInt64] = []
+                for r in 0 ..< args.reps + args.warmup {
+                    let t = synthTokens(1, seed: 1000 + r)
+                    let (logits, _) = m.callWithHidden(
+                        input: LMInput.Text(tokens: t),
+                        cache: cache, nConfirmed: 0)
+                    let row = logits[0..., logits.dim(1) - 1 ..< logits.dim(1), 0...]
+                    let t1 = DispatchTime.now().uptimeNanoseconds
+                    _ = MLX.eval(
+                        cache.flatMap { $0.state }
+                        + [argMax(row, axis: -1), row.max(axis: -1)])
+                    let t2 = DispatchTime.now().uptimeNanoseconds
+                    let ns = t2 - t1
+                    if r >= args.warmup {
+                        allNs.append(ns)
+                        bucketNs.append(ns)
+                        bucketCount += 1
+                        if bucketCount == bucket {
+                            print(String(format: "serial tE bucket %d..%d: %.2f ms",
+                                         r - bucket + 1, r, median(bucketNs) / 1e6))
+                            bucketNs = []
+                            bucketCount = 0
+                        }
+                    }
+                }
+                print(String(format: "serial tE overall: n=%d med=%.2f min=%.2f max=%.2f",
+                             allNs.count, median(allNs) / 1e6,
+                             Double(allNs.min() ?? 0) / 1e6, Double(allNs.max() ?? 0) / 1e6))
+                return
+            }
+
+            for rep in 0 ..< args.reps + args.warmup {
+                let isTimed = rep >= args.warmup
+                let cache = try! m.newCache(parameters: nil)
+                // Untimed prime: warm KV + GDN state, mid-session depth.
+                _ = m.callWithHidden(
+                    input: LMInput.Text(tokens: synthTokens(prime, seed: 1000 + rep)),
+                    cache: cache, nConfirmed: 0)
+                MLX.eval(cache.flatMap { $0.state })
+
+                for M in widths {
+                    let t0 = DispatchTime.now().uptimeNanoseconds
+                    let bundle: [MLXArray]
+                    let t = synthTokens(M, seed: 1000 + rep * 10 + M)
+                    if M == 1 {
+                        let (logits, _) = m.callWithHidden(
+                            input: LMInput.Text(tokens: t),
+                            cache: cache, nConfirmed: 0)
+                        let row = logits[0..., logits.dim(1) - 1 ..< logits.dim(1), 0...]
+                        bundle = cache.flatMap { $0.state }
+                            + [argMax(row, axis: -1), row.max(axis: -1)]
+                    } else {
+                        let (logits, _, _) = m.callWithHiddenAndNormed(
+                            input: LMInput.Text(tokens: t),
+                            cache: cache, nConfirmed: 1)
+                        bundle = cache.flatMap { $0.state }
+                            + [argMax(logits, axis: -1), logits.max(axis: -1)]
+                    }
+                    let t1 = DispatchTime.now().uptimeNanoseconds
+                    MLX.eval(bundle)
+                    let t2 = DispatchTime.now().uptimeNanoseconds
+                    if isTimed {
+                        byWidth[M]!.build.append(t1 - t0)
+                        byWidth[M]!.eval.append(t2 - t1)
+                        if Self.anchors {
+                            FileHandle.standardError.write(
+                                Data(
+                                    "fb-anchor: m=\(M) rep=\(rep) t0=\(t0) t1=\(t1) t2=\(t2)\n"
+                                    .utf8))
+                        }
+                    }
+                }
+            }
+
+            print("")
+            print("fullbench: prime=\(prime) tokens, reps=\(args.reps) (timed), warmup=\(args.warmup)")
+            print("| M | build ms (med) | eval wall ms (med) | eval min | eval max |")
+            print("|---|---|---|---|---|")
+            var evalMeds: [(Int, Double)] = []
+            for M in widths {
+                let s = byWidth[M]!
+                evalMeds.append((M, median(s.eval)))
+                let buildMs = String(format: "%.2f", median(s.build) / 1e6)
+                let evalMs = String(format: "%.2f", median(s.eval) / 1e6)
+                let minMs = String(format: "%.2f", Double(s.eval.min()!) / 1e6)
+                let maxMs = String(format: "%.2f", Double(s.eval.max()!) / 1e6)
+                print("| \(M) | \(buildMs) | \(evalMs) | \(minMs) | \(maxMs) |")
+            }
+            // Least-squares slope of eval-wall vs M (marginal per-row cost)
+            // and its M=1 extrapolation, so the M premium is not biased by
+            // the ascending-M thermal order within a rep.
+            let n = Double(evalMeds.count)
+            let mx = evalMeds.map { Double($0.0) }
+            let my = evalMeds.map { $0.1 }
+            let meanX = mx.reduce(0, +) / n
+            let meanY = my.reduce(0, +) / n
+            let slope = zip(mx, my).reduce(0.0) { $0 + ($1.0 - meanX) * ($1.1 - meanY) }
+                / zip(mx, mx).reduce(0.0) { $0 + ($1.0 - meanX) * ($1.0 - meanX) }
+            let intercept = meanY - slope * meanX
+            let interceptMs = String(format: "%.2f", intercept / 1e6)
+            let slopeMs = String(format: "%.2f", slope / 1e6)
+            print("")
+            print("eval-wall linear fit: intercept(M=0) \(interceptMs) ms, slope \(slopeMs) ms/row")
+            if let m1 = evalMeds.first(where: { $0.0 == 1 }),
+               let m3 = evalMeds.first(where: { $0.0 == 3 }) {
+                let medPremium = String(format: "%.2f", (m3.1 - m1.1) / 1e6)
+                print("M=1 -> M=3 premium (measured medians): \(medPremium) ms")
+            }
+            if evalMeds.count >= 2 {
+                let fitPremium = String(format: "%.2f", (2.0 * slope) / 1e6)
+                print("M=1 -> M=3 premium (fit, 2 rows * slope): \(fitPremium) ms")
+            }
+            print("fullbench: done")
+        }
+        if args.hold > 0 {
+            print("fullbench: holding \(args.hold)s (xctrace finalize)")
+            try? await Task.sleep(nanoseconds: UInt64(args.hold) * 1_000_000_000)
+        }
+    }
+}
+
+=====/Users/cwong/ai/mlx-swift-lm/Libraries/HeadBench/main.swift=====
+// headbench — standalone micro-benchmark for the MTP head block and the
+// lm_head projections that run on every speculative-verify round (W2/W4
+// evidence for the MTP-head 4-bit quantization gate).
+//
+// Loads the backbone + pinned MTP head exactly the way the server does
+// (LLMModelFactory + Qwen38MTPHeadAttachment) and times the EXACT per-round
+// session calls on synthetic hidden states:
+//
+//   flush   = mtpHeadHiddenForward([1,F,5120] hidden, [1,F] tokens)
+//             (committed-history flush; ONE fresh head cache per round)
+//   step    = mtpHeadHiddenForward([1,1,5120], [1,1])   (draft step)
+//   proj1   = draftTokenID(lastHiddenRow)               (M=1 draft projection)
+//   verifyM = applyFinalNorm + applyLMHead on [1,M,5120] (M = 1 + d verify rows)
+//
+// Per-round head-family cost for draft depth d (flush F):
+//   flush(F) + (d-1)*step + d*proj1 + verify(1+d)
+//
+//   headbench --model <dir> --head <dir> [--drafts 1,2,3,4,8] [--flush 1]
+//             [--warmup 10] [--timed 50]
+
+import Foundation
+import MLX
+import MLXLLM
+import MLXLMCommon
+import MLXNN
+
+// MARK: - No-op tokenizer (bench never converts text <-> ids)
+
+private struct NoOpTokenizer: Tokenizer, Sendable {
+    func encode(text: String, addSpecialTokens: Bool) -> [Int] { [] }
+    func decode(tokenIds: [Int], skipSpecialTokens: Bool) -> String { "" }
+    func convertTokenToId(_ token: String) -> Int? { nil }
+    func convertIdToToken(_ id: Int) -> String? { nil }
+    var bosToken: String? { nil }
+    var eosToken: String? { nil }
+    var unknownToken: String? { nil }
+    func applyChatTemplate(
+        messages: [[String: any Sendable]],
+        tools: [[String: any Sendable]]?,
+        additionalContext: [String: any Sendable]?
+    ) throws -> [Int] { [] }
+}
+
+private struct NoOpTokenizerLoader: TokenizerLoader, Sendable {
+    func load(from directory: URL) async throws -> any Tokenizer {
+        NoOpTokenizer()
+    }
+}
+
+// MARK: - Args
+
+struct HeadBenchArgs {
+    var modelDir: String = "./weights"
+    var headDir: String = "./mtp-head"
+    var drafts: [Int] = [1, 2, 3, 4, 8]
+    var flush: Int = 1
+    var warmup: Int = 10
+    var timed: Int = 50
+    var raw: Bool = false
+}
+
+func parseArgs(_ argv: [String]) -> HeadBenchArgs {
+    var a = HeadBenchArgs()
+    var i = 1
+    while i < argv.count {
+        switch argv[i] {
+        case "--model": i += 1; a.modelDir = argv[i]
+        case "--head": i += 1; a.headDir = argv[i]
+        case "--drafts":
+            i += 1
+            a.drafts = argv[i].split(separator: ",").compactMap { Int($0) }
+            guard !a.drafts.isEmpty else { fatalError("headbench: bad --drafts") }
+        case "--flush": i += 1; a.flush = Int(argv[i])!
+        case "--warmup": i += 1; a.warmup = Int(argv[i])!
+        case "--timed": i += 1; a.timed = Int(argv[i])!
+        case "--raw": a.raw = true
+        default:
+            fatalError("headbench: unknown argument \(argv[i])")
+        }
+        i += 1
+    }
+    return a
+}
+
+// MARK: - Load
+
+private final class LoadBox: @unchecked Sendable {
+    var result: Result<ModelContainer, Error>?
+}
+
+func loadModel(modelDir: String, headDir: String) throws -> ModelContainer {
+    let modelURL = URL(fileURLWithPath: modelDir)
+    let headURL = URL(fileURLWithPath: headDir)
+    guard FileManager.default.fileExists(atPath: modelURL.path),
+          FileManager.default.fileExists(atPath: headURL.path) else {
+        fatalError("headbench: model or head directory not found")
+    }
+    print("headbench: loading backbone + MTP head ...")
+    let t0 = DispatchTime.now()
+    let container = try Qwen38MTPHeadAttachment.withHeadAttached(
+        backboneDirectory: modelURL,
+        headDirectory: headURL
+    ) { _ in
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = LoadBox()
+        Task.detached {
+            do {
+                box.result = .success(
+                    try await LLMModelFactory.shared.loadContainer(
+                        from: modelURL,
+                        using: NoOpTokenizerLoader()
+                    )
+                )
+            } catch {
+                box.result = .failure(error)
+            }
+            semaphore.signal()
+        }
+        semaphore.wait()
+        guard let result = box.result else {
+            throw ModelFactoryError.invalidConfiguration("load box empty")
+        }
+        return try result.get()
+    }
+    let loadMs = Double(DispatchTime.now().uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+    print("headbench: loaded in \(loadMs) ms")
+    return container
+}
+
+// MARK: - Timing
+
+func median(_ xs: [UInt64]) -> Double {
+    let s = xs.sorted()
+    let n = s.count
+    return n % 2 == 1
+        ? Double(s[n / 2])
+        : Double(s[n / 2 - 1] + s[n / 2]) / 2.0
+}
+
+/// Time graph-build + sync eval of one call chain, in ns.
+func timeChain(_ build: () -> [MLXArray]) -> UInt64 {
+    let t0 = DispatchTime.now().uptimeNanoseconds
+    let outs = build()
+    MLX.eval(outs)
+    return DispatchTime.now().uptimeNanoseconds - t0
+}
+
+// MARK: - Raw matmul micro-bench (--raw, no model load)
+//
+// Plain bf16 matmul at the MTP head's exact weight shapes (M=1 GEMV), plus a
+// 4-bit QuantizedLinear at the backbone's gate shape, to separate "stock bf16
+// GEMV bandwidth" from "head layer-structure overhead".
+
+func runRawMatmulBench(warmup: Int, timed: Int) {
+    // (label, K, N): x = [1,1,K] bf16, w = [N,K] bf16
+    let shapes: [(String, Int, Int)] = [
+        ("fc   [1,10240] x [5120,10240]", 10240, 5120),
+        ("q    [1,5120]  x [12288,5120]", 5120, 12288),
+        ("kv   [1,5120]  x [2048,5120]", 5120, 2048),
+        ("o    [1,6144]  x [5120,6144]", 6144, 5120),
+        ("gate [1,5120]  x [17408,5120]", 5120, 17408),
+        ("up   [1,5120]  x [17408,5120]", 5120, 17408),
+        ("down [1,17408] x [5120,17408]", 17408, 5120),
+    ]
+
+    print("raw bf16 matmul M=1 (weight bytes / median time):")
+    print("| shape | median ms | GB/s |")
+    print("|---|---|---|")
+    var totalBytes: UInt64 = 0
+    var totalNs: Double = 0
+    for (label, k, n) in shapes {
+        let w = MLXArray((0 ..< n * k).map { Float($0 % 997) / 997.0 }).reshaped([n, k])
+        let wt = transposed(w)
+        let x = MLXArray((0 ..< k).map { Float($0 % 997) / 997.0 }).reshaped([1, 1, k])
+        for _ in 0 ..< warmup { MLX.eval([x.matmul(wt)]) }
+        var samples: [UInt64] = []
+        for _ in 0 ..< timed { samples.append(timeChain { [x.matmul(wt)] }) }
+        let med = median(samples)
+        let bytes = UInt64(n * k) * 2
+        totalBytes += bytes
+        totalNs += med
+        print("| \(label) | \(String(format: "%.2f", med / 1e6))"
+            + " | \(String(format: "%.0f", Double(bytes) / med)) |")
+        _ = w
+    }
+    print("| SUM (one head forward's matmuls) | \(String(format: "%.2f", totalNs / 1e6))"
+        + " | \(String(format: "%.0f", Double(totalBytes) / totalNs)) |")
+
+    // 4-bit quantized reference at the backbone's gate shape (same K/N, 4-bit
+    // group-32): the path the backbone actually uses.
+    do {
+        let k = 5120
+        let n = 17408
+        let group = 32
+        // 4-bit values pack 8-per-uint32 (matches the shipped U32 layout).
+        let packedW = MLXArray(
+            (0 ..< n * k / 8).map { UInt32($0 % 16) })
+            .reshaped([n, k / 8])
+        let scales = MLXArray((0 ..< n * k / group).map { _ in Float(1) })
+            .reshaped([n, k / group])
+        let biases = MLXArray((0 ..< n * k / group).map { _ in Float(0) })
+            .reshaped([n, k / group])
+        let ql = QuantizedLinear(
+            weight: packedW, bias: nil, scales: scales, biases: biases,
+            groupSize: group, bits: 4)
+        let x = MLXArray((0 ..< k).map { Float($0 % 997) / 997.0 }).reshaped([1, 1, k])
+        for _ in 0 ..< warmup { MLX.eval([ql(x)]) }
+        var samples: [UInt64] = []
+        for _ in 0 ..< timed { samples.append(timeChain { [ql(x)] }) }
+        let med = median(samples)
+        let bytes = UInt64(n * k) / 2  // 4-bit = 0.5 byte/element (scales/biases negligible)
+        print("")
+        print("| 4-bit ref [1,5120] x [17408,5120] (backbone path) | \(String(format: "%.2f", med / 1e6))"
+            + " | \(String(format: "%.0f", Double(bytes) / med)) |")
+    }
+    print("")
+    print("headbench: raw bench done")
+}
+
+// MARK: - Bench
+
+struct HeadResult {
+    var name: String
+    var medNs: Double
+    var minNs: UInt64
+    var maxNs: UInt64
+}
+
+@main
+struct HeadBench {
+    static func main() async {
+        let args = parseArgs(CommandLine.arguments)
+
+        if args.raw {
+            runRawMatmulBench(warmup: args.warmup, timed: args.timed)
+            return
+        }
+
+        let container = try! loadModel(modelDir: args.modelDir, headDir: args.headDir)
+
+        try! await container.perform { (context: ModelContext) async throws in
+            guard let m = context.model as? any Qwen38MTPTarget else {
+                fatalError("headbench: model is not Qwen38MTPTarget")
+            }
+            guard m.hasMTPHead else {
+                fatalError("headbench: MTP head not attached")
+            }
+
+            let hiddenDim = 5120
+            // Deterministic synthetic hidden states (content is irrelevant to
+            // timing). Built float32: this mlx-swift release has no bf16 array
+            // initializer; the head's Linear layers cast to the bf16 weight
+            // dtype internally, so the GPU cost (bf16 weight traffic) matches
+            // production within noise.
+            func hidden(_ rows: Int) -> MLXArray {
+                var v = [Float](); v.reserveCapacity(rows * hiddenDim)
+                for i in 0 ..< rows * hiddenDim { v.append(Float((i * 2654435761) % 1000) / 1000.0 - 0.5) }
+                return MLXArray(v).reshaped([1, rows, hiddenDim])
+            }
+            func tokens(_ rows: Int) -> MLXArray {
+                MLXArray((0 ..< rows).map { Int32(1000 + $0) }).reshaped([1, rows])
+            }
+            let flushHidden = hidden(args.flush)
+            let flushTokens = tokens(args.flush)
+            let stepHidden = hidden(1)
+            let stepTokens = tokens(1)
+            let verifyHidden = hidden((args.drafts.map { $0 + 1 }).max() ?? 2)
+            let normedVerify = m.applyFinalNorm(verifyHidden)
+
+            // Warm the head kernels (compiles + first-touch) once, untimed.
+            do {
+                let hc = m.makeMTPCache()
+                _ = m.mtpHeadHiddenForward(
+                    hidden: flushHidden, nextTokenIds: flushTokens, cache: hc)
+                MLX.eval(m.draftTokenID(m.mtpHeadHiddenForward(
+                    hidden: stepHidden, nextTokenIds: stepTokens, cache: hc)))
+            }
+            print("headbench: warm complete")
+
+            var results: [HeadResult] = []
+
+            func bench(
+                _ name: String,
+                _ body: @escaping () -> [MLXArray]
+            ) -> HeadResult {
+                for _ in 0 ..< args.warmup { _ = timeChain(body) }
+                var samples: [UInt64] = []
+                for _ in 0 ..< args.timed { samples.append(timeChain(body)) }
+                return HeadResult(
+                    name: name,
+                    medNs: median(samples),
+                    minNs: samples.min() ?? 0,
+                    maxNs: samples.max() ?? 0)
+            }
+
+            // flush: fresh head cache per rep (one per round in the session)
+            let flushR = bench("flush") { () -> [MLXArray] in
+                let hc = m.makeMTPCache()
+                return [m.mtpHeadHiddenForward(
+                    hidden: flushHidden, nextTokenIds: flushTokens, cache: hc)]
+            }
+            results.append(HeadResult(
+                name: "flush(F=\(args.flush))",
+                medNs: flushR.medNs, minNs: flushR.minNs, maxNs: flushR.maxNs))
+
+            // step: draft step on a cache already flushed (steady state).
+            // The flush is eval'd (and completed) OUTSIDE the timed window:
+            // timed window = step graph eval only.
+            var stepSamples: [UInt64] = []
+            for _ in 0 ..< args.warmup + args.timed {
+                let hc = m.makeMTPCache()
+                let flushed = m.mtpHeadHiddenForward(
+                    hidden: flushHidden, nextTokenIds: flushTokens, cache: hc)
+                let stepOut = m.mtpHeadHiddenForward(
+                    hidden: stepHidden, nextTokenIds: stepTokens, cache: hc)
+                MLX.eval(flushed)
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                MLX.eval(stepOut)
+                stepSamples.append(DispatchTime.now().uptimeNanoseconds - t0)
+            }
+            let stepTimed = Array(stepSamples.suffix(args.timed))
+            let stepMed = median(stepTimed)
+            results.append(HeadResult(
+                name: "step(F=\(args.flush))",
+                medNs: stepMed,
+                minNs: stepTimed.min() ?? 0,
+                maxNs: stepTimed.max() ?? 0))
+
+            // proj1: draft projection (M=1). Single-row head output keeps its
+            // [1,1,5120] shape (the session's lastHiddenRow is a no-op for one row).
+            let row0 = m.mtpHeadHiddenForward(
+                hidden: stepHidden, nextTokenIds: stepTokens,
+                cache: m.makeMTPCache())
+            let projR = bench("proj1") { () -> [MLXArray] in
+                return [m.draftTokenID(row0)]
+            }
+            results.append(HeadResult(
+                name: "proj1(M=1)",
+                medNs: projR.medNs, minNs: projR.minNs, maxNs: projR.maxNs))
+
+            // verifyM: target-side lm_head on (1+d) rows
+            var verifyRows: [Int: HeadResult] = [:]
+            for d in Set(args.drafts) {
+                let mm = d + 1
+                let slice = normedVerify[0, 0 ..< mm, 0...].reshaped([1, mm, hiddenDim])
+                let vr = bench("verifyM") { () -> [MLXArray] in
+                    return [m.applyLMHead(slice)]
+                }
+                verifyRows[mm] = HeadResult(
+                    name: "verifyM(M=\(mm))",
+                    medNs: vr.medNs, minNs: vr.minNs, maxNs: vr.maxNs)
+                results.append(verifyRows[mm]!)
+            }
+
+            // Report
+            let ms: (Double) -> String = { String(format: "%.2f", $0 / 1e6) }
+            print("")
+            print("| call | median ms | min ms | max ms |")
+            print("|---|---|---|---|")
+            for r in results {
+                print("| \(r.name) | \(ms(r.medNs)) | \(ms(Double(r.minNs))) | \(ms(Double(r.maxNs))) |")
+            }
+
+            print("")
+            print("Per-round head-family cost (flush F=\(args.flush)):")
+            print("| d | flush | (d-1)*step | d*proj1 | verify(1+d) | total ms/round |")
+            print("|---|---|---|---|---|---|")
+            for d in args.drafts {
+                let total = (flushR.medNs + Double(max(0, d - 1)) * stepMed
+                             + Double(d) * projR.medNs
+                             + (verifyRows[d + 1]?.medNs ?? 0)) / 1e6
+                print("| \(d) | \(ms(flushR.medNs)) | \(ms(Double(max(0, d - 1)) * stepMed))"
+                      + " | \(ms(Double(d) * projR.medNs))"
+                      + " | \(ms(verifyRows[d + 1]?.medNs ?? 0))"
+                      + " | \(String(format: "%.2f", total)) |")
+            }
+            print("")
+            print("headbench: done")
+        }
+    }
+}
+
+=====/Users/cwong/ai/mlx-swift-lm/Libraries/IntegrationTestHelpers/IntegrationTestHelpers.swift=====
+// Shared integration test logic for verifying end-to-end model loading and generation.
+// Integration packages inject their own Downloader and TokenizerLoader, then call
+// these functions which run the test and throw on failure.
+
+import Foundation
+import MLX
+import MLXEmbedders
+import MLXLLM
+import MLXLMCommon
+import MLXRerankers
+import MLXVLM
+
+#if canImport(CoreImage)
+import CoreImage
+#endif
+
+// Both MLXLMCommon and MLXEmbedders define ModelContainer.
+public typealias LLModelContainer = MLXLMCommon.ModelContainer
+public typealias EmbeddingModelContainer = MLXEmbedders.EmbedderModelContainer
+
+// MARK: - Error
+
+public struct IntegrationTestFailure: LocalizedError {
+    public let errorDescription: String?
+
+    public init(_ message: String) {
+        self.errorDescription = message
+    }
+}
+
+private func check(_ condition: Bool, _ message: String) throws {
+    guard condition else { throw IntegrationTestFailure(message) }
+}
+
+// MARK: - Harmony tokenizer contract
+
+public enum HarmonyProtocolTests {
+    /// Exercises the production tokenizer adapter and GPT-OSS chat template
+    /// without downloading model weights.
+    public static func realTokenizerContract(tokenizer: any Tokenizer) throws {
+        let expectedControlTokenIDs = [
+            "<|return|>": 200_002,
+            "<|constrain|>": 200_003,
+            "<|channel|>": 200_005,
+            "<|start|>": 200_006,
+            "<|end|>": 200_007,
+            "<|message|>": 200_008,
+            "<|call|>": 200_012,
+        ]
+
+        for (token, expectedID) in expectedControlTokenIDs {
+            try check(
+                tokenizer.convertTokenToId(token) == expectedID,
+                "GPT-OSS tokenizer resolved \(token) to "
+                    + "\(String(describing: tokenizer.convertTokenToId(token))); expected \(expectedID)"
+            )
+            try check(
+                tokenizer.encode(text: token, addSpecialTokens: false) == [expectedID],
+                "GPT-OSS tokenizer did not encode \(token) atomically")
+        }
+
+        try check(
+            HarmonyFrameParser(tokenizer: tokenizer) != nil,
+            "HarmonyFrameParser rejected the production GPT-OSS tokenizer")
+        try check(
+            HarmonyFrameParser.stopTokenIDs(tokenizer: tokenizer) == [200_002, 200_012],
+            "Harmony stop-token resolution did not match <|return|>/<|call|>")
+
+        let call = ToolCall(
+            function: .init(name: "get_weather", arguments: ["city": "Paris"]),
+            id: "call_fixture")
+        let generator: any MessageGenerator = GPTOSSMessageGenerator()
+        let messages = generator.generate(messages: [
+            .user("Weather in Paris?"),
+            .assistant("", toolCalls: [call]),
+            .tool(#"{"forecast":"sunny"}"#, id: "call_fixture"),
+        ])
+        let tools: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "city": ["type": "string"] as [String: any Sendable]
+                        ] as [String: any Sendable],
+                        "required": ["city"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ]
+        ]
+
+        let rendered = try tokenizer.applyChatTemplate(
+            messages: messages, tools: tools, additionalContext: nil)
+        try check(rendered.contains(200_012), "Real GPT-OSS template omitted the tool-call token")
+        let promptStart = rendered.lastIndex(of: 200_006)
+        let promptSuffix = promptStart.map {
+            tokenizer.decode(
+                tokenIds: Array(rendered[$0...]), skipSpecialTokens: false)
+        }
+        try check(
+            promptSuffix == "<|start|>assistant",
+            "Real GPT-OSS template omitted the assistant generation prompt")
+    }
+}
+
+// MARK: - Muse Glimmer tokenizer contract
+
+public enum MuseGlimmerProtocolTests {
+    /// Exercises Meta's production Onyx control vocabulary and ATEM chat
+    /// template without loading the 30B checkpoint.
+    public static func realTokenizerContract(tokenizer: any Tokenizer) throws {
+        let expectedControlTokenIDs = [
+            "<|begin_of_text|>": 200_000,
+            "<|end_of_text|>": 200_001,
+            "<|eom|>": 200_007,
+            "<|eot|>": 200_008,
+            "<|start|>": 200_022,
+            "<|message|>": 200_023,
+        ]
+        for (token, expectedID) in expectedControlTokenIDs {
+            try check(
+                tokenizer.convertTokenToId(token) == expectedID,
+                "Muse Glimmer tokenizer resolved \(token) to "
+                    + "\(String(describing: tokenizer.convertTokenToId(token))); expected \(expectedID)"
+            )
+            try check(
+                tokenizer.encode(text: token, addSpecialTokens: false) == [expectedID],
+                "Muse Glimmer tokenizer did not encode \(token) atomically")
+        }
+
+        let tools: [[String: any Sendable]] = [
+            [
+                "type": "function",
+                "function": [
+                    "name": "weather.get",
+                    "description": "Get weather",
+                    "parameters": [
+                        "type": "object",
+                        "properties": [
+                            "city": ["type": "string"] as [String: any Sendable]
+                        ] as [String: any Sendable],
+                        "required": ["city"],
+                    ] as [String: any Sendable],
+                ] as [String: any Sendable],
+            ]
+        ]
+        guard
+            var decoder = ToolCallFormat.atem.makeProtocolTokenStreamDecoder(
+                tokenizer: tokenizer, tools: tools, 
