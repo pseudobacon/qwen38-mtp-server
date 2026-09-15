@@ -1003,6 +1003,17 @@ Branch `feature/mtp-exactness-prefix-cache` in both repos. Binary `e448b2e2`.
   identity namespacing, metrics, explicit byte budget; B3/B4 tests +
   TTFT benchmark.
 
+### Status — Phase B (prefix cache) IN PROGRESS
+
+- **Audit**: `RadixKVCacheManager` (radix-tree, token-prefix, store-on-success, CoW via begin clone, TTL, LRU-leaf eviction under global memory pressure). Critical constraint: recurrent (gated-delta) layers are NOT trimmable → a hit requires the stored history to be an EXACT token-prefix of the new seed → the TTFT win is same-thread multi-turn continuation, not interleaved shared-prefix.
+- **Hardening**:
+  - **Namespace**: `namespace: String` on `CacheEntry`/`RadixNode`; `matchPrefix` requires `node.namespace == namespace`; `MLXGenerator` threads `cacheNamespace` (model+head+template) into `matchPrefix` + `store`. Closes the latent cross-model serve gap (config was KV-geometry-only).
+  - **Per-cache byte budget**: `RadixKVCacheManager(maxCacheBytes:)`; `store` evicts LRU until under budget; set to `memoryLimitBytes/4` in `MLXGenerator` (global pressure eviction remains as backstop).
+  - **Metrics**: lifetime `hits`/`misses`/`evictions`/`stores` + `Metrics` snapshot (`entries`, `estimatedBytes`, `hitRate`).
+- **B3 tests**: 3 new (namespaceMismatchMisses, metricsCount…, byteCapEvictsLRUOnStore). `RadixKVCacheManagerTests` 11 green; full `HTTPServerTests` 125 green.
+- **B4 TTFT**: `benchmarks/prefix_ttft.py` + `run_prefix_ttft.sh` (multi-turn exact-prefix hit vs cold-miss control). [results pending release rebuild + run]
+- **Doc**: `benchmarks/PREFIX-CACHE.md`.
+
 ### Status — Phase A (speculative exactness) COMPLETE
 
 - **F1 fix (server)**: `SamplingParameters.effectiveMTPEnabled` = `mtpEnabled && !hasNonDefaultPenalties`; both `decodeDepth` sites + the MTP sampling-config construction use it. Non-default-penalty requests now run serial target-only (penalties applied to target). Server test added.

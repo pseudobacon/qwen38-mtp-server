@@ -38,6 +38,7 @@ public actor RadixKVCacheManager {
         public let primary: Int
         public let top2: ([Int], [Double])
         public let config: ResolvedKVCacheConfig
+        public let namespace: String
         public let createdAt: Date
 
         public init(
@@ -47,6 +48,7 @@ public actor RadixKVCacheManager {
             primary: Int,
             top2: ([Int], [Double]),
             config: ResolvedKVCacheConfig,
+            namespace: String = "default",
             createdAt: Date = Date()
         ) {
             self.tokens = tokens
@@ -55,6 +57,7 @@ public actor RadixKVCacheManager {
             self.primary = primary
             self.top2 = top2
             self.config = config
+            self.namespace = namespace
             self.createdAt = createdAt
         }
     }
@@ -73,6 +76,7 @@ public actor RadixKVCacheManager {
         var primary: Int?
         var top2: ([Int], [Double])?
         var config: ResolvedKVCacheConfig
+        var namespace: String
         var lastAccessed: ContinuousClock.Instant
         var children: [RadixNode]
     }
@@ -85,10 +89,22 @@ public actor RadixKVCacheManager {
         * Qwen38KVGeometry.headDim * 2
 
     private var root: RadixNode
+    private let maxCacheBytes: Int
     private let defaultTTLSeconds: TimeInterval = 300 // 5 minutes default
 
-    public init() {
+    /// Hit/miss/eviction counters and the store count, exposed via `metrics()`.
+    private(set) var hits = 0
+    private(set) var misses = 0
+    private(set) var evictions = 0
+    private(set) var stores = 0
+
+    /// `maxCacheBytes` bounds the radix cache's own estimated footprint (the
+    /// per-cache budget, independent of the global memory-admission limit). At
+    /// the cap, `store` evicts LRU leaves until under budget. `Int.max` (the
+    /// default) means unlimited, preserving the pre-hardening behavior.
+    public init(maxCacheBytes: Int = Int.max) {
         self.root = Self.emptyNode()
+        self.maxCacheBytes = max(0, maxCacheBytes)
     }
 
     private static func emptyNode() -> RadixNode {
@@ -99,6 +115,7 @@ public actor RadixKVCacheManager {
             primary: nil,
             top2: nil,
             config: .default,
+            namespace: "",
             lastAccessed: .now,
             children: []
         )
@@ -119,6 +136,7 @@ public actor RadixKVCacheManager {
     public func matchPrefix(
         tokens: [Int],
         config: ResolvedKVCacheConfig,
+        namespace: String = "default",
         ttlSeconds: Int? = nil
     ) -> (prefixCount: Int, entry: CacheEntry?) {
         guard !tokens.isEmpty else { return (0, nil) }
@@ -164,7 +182,7 @@ public actor RadixKVCacheManager {
             let node = path[depth]
             guard let cache = node.cache, let hidden = node.hidden,
                   let primary = node.primary, let top2 = node.top2,
-                  node.config == config else { continue }
+                  node.config == config, node.namespace == namespace else { continue }
             let age = node.lastAccessed.duration(to: .now)
             guard age <= .seconds(ttl) else { continue }
 
@@ -179,6 +197,7 @@ public actor RadixKVCacheManager {
 
             guard fullyMatched || supportsTrimming else { continue }
 
+            self.hits += 1
             self.touch(indexPath: Array(indexPath[0...depth]))
             return (
                 matchedPrefix,
@@ -188,10 +207,12 @@ public actor RadixKVCacheManager {
                     hidden: hidden,
                     primary: primary,
                     top2: top2,
-                    config: node.config
+                    config: node.config,
+                    namespace: node.namespace
                 )
             )
         }
+        self.misses += 1
         return (0, nil)
     }
 
@@ -202,6 +223,35 @@ public actor RadixKVCacheManager {
     public func store(_ entry: CacheEntry) {
         guard !entry.tokens.isEmpty else { return }
         self.insert(entry: entry, into: &self.root, remaining: entry.tokens)
+        self.stores += 1
+        self.enforceByteBudget()
+    }
+
+    /// Evict LRU leaves until the cache's estimated footprint is under the
+    /// per-cache byte budget. No-op when unlimited (`Int.max`).
+    private func enforceByteBudget() {
+        guard self.maxCacheBytes < Int.max else { return }
+        while self.totalEstimatedBytes() > self.maxCacheBytes {
+            guard self.evictLRULeaf() != nil else { break }
+        }
+    }
+
+    /// Sum of (full prefix length × conservative per-token KV bound) over all
+    /// leaves. Shared-prefix nodes are counted per-leaf, so this is a
+    /// conservative (\u{2265}) estimate — the same accounting `evictLRULeaf` uses.
+    private func totalEstimatedBytes() -> Int {
+        var bytes = 0
+        var stack: [(node: RadixNode, prefix: Int)] = [(root, 0)]
+        while let (node, prefix) = stack.popLast() {
+            let nodePrefix = prefix + node.tokens.count
+            if node.children.isEmpty {
+                bytes += nodePrefix * Self.estimatedBytesPerToken
+            }
+            for child in node.children {
+                stack.append((child, nodePrefix))
+            }
+        }
+        return bytes
     }
 
     private func insert(entry: CacheEntry, into node: inout RadixNode, remaining: [Int]) {
@@ -321,6 +371,7 @@ public actor RadixKVCacheManager {
     private func evictLRULeaf() -> Int? {
         guard let leaf = self.findLRULeaf() else { return nil }
         self.removeLeaf(path: leaf.path)
+        self.evictions += 1
         return leaf.prefixTokens * Self.estimatedBytesPerToken
     }
 
@@ -405,15 +456,54 @@ public actor RadixKVCacheManager {
             primary: entry.primary,
             top2: entry.top2,
             config: entry.config,
+            namespace: entry.namespace,
             lastAccessed: .now,
             children: []
         )
     }
 
-    /// Drop all cached state and clear the MLX allocator cache.
+    /// Drop all cached state and clear the MLX allocator cache. Lifetime
+    /// counters (`hits`/`misses`/`evictions`/`stores`) are NOT reset — they are
+    /// process-lifetime observability totals, not per-clear figures.
     public func clear() {
         self.root = Self.emptyNode()
         Memory.clearCache()
+    }
+
+    /// A point-in-time snapshot of the cache's size and lifetime counters, for
+    /// the observability endpoint. `entries` is the leaf count; `estimatedBytes`
+    /// is the conservative per-leaf prefix accounting; `hitRate` is
+    /// hits/(hits+misses) over the process lifetime.
+    public struct Metrics: Sendable, Equatable {
+        public let entries: Int
+        public let estimatedBytes: Int
+        public let hits: Int
+        public let misses: Int
+        public let evictions: Int
+        public let stores: Int
+        public var hitRate: Double {
+            let total = hits + misses
+            return total == 0 ? 0 : Double(hits) / Double(total)
+        }
+    }
+
+    public func metrics() -> Metrics {
+        var entries = 0
+        var stack: [RadixNode] = [root]
+        while let node = stack.popLast() {
+            if node.children.isEmpty && !node.tokens.isEmpty {
+                entries += 1
+            }
+            stack.append(contentsOf: node.children)
+        }
+        return Metrics(
+            entries: entries,
+            estimatedBytes: totalEstimatedBytes(),
+            hits: hits,
+            misses: misses,
+            evictions: evictions,
+            stores: stores
+        )
     }
 }
 

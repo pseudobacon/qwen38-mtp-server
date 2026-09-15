@@ -339,7 +339,7 @@ actor MLXGenerator {
 
     /// Actor-isolated radix-tree store of completed-session KV state for
     /// multi-session and branched prefix reuse.
-    private let kvCacheManager = RadixKVCacheManager()
+    private let kvCacheManager: RadixKVCacheManager
 
     private var tokenizationCache: TokenizationCache
     private let cacheNamespace: String
@@ -367,6 +367,13 @@ actor MLXGenerator {
         self.logger = logger
 
         self.cacheNamespace = Self.cacheNamespace(modelPath: modelPath, mtpHeadPath: mtpHeadPath)
+        // Per-cache byte budget: cap the radix cache at a quarter of the total
+        // memory-admission limit so cached prefixes cannot starve active
+        // sessions + weights (the global memory-pressure eviction remains as a
+        // second, shared-budget backstop).
+        self.kvCacheManager = RadixKVCacheManager(
+            maxCacheBytes: max(0, memoryLimitBytes / 4)
+        )
         self.tokenizationCache = TokenizationCache(
             maxEntries: tokenizationCacheMaxEntries,
             maxBytes: tokenizationCacheMaxBytes,
@@ -833,6 +840,7 @@ actor MLXGenerator {
                     let (prefixCount, cachedEntry) = await self.kvCacheManager.matchPrefix(
                         tokens: effectiveSeedTokens,
                         config: samplingParams.kvCacheConfig,
+                        namespace: self.cacheNamespace,
                         ttlSeconds: samplingParams.ttlSeconds
                     )
 
@@ -1038,7 +1046,8 @@ actor MLXGenerator {
                             hidden: state.hidden,
                             primary: state.primary,
                             top2: state.top2,
-                            config: samplingParams.kvCacheConfig
+                            config: samplingParams.kvCacheConfig,
+                            namespace: self.cacheNamespace
                         )
                     )
                 }

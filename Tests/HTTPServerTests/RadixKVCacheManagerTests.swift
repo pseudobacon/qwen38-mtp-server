@@ -12,7 +12,8 @@ struct RadixKVCacheManagerTests {
 
     private static func makeEntry(
         tokens: [Int],
-        config: ResolvedKVCacheConfig = .default
+        config: ResolvedKVCacheConfig = .default,
+        namespace: String = "default"
     ) -> RadixKVCacheManager.CacheEntry {
         RadixKVCacheManager.CacheEntry(
             tokens: tokens,
@@ -20,7 +21,8 @@ struct RadixKVCacheManagerTests {
             hidden: MLXArray.zeros([1]),
             primary: 0,
             top2: ([], []),
-            config: config
+            config: config,
+            namespace: namespace
         )
     }
 
@@ -179,5 +181,66 @@ struct RadixKVCacheManagerTests {
             config: .default
         )
         #expect(count == 0)
+    }
+
+    @Test
+    func namespaceMismatchMisses() async {
+        let manager = RadixKVCacheManager()
+        // Store under model-A's namespace; a model-B lookup must not see it
+        // even though the token prefix and KV config are identical.
+        await manager.store(Self.makeEntry(tokens: [1, 2, 3], namespace: "modelA"))
+        let (same, _) = await manager.matchPrefix(
+            tokens: [1, 2, 3, 4], config: .default, namespace: "modelA"
+        )
+        #expect(same == 3)
+        let (cross, _) = await manager.matchPrefix(
+            tokens: [1, 2, 3, 4], config: .default, namespace: "modelB"
+        )
+        #expect(cross == 0)
+        // The original namespace is unaffected by the cross-namespace miss.
+        let (same2, _) = await manager.matchPrefix(
+            tokens: [1, 2, 3, 4], config: .default, namespace: "modelA"
+        )
+        #expect(same2 == 3)
+    }
+
+    @Test
+    func metricsCountHitsMissesEvictionsAndBytes() async {
+        let manager = RadixKVCacheManager()
+        // No lookups yet: zero lifetime counters.
+        #expect(await manager.metrics().hits == 0)
+        #expect(await manager.metrics().misses == 0)
+        await manager.store(Self.makeEntry(tokens: [1, 2, 3, 4, 5]))
+        // Hit on the stored prefix.
+        let (hit, _) = await manager.matchPrefix(tokens: [1, 2, 3, 4, 5], config: .default)
+        #expect(hit == 5)
+        // Miss on an absent prefix (fresh root, no such branch).
+        let (miss, _) = await manager.matchPrefix(tokens: [9, 9, 9], config: .default)
+        #expect(miss == 0)
+        let m = await manager.metrics()
+        #expect(m.entries == 1)
+        #expect(m.hits == 1)
+        #expect(m.misses == 1)
+        #expect(m.stores == 1)
+        #expect(m.estimatedBytes > 0)
+        #expect(abs(m.hitRate - 0.5) < 1e-9)
+    }
+
+    @Test
+    func byteCapEvictsLRUOnStore() async {
+        // ~2.62e6 bytes per 10-token leaf; a 3e6 cap fits exactly one leaf.
+        let manager = RadixKVCacheManager(maxCacheBytes: 3_000_000)
+        let a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        let b = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+        await manager.store(Self.makeEntry(tokens: a))
+        let (aCount, _) = await manager.matchPrefix(tokens: a, config: .default)
+        #expect(aCount == a.count) // A fits under the cap
+        await manager.store(Self.makeEntry(tokens: b))
+        // B's insertion pushes the total over the cap, evicting LRU leaf A.
+        let (aAfter, _) = await manager.matchPrefix(tokens: a, config: .default)
+        #expect(aAfter == 0)
+        let (bAfter, _) = await manager.matchPrefix(tokens: b, config: .default)
+        #expect(bAfter == b.count)
+        #expect(await manager.metrics().evictions == 1)
     }
 }
