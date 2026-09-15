@@ -128,7 +128,7 @@ family streams item is ever pursued, that is a kernel/numerics task in
 
 ## Checkpoint markers
 
-- engine: 2026-09-15T00:52:00+01:00 (placeholder — replaced after fresh run)
-- server: 2026-09-15T00:52:00+01:00 (placeholder — replaced after fresh run)
+- engine: 2026-09-15T01:01:41+01:00
+- server: 2026-09-15T01:01:41+01:00
 
 The fresh-checkpoint procedure completed.
