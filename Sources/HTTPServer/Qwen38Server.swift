@@ -93,6 +93,7 @@ struct QwenServer {
                 mtpHeadPath: config.mtpHead,
                 maxDraftDepth: config.specDraftNMax,
                 forcedDraftK: resolvedForcedK,
+                adaptiveDraftDepth: config.adaptiveDraftDepthConfig(maxDraftDepth: config.specDraftNMax),
                 runtimeState: runtimeState,
                 memoryLimitBytes: config.memoryLimitGB * 1024 * 1024 * 1024,
                 systemSafetyReserveBytes: config.systemSafetyReserveGB * 1024 * 1024 * 1024,

@@ -53,6 +53,12 @@ func registerOpenAIRoutes(
             summary.tokenizationCacheHitRate = total > 0
                 ? Double(stats.hits) / Double(total)
                 : nil
+            // Online adaptive draft-depth state (all nil when the feature is off).
+            if let adaptive = await generator.adaptiveDraftDepthSnapshot() {
+                summary.adaptiveDraftDepth = adaptive.currentDepth
+                summary.adaptiveRollingAcceptanceRate = adaptive.rollingAcceptanceRate
+                summary.adaptiveDraftDepthAdjustments = adaptive.totalAdjustments
+            }
         }
         let json = try JSONEncoder().encode(summary)
         return Response(

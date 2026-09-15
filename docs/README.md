@@ -93,6 +93,24 @@ immediately. On later startups (no `--spec-draft-calibrate`) the stored depth is
 used as a **hint** — an explicit `--spec-draft-n-max` or `QWEN_MTP_DRAFT_K`
 overrides it. Full semantics and caveats: `docs/DEPTH-CALIBRATION.md`.
 
+### Online adaptive draft depth (adjust depth at serve time)
+
+Adaptive depth is **off by default** and moves the per-request depth within
+`[1, --spec-draft-n-max]` from observed acceptance rate and throughput:
+
+```bash
+qwen38-mtp-server serve --model ./weights \
+  --spec-draft-n-max 5 \
+  --spec-draft-adaptive \
+  --spec-draft-adaptive-threshold-high 0.7 \
+  --spec-draft-adaptive-threshold-low 0.5 \
+  --spec-draft-adaptive-hysteresis 10
+```
+
+Current depth, rolling acceptance, and the adjustment count are exposed on
+`/metrics`. Full semantics, the throughput safety signal, and caveats:
+`docs/ADAPTIVE-DRAFT-DEPTH.md`.
+
 ## Recommended configuration (current main, 2026-09-14)
 
 Production defaults: QMV verify ON, fusions ON, compiled decode ON, **4-bit MTP head ON** (`MLX_QWEN_MTP_HEAD_QUANT`), **draft depth pinned k = 2** (`--spec-draft-n-max 3` offer cap, `QWEN_MTP_DRAFT_K` unset). Final headline on this default (12/12 cells deterministic, single binary, per-rep thermal snapshots clean):

@@ -337,6 +337,13 @@ actor MLXGenerator {
     /// Actor-isolated; mutated only from the calibration entry point.
     private var forcedDraftK: Int?
 
+    /// The online adaptive draft-depth policy, when `--spec-draft-adaptive` is
+    /// enabled (off by default). `nil` when adaptation is off, so the non-adaptive
+    /// path has zero overhead. Actor-isolated; fed a sample at the end of each
+    /// completed request (`recordAdaptiveSample`) and applied by updating
+    /// `forcedDraftK` (read at the next session's creation time).
+    private var adaptivePolicy: AdaptiveDraftDepthPolicy?
+
     private let model: any Qwen38MTPTarget
     private let tokenizer: any MLXLMCommon.Tokenizer
     private let stopTokens: Set<Int>
@@ -360,6 +367,7 @@ actor MLXGenerator {
         mtpHeadPath: String = "./mtp-head",
         maxDraftDepth: Int = MLXFastConstants.qwenMTPMaxDepth,
         forcedDraftK: Int? = nil,
+        adaptiveDraftDepth: AdaptiveDraftDepthConfig? = nil,
         runtimeState: ModelRuntimeState? = nil,
         memoryLimitBytes: Int = 32 * 1024 * 1024 * 1024,
         systemSafetyReserveBytes: Int = 2 * 1024 * 1024 * 1024,
@@ -377,6 +385,22 @@ actor MLXGenerator {
         self.maxDraftDepth = maxDraftDepth
         self.forcedDraftK = forcedDraftK
         self.logger = logger
+
+        // Online adaptive draft depth (off by default). Seed the policy at the
+        // resolved forced depth (the calibration/env/default baseline) so
+        // adaptation starts from the operator's chosen depth and moves from
+        // there. `adaptiveDraftDepth` is `nil` when the feature is off.
+        if let adaptiveDraftDepth {
+            self.adaptivePolicy = AdaptiveDraftDepthPolicy(
+                config: adaptiveDraftDepth,
+                initialDepth: forcedDraftK ?? Qwen38MTPBlockSession.defaultDraftDepth
+            )
+            let msg = "Adaptive draft depth enabled: initial k=\(self.adaptivePolicy!.currentDepth) "
+                + "(max \(adaptiveDraftDepth.maxDepth), window \(adaptiveDraftDepth.window), "
+                + "high \(adaptiveDraftDepth.thresholdHigh), low \(adaptiveDraftDepth.thresholdLow), "
+                + "hysteresis \(adaptiveDraftDepth.hysteresis))"
+            logger.info("\(msg)")
+        }
 
         self.cacheNamespace = Self.cacheNamespace(modelPath: modelPath, mtpHeadPath: mtpHeadPath)
         // Per-cache byte budget: cap the radix cache at a quarter of the total
@@ -515,7 +539,47 @@ actor MLXGenerator {
     /// effect for subsequent generations (read at session-creation time).
     func applyCalibratedDepth(_ k: Int) {
         self.forcedDraftK = k
+        // Keep the adaptive policy's baseline in sync with a calibration sweep
+        // (a fresh baseline, not an adaptation event; hysteresis is reset).
+        self.adaptivePolicy?.setDepth(k)
         logger.info("Calibrated draft depth applied: k=\(k) (offer cap \(maxDraftDepth))")
+    }
+
+    /// Feed one completed request's draft measurements into the online adaptive
+    /// draft-depth policy. When the policy decides to move the depth, the pin is
+    /// updated (read at the next session's creation time) and the adjustment is
+    /// logged. A no-op when adaptation is off. Called once at the end of a
+    /// successful, non-cancelled request that proposed at least one draft.
+    func recordAdaptiveSample(acceptanceRate: Double?, tokensPerSecond: Double?) {
+        guard adaptivePolicy != nil else { return }
+        // `record` is mutating and mutates `adaptivePolicy` in place (the actor-
+        // isolated `var`); the force-unwrap on a `var` performs the in-place
+        // mutation, so no re-assignment is needed afterward.
+        let decision = adaptivePolicy!.record(
+            acceptanceRate: acceptanceRate,
+            tokensPerSecond: tokensPerSecond
+        )
+        guard case .adjusted(let from, let to, let reason) = decision else { return }
+        self.forcedDraftK = to
+        let accStr = adaptivePolicy!.rollingAcceptanceRate.map { String(format: "%.3f", $0) } ?? "n/a"
+        let tpsStr = adaptivePolicy!.rollingTokensPerSecond.map { String(format: "%.1f", $0) } ?? "n/a"
+        let msg = "Adaptive draft depth: \(from) -> \(to) (\(reasonLabel(reason)); "
+            + "rolling acc \(accStr), rolling tps \(tpsStr))"
+        logger.info("\(msg)")
+    }
+
+    /// A snapshot of the adaptive policy's observable state, for `GET /metrics`
+    /// and logs. `nil` when adaptation is off.
+    func adaptiveDraftDepthSnapshot() -> AdaptiveDraftDepthPolicy.Snapshot? {
+        adaptivePolicy?.snapshot
+    }
+
+    private func reasonLabel(_ reason: AdaptiveDraftDepthPolicy.Decision.Reason) -> String {
+        switch reason {
+        case .acceptanceHigh: return "acceptance high"
+        case .acceptanceLow: return "acceptance low"
+        case .throughputDrop: return "throughput drop"
+        }
     }
 
     /// The fixed calibration prompt: a continuation prompt that elicits a long
@@ -1185,6 +1249,17 @@ actor MLXGenerator {
                             tokenIDs: completionTokenIDs
                         )
                     )
+
+                    // Online adaptive draft depth: feed this completed request's
+                    // draft measurements into the policy (a no-op when the
+                    // feature is off, or when no drafts were proposed — e.g. a
+                    // serial request). This is the non-cancelled success path, so
+                    // the sample reflects a full decode at the request's depth.
+                    if proposedDraftTokens > 0 {
+                        let acceptance = Double(acceptedDraftTokens) / Double(proposedDraftTokens)
+                        let tps = decodeSeconds > 0 ? Double(emitted) / decodeSeconds : nil
+                        await self.recordAdaptiveSample(acceptanceRate: acceptance, tokensPerSecond: tps)
+                    }
 
                     await yieldMetrics()
 

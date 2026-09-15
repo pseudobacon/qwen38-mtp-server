@@ -135,6 +135,12 @@ struct MetricsSummary: Codable, Sendable {
     var tokenizationCacheEntries: Int = 0
     var tokenizationCacheBytes: Int = 0
 
+    /// Online adaptive draft-depth state (all `nil` when `--spec-draft-adaptive`
+    /// is off). Merged in from the generator at serve time.
+    var adaptiveDraftDepth: Int? = nil
+    var adaptiveRollingAcceptanceRate: Double? = nil
+    var adaptiveDraftDepthAdjustments: Int? = nil
+
     enum CodingKeys: String, CodingKey {
         case totalRequests = "total_requests"
         case totalPromptTokens = "total_prompt_tokens"
@@ -151,6 +157,9 @@ struct MetricsSummary: Codable, Sendable {
         case tokenizationCacheEvictions = "tokenization_cache_evictions"
         case tokenizationCacheEntries = "tokenization_cache_entries"
         case tokenizationCacheBytes = "tokenization_cache_bytes"
+        case adaptiveDraftDepth = "adaptive_draft_depth"
+        case adaptiveRollingAcceptanceRate = "adaptive_rolling_acceptance_rate"
+        case adaptiveDraftDepthAdjustments = "adaptive_draft_depth_adjustments"
     }
 }
 

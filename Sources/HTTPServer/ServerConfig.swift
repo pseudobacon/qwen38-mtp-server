@@ -53,6 +53,15 @@ struct ServerConfig: Sendable {
     var specDraftCalibrateDepths: [Int] = [0, 1, 2, 3]   // --spec-draft-calibrate-depths
     var specDraftCalibrateTokens: Int = 100         // --spec-draft-calibrate-tokens
     var specDraftCalibrationFile: String = SpecDraftCalibration.defaultPath  // --spec-draft-calibration-file
+
+    // Online adaptive draft depth (off by default; runs continuously at serve
+    // time, adjusting the per-request pin from the acceptance/throughput
+    // observed in completed requests — see docs/ADAPTIVE-DRAFT-DEPTH.md).
+    var specDraftAdaptive: Bool = false             // --spec-draft-adaptive
+    var specDraftAdaptiveWindow: Int = 50           // --spec-draft-adaptive-window
+    var specDraftAdaptiveThresholdHigh: Double = 0.7   // --spec-draft-adaptive-threshold-high
+    var specDraftAdaptiveThresholdLow: Double = 0.5    // --spec-draft-adaptive-threshold-low
+    var specDraftAdaptiveHysteresis: Int = 10       // --spec-draft-adaptive-hysteresis
     var cacheTypeK: String = "kvarn8"     // --cache-type-k, -ctk
     var cacheTypeV: String = "kvarn4"     // --cache-type-v, -ctv
     /// Maximum number of tokens in a single prefill forward pass. Long prompts
@@ -120,6 +129,10 @@ struct ServerConfig: Sendable {
         "--spec-draft-calibrate-depths",
         "--spec-draft-calibrate-tokens",
         "--spec-draft-calibration-file",
+        "--spec-draft-adaptive-window",
+        "--spec-draft-adaptive-threshold-high",
+        "--spec-draft-adaptive-threshold-low",
+        "--spec-draft-adaptive-hysteresis",
         "--prefill-chunk-size",
         "--cache-type-k", "-ctk",
         "--cache-type-v", "-ctv",
@@ -137,6 +150,7 @@ struct ServerConfig: Sendable {
         "--tools-enabled",
         "--tools-disabled",
         "--spec-draft-calibrate",
+        "--spec-draft-adaptive",
     ]
 
     /// The subset of `CommandLine.arguments` that Vapor's
@@ -231,6 +245,24 @@ struct ServerConfig: Sendable {
                 }
             case "--spec-draft-calibration-file":
                 if index + 1 < args.count { config.specDraftCalibrationFile = args[index + 1] }
+            case "--spec-draft-adaptive":
+                config.specDraftAdaptive = true
+            case "--spec-draft-adaptive-window":
+                if index + 1 < args.count, let val = Int(args[index + 1]), val > 0 {
+                    config.specDraftAdaptiveWindow = val
+                }
+            case "--spec-draft-adaptive-threshold-high":
+                if index + 1 < args.count, let val = Double(args[index + 1]) {
+                    config.specDraftAdaptiveThresholdHigh = val
+                }
+            case "--spec-draft-adaptive-threshold-low":
+                if index + 1 < args.count, let val = Double(args[index + 1]) {
+                    config.specDraftAdaptiveThresholdLow = val
+                }
+            case "--spec-draft-adaptive-hysteresis":
+                if index + 1 < args.count, let val = Int(args[index + 1]), val > 0 {
+                    config.specDraftAdaptiveHysteresis = val
+                }
             case "--prefill-chunk-size":
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.prefillChunkSize = val }
             case "--cache-type-k", "-ctk":
@@ -342,6 +374,22 @@ struct ServerConfig: Sendable {
         return Self.defaultDraftDepth
     }
 
+    /// Build the online adaptive draft-depth policy configuration from the
+    /// `--spec-draft-adaptive*` flags, or `nil` when adaptation is not enabled
+    /// (off by default) or would be a no-op (MTP disabled, `maxDepth < 1`).
+    /// The upper bound is the offer cap (`maxDraftDepth` = `--spec-draft-n-max`),
+    /// so the runtime depth can never exceed the operator's cap.
+    func adaptiveDraftDepthConfig(maxDraftDepth: Int) -> AdaptiveDraftDepthConfig? {
+        guard specDraftAdaptive, maxDraftDepth >= 1 else { return nil }
+        return AdaptiveDraftDepthConfig(
+            maxDepth: maxDraftDepth,
+            window: specDraftAdaptiveWindow,
+            thresholdHigh: specDraftAdaptiveThresholdHigh,
+            thresholdLow: specDraftAdaptiveThresholdLow,
+            hysteresis: specDraftAdaptiveHysteresis
+        )
+    }
+
     static func printHelp() {
         print("""
         Qwen 3.8 MTP Server - OpenAI-compatible API server with speculative decoding
@@ -396,6 +444,25 @@ struct ServerConfig: Sendable {
                                             (default: ./spec-draft-calibration.json).
                                             Loaded at startup; the selected depth is
                                             saved here on calibration.
+
+         ONLINE ADAPTIVE DRAFT DEPTH (off by default; see
+                                            docs/ADAPTIVE-DRAFT-DEPTH.md): adjusts the
+                                            per-request draft depth at serve time from the
+                                            observed acceptance rate and throughput, within
+                                            [1, --spec-draft-n-max].
+            --spec-draft-adaptive           Enable online adaptive draft depth.
+            --spec-draft-adaptive-window <int>
+                                            Rolling window of completed requests
+                                            (default: 50).
+            --spec-draft-adaptive-threshold-high <float>
+                                            Acceptance rate at/above which depth may
+                                            increase (default: 0.7).
+            --spec-draft-adaptive-threshold-low <float>
+                                            Acceptance rate at/below which depth may
+                                            decrease (default: 0.5).
+            --spec-draft-adaptive-hysteresis <int>
+                                            Consecutive same-direction samples required
+                                            before a depth change (default: 10).
             --prefill-chunk-size <int>      Max tokens per prefill forward pass (default: 512,
                                             0 = single-pass prefill)
             --cache-type-k, -ctk <type>     KV cache K type: f16, f32, q8_0, q4_0, q4_1, q2_0,

@@ -123,16 +123,12 @@ So the stored depth is a **hint**: it only wins when neither an explicit
 - **Greedy only.** The sweep runs `temperature: 0.0`; it measures the greedy
   decode path (the production default).
 
-## Runtime adaptation (future, not implemented)
+## Runtime adaptation (implemented)
 
-Documented for roadmap only — **not implemented**:
-
-- A rolling acceptance-rate monitor that nudges depth online (e.g. raise depth
-  when acceptance stays above ~0.7, lower it below ~0.5), analogous to a
-  simplified llama.cpp `draft-mtp-adaptive`.
-- An A/B harness comparing the adaptive policy against the fixed calibrated
-  depth over the benchmark fixtures.
-
-The current design deliberately ships a *calibrate-once, serve-fixed* model:
-the stored depth is a hint, `--spec-draft-n-max` is the override, and no
-online state feeds back into the running process.
+The online adaptive draft depth described in [`ADAPTIVE-DRAFT-DEPTH.md`](ADAPTIVE-DRAFT-DEPTH.md)
+**is implemented**: a rolling acceptance-rate / throughput monitor nudges the
+per-request depth within `[1, --spec-draft-n-max]` at serve time, off by default
+(`--spec-draft-adaptive`). It complements this calibrate-once step — run a
+startup calibration to establish a good baseline, then let the policy move the
+depth in response to the live workload. An explicit `--spec-draft-n-max` is
+always the override for the depth ceiling.

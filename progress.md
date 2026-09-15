@@ -1326,3 +1326,58 @@ swift build --target MLXLLM
 swift test --filter Qwen35FusedGDNProjectionTests   # 17 green
 MLX_QWEN_FUSED_GDN=1 swift test --filter Qwen38MTPDiagnosticTests  # hashes match baseline, engagedTotal=9216
 ```
+
+## 2026-09-15: Online adaptive draft depth (Phase G) — COMPLETE
+
+A serve-time policy that moves the per-request speculative draft depth within
+`[1, --spec-draft-n-max]` from observed acceptance rate and wall-clock
+throughput. **Server-only** (no engine change): the policy mutates the
+existing `MLXGenerator.forcedDraftK`, which is read at session creation, so
+`MLXLLM`/`MLXFastModel`/kernels are untouched (engine repo `main` clean).
+
+### Design
+
+- `Generation/AdaptiveDraftDepth.swift` — pure `AdaptiveDraftDepthPolicy`
+  (model-free `Sendable` struct): bounded rolling window (default 50 completed
+  requests), hysteresis counters (default 10), `[1, maxDepth]` clamp.
+  - Increase: acceptance `>= thresholdHigh` (0.7) for `hysteresis` samples, below
+    max, and the throughput safety signal not firing.
+  - Decrease: acceptance `<= thresholdLow` (0.5) for `hysteresis` samples, above 1.
+  - Throughput safety signal (internal, on by default): tps > 10% below the
+    rolling mean for 3 samples decreases depth, and vetoes an increase.
+  - Dead band between the thresholds moves no counter and resets hysteresis.
+  - `setDepth` (calibration sync) clamps + resets all hysteresis.
+- `MLXGenerator`: `adaptivePolicy` (nil = off), seeded at the resolved forced
+  depth; `recordAdaptiveSample(acceptanceRate:tokensPerSecond:)` (actor method,
+  pure mutation) is fed per completed request in `generateStream`'s success path
+  (gated on `proposedDraftTokens > 0`); `applyCalibratedDepth` also syncs the
+  policy; `adaptiveDraftDepthSnapshot()` for `/metrics`.
+- `ServerConfig`: `--spec-draft-adaptive` (off) + `-window`/`-threshold-high`/
+  `-threshold-low`/`-hysteresis`; `adaptiveDraftDepthConfig(maxDraftDepth:)`
+  returns nil when off or MTP is disabled.
+- `RequestMetrics.MetricsSummary`: `adaptiveDraftDepth`,
+  `adaptiveRollingAcceptanceRate`, `adaptiveDraftDepthAdjustments` (nil when off)
+  + CodingKeys; `OpenAIRouter` merges them into `GET /metrics`.
+- Docs: `docs/ADAPTIVE-DRAFT-DEPTH.md`, README example, and the calibration doc's
+  "future" section now points to the implementation.
+
+### Tests (25 new, `AdaptiveDraftDepthTests`, pure Swift, no weights)
+
+Increase/decrease on sustained high/low acceptance; dead band; hysteresis
+(single samples don't move; dead-band sample resets the counter); bounds; no
+oscillation under alternating signals; bounded adjustments under a sustained
+shift; the throughput safety signal (A/B: a sustained drop reduces depth where
+acceptance alone increases it); `setDepth` sync; initial-depth clamp; rolling
+stats; window bound; config validation; the `ServerConfig` → policy mapping
+(off by default, nil when MTP disabled, builder fields, defaults).
+
+`swift test --filter AdaptiveDraftDepthTests` → 25/25 green.
+`swift test --filter HTTPServerTests` → 224/224 green (was 199; +25).
+
+### Caveats
+
+- Adaptation granularity is per-request (a sample = one completed request that
+  proposed ≥1 draft), not per-round; a change takes effect for the next request.
+- Throughput is wall-clock for the safety signal, not a benchmark cell.
+- Off by default; with the flag off the policy is never created and the
+  `MetricsSummary` fields are nil (backward compatible).
