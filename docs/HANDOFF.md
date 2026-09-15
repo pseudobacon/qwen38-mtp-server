@@ -25,6 +25,20 @@ GEMM/scan, none the O(L²) attention. The full-attn QKV/SDPA/O sub-split was not
 captured (compiled fast path). Engine left byte-identical to main. See
 `docs/PREFILL-PROFILE.md`.
 
+**Follow-up (32K+ prefill validation, profiling/validation only, no code
+change):** full per-phase + memory + bit-exactness validation with the
+full-attention sub-split captured via the compiled fast path. **Key correction:**
+the full-attention **SDPA is 18.5 % of the 32K prefill and 29.3 % at 64K**
+(grows O(L²); the prefill uses the dense unfused path) — this **corrects** the
+`docs/FLASH-ATTENTION.md` "~0.04 %" figure (CPU enqueue, not GPU time) and
+revises the "flash attention won't help" conclusion on the speedup axis (it still
+holds on the bit-exactness axis). FFN ~43–49 %, GDN ~21–25 %. pc=512 reproduced
+near-optimal (132 s @32K); pc=0 is 65 % slower (218 s, robustness baseline
+only); 64K completes (333 s). 8K/16K chunked (pc=512 and pc=0) bit-exact with
+dense; 32K pc=0 diverges at token 1 (expected Phase 1 Bug A). Peak RSS 13.4–
+14.6 GB. Engine left byte-identical to main. See
+`benchmarks/results/prefill-verify-2026-09-15/REPORT.md`.
+
 ### Prior: Flash-attention feasibility analysis (Phase I follow-up)
 
 Evaluated integrating a flash-attention kernel for prefill. **Decision: do not

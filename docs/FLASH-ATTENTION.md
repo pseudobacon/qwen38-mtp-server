@@ -92,10 +92,18 @@ evidence the prefill is not a low-hanging-fruit target.
 > enqueue time, not GPU time**: MLX enqueues Metal commands asynchronously, so a
 > `CFAbsoluteTimeGetCurrent()` bracket measures the microseconds to *record* the
 > command, not the GPU execution. It is therefore **not** a valid GPU-time
-> fraction, and the attention's true share of the prefill is unmeasured (a
-> per-phase GPU breakdown would require `eval` synchronization, which changes the
-> timing, or a Metal GPU trace). The prefill is dominated by the O(L) GEMMs and
-> the 48 GDN recurrent layers in aggregate, but the exact split is unknown.
+> fraction.
+>
+> **The per-phase GPU breakdown has since been measured** (eval-synchronized
+> timing, `benchmarks/results/prefill-verify-2026-09-15/REPORT.md`): the
+> full-attention **SDPA is 18.5 % of the 32K prefill and 29.3 % at 64K** (it
+> grows as O(L²)), not ~0 %. The prefill SDPA uses the **dense (unfused) path**
+> (the fused `MLXFast` kernel is decode-only), materializing the `[512, 24, s]`
+> scores matrix per chunk — memory-bound, well under 1 % of peak FLOPS. So the
+> "flash attention won't help" conclusion **does not hold on the speedup axis**:
+> a prefill-fused / flash-style kernel directly attacks the 18.5–29.3 % SDPA
+> share. It still does **not** hold on the bit-exactness axis (online softmax is
+> not bit-exact, Phase 1 Bug A) — that remains the binding constraint.
 
 ## The conflict
 
@@ -130,13 +138,17 @@ Do **not** integrate a flash-attention kernel under the current constraints:
    bit-exact (Phase 1, Bug A); the task requires bit-exactness.
 2. **Context goal already met:** chunked prefill enables 128K+ (§3), so no
    kernel is needed for the ceiling.
-3. **Speedup is not low-hanging:** the prefill is near-optimal at the default
-   `pc=512` (wall time 119 s; `pc=8192` is 55% slower, `pc=0` traps, §4). The
-   prefill is dominated in aggregate by the O(L) GEMMs and the 48 GDN recurrent
-   layers; the only bit-exact levers there are kernel-level (discouraged), and
-   the per-phase GPU split is unmeasured (see the §4 caveat).
+3. **Speedup is now measured (revised):** the per-phase GPU breakdown
+   (`benchmarks/results/prefill-verify-2026-09-15/REPORT.md`) shows the
+   full-attention **SDPA is 18.5 % of the 32K prefill and 29.3 % at 64K** (grows
+   as O(L²); the prefill uses the dense unfused path). So a prefill-fused /
+   flash-style kernel *would* be the highest-leverage long-context speedup lever
+   — the earlier "not low-hanging" claim rested on the invalidated 0.04 %.
 
-**Keep chunked prefill.** If prefill speedup is later pursued, the honest first
-step is a per-phase GPU breakdown (Metal GPU trace, or `eval`-synchronized
-section timing accepted as non-representative), then target the dominant O(L)
-component — not attention, and not on the strength of the invalidated 0.04%.
+**Keep chunked prefill** (it is the bit-exact, working long-context path). The
+reason *not* to integrate a flash kernel is now **bit-exactness, not speedup**:
+online softmax is not bit-exact (Phase 1, Bug A), and the task requires
+bit-exactness. If a long-context speedup is later pursued and the
+bit-exactness invariant is explicitly relaxed for long-context, the SDPA
+(18.5–29.3 %, dense path) is the target; otherwise the bit-exact levers are the
+O(L) FFN (~43–49 %) and GDN (~21–25 %) GEMMs, which are kernel-level (discouraged).
