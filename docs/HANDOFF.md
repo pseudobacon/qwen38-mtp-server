@@ -1,7 +1,24 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Chunked causal prefill (Phase I).**
+**COMPLETE: Flash-attention feasibility analysis (Phase I follow-up).**
+
+Evaluated integrating a flash-attention kernel for prefill. **Decision: do not
+integrate** (see `docs/FLASH-ATTENTION.md`). Evidence:
+- MLX has no flash kernel for prefill (T_q > 1 materializes `[L,L]`; the Metal
+  kernel is decode-only).
+- A true flash kernel's online softmax is **not bit-exact** (Phase 1, Bug A),
+  which the task required.
+- **Measured** the full-attention SDPA share of the 32K prefill (temporary
+  env-gated timer, engine left byte-identical to main): **~0.04%** (0.05 s of a
+  114.9 s prefill). The `prefillChunkSize=512` default splits prefill into L=512
+  passes, so the O(L) projections / 48 GDN layers / FFN dominate. A flash kernel
+  only touches attention, so it cannot reach the >20% prefill-speedup target.
+- Chunked prefill already enables 128K+ (per-tile buffer 3.2 GB @128K).
+
+Server suite 0 failures; engine byte-identical to main. Server commit `c16f166`.
+
+### Prior: Chunked causal prefill (Phase I)
 
 Eliminates the quadratic `[seq × seq]` dense-attention scores buffer that traps
 the process (SIGTRAP) at ~24K+ context. **Default-OFF** (`MLX_CHUNKED_PREFILL=1`
