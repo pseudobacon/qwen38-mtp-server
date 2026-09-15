@@ -71,26 +71,31 @@ memory constant (`O(L)` vs `O(tile·L)` per tile — 805 MB → a few MB at 32K,
 far under the cap) and (b) a *potential* speedup from keeping partials in on-chip
 memory. Neither is required for the context goal, and (b) is not bit-exact.
 
-### 4. Measured: the full-attention SDPA is ~0% of the 32K prefill
+### 4. Prefill wall-time by `--prefill-chunk-size` (GPU-time measurement)
 
-To test whether the >20% prefill-speedup target was even reachable, I added a
-temporary, env-gated (`MLX_TRACE_ATTENTION=1`) wall-clock timer around the
-full-attention SDPA (L > 1) in the engine, ran one 32K chunked request, and
-removed it (engine left byte-identical to main). Result:
+The only reliable GPU-time signal is the **end-to-end wall time** at different
+`--prefill-chunk-size` values (the request does not return until the GPU is done):
 
-| | |
-| --- | --- |
-| 32K wall | 120.7 s (TTFT / prefill 114.9 s) |
-| full-attention SDPA total | **~0.05 s** |
-| full-attention fraction of prefill | **~0.04%** |
+| `--prefill-chunk-size` | passes | 32K prefill wall |
+| --- | --- | --- |
+| 512 (default) | 64 | **~119 s** |
+| 8192 | 4 | **~183 s** (slower) |
+| 0 (single pass) | 1 | **traps** (`[reshape]` empty array) |
 
-The server's own `--prefill-chunk-size 512` (default) splits the prefill into
-L=512 forward passes, so each chunk's attention is `O(512²)` and the **O(L) parts
-(QKV/output projections, 48 GDN recurrent layers, FFN) dominate the prefill**.
-The O(L²) full-attention SDPA — the *only* thing a flash kernel would optimize —
-is ~0.04% of the prefill. **No attention optimization (including flash attention)
-can approach the >20% target**; the prefill cost is in the O(L) GEMMs and GDN
-layers, a separate and much larger optimization surface.
+So the prefill is **near-optimal at the default pc=512**: larger chunks are
+*slower* (consistent with the `O(L²)` full-attention cost per pass growing with
+the pass length), and the single-pass path is not supported (traps). This is the
+evidence the prefill is not a low-hanging-fruit target.
+
+> **Measurement caveat (correction).** An earlier wall-clock timer around the
+> full-attention SDPA reported "~0.04% of the prefill." That number is **CPU
+> enqueue time, not GPU time**: MLX enqueues Metal commands asynchronously, so a
+> `CFAbsoluteTimeGetCurrent()` bracket measures the microseconds to *record* the
+> command, not the GPU execution. It is therefore **not** a valid GPU-time
+> fraction, and the attention's true share of the prefill is unmeasured (a
+> per-phase GPU breakdown would require `eval` synchronization, which changes the
+> timing, or a Metal GPU trace). The prefill is dominated by the O(L) GEMMs and
+> the 48 GDN recurrent layers in aggregate, but the exact split is unknown.
 
 ## The conflict
 
@@ -119,16 +124,19 @@ explicitly.
 
 ## Recommendation
 
-Do **not** integrate a flash-attention kernel under the current constraints. The
-evidence is now definitive on both counts:
+Do **not** integrate a flash-attention kernel under the current constraints:
 
-1. **Bit-exactness:** a true flash kernel's online softmax is not bit-exact
-   (Phase 1, Bug A); the task requires bit-exactness.
-2. **Speedup is not reachable:** the measured full-attention SDPA is **~0.04%**
-   of the 32K prefill (§4). Flash attention only touches that part, so it cannot
-   approach the >20% target. The prefill cost is in the O(L) projections, GDN
-   layers, and FFN — a separate optimization surface, not attention.
+1. **Bit-exactness (decisive):** a true flash kernel's online softmax is not
+   bit-exact (Phase 1, Bug A); the task requires bit-exactness.
+2. **Context goal already met:** chunked prefill enables 128K+ (§3), so no
+   kernel is needed for the ceiling.
+3. **Speedup is not low-hanging:** the prefill is near-optimal at the default
+   `pc=512` (wall time 119 s; `pc=8192` is 55% slower, `pc=0` traps, §4). The
+   prefill is dominated in aggregate by the O(L) GEMMs and the 48 GDN recurrent
+   layers; the only bit-exact levers there are kernel-level (discouraged), and
+   the per-phase GPU split is unmeasured (see the §4 caveat).
 
-The context goal (64K+, in fact 128K+) is already met by chunked prefill (§3).
-**Keep chunked prefill.** If prefill speedup is later pursued, target the O(L)
-GEMMs / GDN layers, not attention.
+**Keep chunked prefill.** If prefill speedup is later pursued, the honest first
+step is a per-phase GPU breakdown (Metal GPU trace, or `eval`-synchronized
+section timing accepted as non-representative), then target the dominant O(L)
+component — not attention, and not on the strength of the invalidated 0.04%.
