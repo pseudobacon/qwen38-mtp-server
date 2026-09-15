@@ -1,134 +1,119 @@
-# HANDOFF — Draft-depth policy sweep (COMPLETE, NEGATIVE 2026-09-15)
+# HANDOFF — MTP exactness (Phase A) + prefix cache (Phase B) (COMPLETE, pending merge)
 
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
-> `./scripts/agent-checkpoint.sh` ran successfully in both repositories
-> (exit 0) and wrote `.dsh/last-agent-checkpoint` in each before this file
-> was finalized. Markers recorded in the Checkpoint markers section below.
+> `agent-checkpoint.sh` ran successfully in both repositories (exit 0) and
+> wrote `.dsh/last-agent-checkpoint` in each before this file was finalized.
+> Markers in the Checkpoint markers section below.
 
 ## Objective and acceptance criteria
 
-Decide the speculative draft-depth policy for the current server: keep fixed
-k = 2, change the fixed default to another measured depth, use a bounded
-adaptive policy, or split interactive/throughput defaults. Benchmark-and-
-decision task only: no kernel, head-topology, quantization, weight, or MLX
-source changes. Success includes a defensible negative result.
-**Verdict: KEEP fixed k = 2. No policy change.** k = 2 is the best measured
-depth in all four tested modes (two fixtures × 1024/128-token regimes);
-no candidate clears the positive-change bar (≥ 3 % sustained beyond noise,
-bit-exact stream, no interactive regression); no mode exists in which any
-other depth wins, so no adaptive policy or mode split is justified.
+Two-phase task.
+- **Phase A** — audit speculative-decoding exactness (T=0 greedy
+  width-consistency; T>0 stochastic sampling correctness), produce a
+  compatibility contract, fix small self-contained defects.
+- **Phase B** — audit + harden the bounded, RAM-only, token-prefix
+  KV/session cache for TTFT / prefill-latency improvement (the cache already
+  exists; no SSD, no continuous batching, no kernel/head/quant/weight/MLX
+  changes).
 
-## Result (one live number per fact)
+Both phases are code + test + doc; no product-behavior change beyond the
+self-contained F1 defect fix (Phase A) and the cache hardening (Phase B).
 
-Single binary `e448b2e2…` (server `800218e` clean at start, engine
-`97a9d85` clean, q4 head gate in every cell, 76 timed cells, all gates
-green), medians of reps 2–6 of 6 interleaved rotated reps:
+## Result
 
-| mode | s | k1 | k2 | k3 |
-|---|---|---|---|---|
-| essay-1024 tok/s | 16.74 | 19.37 | **22.08** | 20.00 |
-| specdec-1024 tok/s | 15.36 | 18.61 | **21.27** | 20.70 |
-| essay-128 tok/s | 15.13 | 19.23 | **24.70** | 21.90 |
-| specdec-128 tok/s | 16.77 | 19.99 | **25.04** | 18.77 |
+**Phase A (COMPLETE).**
+- T=0 greedy exact (modulo per-width near-tie ulps — pre-existing, documented
+  in DRAFT-DEPTH-POLICY.md). T>0 exact rejection sampling (q/p share the same
+  sampling controls).
+- **F1 defect fixed**: `hasNonDefaultPenalties` was computed but never enforced
+  in depth selection; added `effectiveMTPEnabled` (mtpEnabled &&
+  !hasNonDefaultPenalties) used at both `decodeDepth` sites.
+- **A4**: extracted `acceptanceAlpha`/`residualLogits`/`applySamplingFilters`
+  as pure static methods (bit-identical); 8 math unit tests + an env-gated
+  (`QWEN_MTP_DIST_HARNESS=1`) distributional-parity harness. Top-8 carried-mass
+  Δ: T=0.8 token0 0.047 / token1 0.031; T=1.0 token0 0.016 / token1 0.078 — all
+  under the 0.15 gate. Full-support TVD is informational only (tail-dominated
+  at N=64 over the 248k vocab).
+- Contract: `benchmarks/MTP-CORRECTNESS-CONTRACT.md`.
 
-k4/k6/k8 (Stage A cold recon, essay): 19.47 / 14.04 / 10.37 tok/s —
-diminishing returns begin at k3, collapse by k6. k2 wins decode and wall
-time in 4/4 modes; k1's cheaper round never pays (k2 beats k1 by 12–22 %);
-no meaningful TTFT difference (identical prefill).
-
-**Flag mapping (audited).** `--spec-draft-n-max` = per-round offer (default
-3, 0 = serial, max 8); `QWEN_MTP_DRAFT_K` = pin; actual d = min(offer,
-pin ?? 2); verify width M = d + 1. Every tested cell ran at exactly its
-requested d (constant `depthDist` gate).
-
-**New finding — near-tie width-family streams (pre-existing).** Greedy
-streams are per verify-width family on specdec-800: M=1 `c70882fc…`,
-M=2 `a3dfa862…`, M=3/M=4 `139acb9d…` (registered k=2 stream). First M=1 vs
-M=3 divergence at completion token 989/1024 (reproduced twice); essay
-families all agree for 1024 tokens; specdec 128-token prefixes all agree
-(`6eb4c26a…`). Cause class: per-width accumulation-order ulps flipping a
-rare near-tie argmax. Not a regression from this task; the registered k=2
-product stream is unaffected; cross-width greedy identity remains an open
-item in kernel/numerics scope. Sweep cells were gated per family (essay
-against the single registered hash; specdec/128 against per-(mode, cell)
-learned family hashes, k2 family asserted equal to the registered stream);
-times unaffected and fully comparable.
-
-## Raw results and files
-
-- `benchmarks/DRAFT-DEPTH-POLICY.md` — protocol, flag map, near-tie table,
-  raw-result locations, result tables, noise caveats, recommendation,
-  explicit keep-default conclusion.
-- `benchmarks/results/dpsweep-A-essay1024-{s,k1,k2,k3,k4,k6,k8}.jsonl`,
-  `dpsweep-B-essay1024-{s,k1,k2,k3}.jsonl`,
-  `dpsweep-C-{specdec1024,essay128,specdec128}-{s,k1,k2,k3}.jsonl` —
-  full provenance per line (binary sha, heads, dirty flags, stream hash,
-  depthDist, phase sums, per-phase averages).
-- `benchmarks/run_dpsweep.sh` — new sweep runner (cells s/k1/k2/k3/k4/k6/k8,
-  modes essay1024/specdec1024/essay128/specdec128, rotated interleaved reps,
-  per-family hash gates, thermal snapshots).
-- `benchmarks/run_cell.sh` — optional 7th argument `max-tokens` (default
-  1024; existing invocations unchanged) + `ttlt` computed against it.
-- `.tmp/dpsweep-*.log`, `.tmp/dpsweep-*.thermal` — run and thermal logs.
-- `/tmp/dpdiag-*.json` — the serial/k2 specdec diagnostic pair used to
-  locate the near-tie divergence (outside the repo, diagnostic only).
+**Phase B (COMPLETE).**
+- Audited `RadixKVCacheManager` (radix-tree token-prefix store; store-on-
+  success; CoW via begin clone; TTL; LRU-leaf eviction under global memory
+  pressure). Key constraint: recurrent (gated-delta) layers are **not**
+  trimmable → a hit requires the stored history to be an **exact token-prefix**
+  of the new seed → the TTFT win is same-thread multi-turn continuation, not
+  interleaved shared-prefix.
+- Hardened: (1) **namespace** on `CacheEntry`/`RadixNode`, `matchPrefix`
+  requires `node.namespace == namespace`, MLXGenerator threads `cacheNamespace`
+  (model+head+template) into `matchPrefix`+`store` (closes the latent
+  cross-model serve gap); (2) **per-cache byte budget** `maxCacheBytes` (LRU
+  eviction on store; set to `memoryLimitBytes/4`); (3) **metrics** lifetime
+  hits/misses/evictions/stores + `Metrics` snapshot.
+- B3: 3 new `RadixKVCacheManagerTests` (namespaceMismatchMisses,
+  metricsCountHitsMissesEvictionsAndBytes, byteCapEvictsLRUOnStore).
+  `RadixKVCacheManagerTests` **11 green**; full `HTTPServerTests` **125 green**.
+- B4 fixture: `benchmarks/prefix_ttft.py` + `run_prefix_ttft.sh`. The
+  **match-level** proof of cache hits is `RadixKVCacheManagerTests` (hit ratio
+  > 0), not the wall-clock harness (which is entangled with SSE buffering and
+  text round-trip exactness — documented, not cited as a number).
+- Doc: `benchmarks/PREFIX-CACHE.md`.
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `feature/draft-depth-policy`,
-  docs/benchmarks-only changes, no library source, no rebuild, no new
-  binary.
-- `../mlx-swift-lm`: `main`, clean, untouched by this task.
+- `qwen38-mtp-server` (this repo): branch `feature/mtp-exactness-prefix-cache`,
+  HEAD `9bcffbf` (prefix-cache hardening). Working tree clean.
+- `../mlx-swift-lm`: branch `feature/mtp-exactness-prefix-cache`, HEAD `38f2bd2`
+  (A4 harness). Working tree clean. (Engine commit precedes server commit, per
+  protocol.)
+- **Both pending merge to `main`** (auto-merge rule; this is the one remaining
+  step).
 
 ## Commands / verification
 
-- Sweep driver (all stages):
-  `bash benchmarks/run_dpsweep.sh <A|B|C> <mode> "s k1 k2 k3" 6`
-  (Stage A used `"s k1 k2 k3 k4 k6 k8" 1`).
-- Gates: per-rep stream hash (registered / per-family), completion_tokens,
-  finish_reason, phaseSumOK, constant depthDist, q4 head; any failure stops
-  the stage. All stages completed 100 % gated on one binary.
-- No builds, tests, or engine work were required or run; no parallel GPU
-  work during timing (sequential cells, thermal snapshot per cell).
+```
+# engine
+cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests   # 3 green (incl A4 harness, ~108s)
+cd ../mlx-swift-lm && swift test --filter Qwen38MTPKernelTests        # 10 green
+# server
+cd qwen38-mtp-server && swift test --filter RadixKVCacheManagerTests # 11 green
+cd qwen38-mtp-server && swift test --filter HTTPServerTests          # 125 green
+cd qwen38-mtp-server && swift build -c release --product qwen38-mtp-server
+```
 
 ## Unresolved risks / caveats
 
-- specdec-1024 k2-vs-k3 margin (2.7 %) is inside the within-session spread
-  (~9–13 %, specdec session ran hotter); k2 is never worse and wins every
-  other comparison, so the keep decision is unaffected.
-- 128-token cells have wide per-rep spreads (13–41 %; decode window ~5–8 s
-  against ~0.25 s fixed overhead); medians still rank k2 first in all four
-  short modes.
-- k4/k6/k8 have cold-recon measurements only (Stage A); they are decisively
-  dominated and were correctly cut, so this is not a gap.
-- Cross-session absolutes remain non-comparable (thermal); this session's
-  k2 medians (22.08 / 21.27) differ from the registered headline session
-  (21.89 / 23.29) — labels only, never conclusions.
-- Cross-width greedy near-tie identity (see New finding) is open; it is not
-  a policy input and did not block this decision.
+- Phase A stochastic MTP is **not** claimed distribution-exact beyond the A4
+  top-8 mass gate (Δ < 0.15); the distribution harness is env-gated and
+  N=64 (not a full-support proof).
+- Phase B end-to-end TTFT is a fixture, not a cited number: the cache hit
+  requires bit-exact token round-trip (text multi-turn not guaranteed) and the
+  wall-clock is entangled with SSE buffering + empty-content deltas. The match-
+  level proof is the radix tests.
+- Cross-session absolute tok/s and TTFT are non-comparable (thermal); ratios
+  within one run only.
 
 ## Do-not-repeat
 
-- Do not re-derive the depth flag semantics from names — the audited mapping
-  is in DRAFT-DEPTH-POLICY.md; `--spec-draft-n-max` is the OFFER, not the
-  depth.
-- Do not gate specdec-800 cells against a single global stream hash —
-  families differ (near-tie property); use per-family hashes.
-- Do not use FullBench newCache + prime + one decode timings for policy
-  (retracted reset-structure artifact, prior session).
-- Do not run `head -N` on the checkpoint script output (SIGPIPE aborts
-  before the marker write); redirect to a file.
-- Do not cite cross-session absolute tok/s as a conclusion.
+- Do not claim stochastic MTP exact without the A4 verification.
+- Do not use full-support TVD as the A4 gate — tail-dominated at N=64 over
+  248k vocab; use top-8 carried mass.
+- Do not change production sampling behavior (top-p non-standard transform) as
+  part of the exactness audit.
+- Do not run `head -N` on checkpoint output (SIGPIPE aborts before the marker
+  write); redirect to a file.
+- Do not cite cross-session absolute tok/s or TTFT as a conclusion.
+- Do not create top-level `@Test` functions depending on global MLXRandom state
+  — they race other suites under concurrent cross-suite execution.
 
 ## Next step
 
-None — task complete (negative result, documented). If the near-tie width-
-family streams item is ever pursued, that is a kernel/numerics task in
-`mlx-swift-lm` with its own plan; the k = 2 product stream is unaffected.
+**Merge both repos to `main`** (auto-merge rule): engine `38f2bd2` first, then
+server `9bcffbf`; delete both feature branches. (This is the only remaining
+step; all tests are green and both working trees are clean.)
 
 ## Checkpoint markers
 
-- engine: 2026-09-15T01:01:41+01:00
-- server: 2026-09-15T01:01:41+01:00
+- engine: 2026-09-15T02:54:58+01:00
+- server: 2026-09-15T02:54:52+01:00
 
 The fresh-checkpoint procedure completed.
