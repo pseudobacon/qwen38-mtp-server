@@ -1253,3 +1253,76 @@ swift test --filter DraftCalibrationTests   # 17 green
 swift test --filter HTTPServerTests        # 199 green
 cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests  # 3/3
 ```
+
+## Phase F — Fused GDN prework kernel (DONE)
+
+Ported `qwen35PackedGDNPreworkKernel` (from the oMLX/mlx-serve reference,
+transcribed **verbatim** for the bit-exact-critical logic) into
+`Qwen35Kernels.swift`. One Metal launch fuses the GDN prologue — conv1d +
+SiLU + Q/K/V split + Q/K rmsNorm-and-scale + g/beta producer — for MTP
+**verify widths S ∈ 3…9** (B=1, `nKeep=3`).
+
+### Gate (OFF by default)
+
+- Env flag `MLX_QWEN_FUSED_GDN=1` (default **off**; per-instance
+  `fusedGDNPreworkEnabled` override for tests).
+- Hardware: `MLXHardwareInfo.isCompiledDecodeSupported`.
+- Geometry (hardcoded, matches the 27B Qwen3.5 backbone): `B=1`,
+  `S ∈ 3…9`, `nKeep=3`, `numKHeads=16`, `numVHeads=48`, `headKDim=128`,
+  `headVDim=128`, `qkv.dim(2)=10240`, `mask == nil` (checked in `forward`
+  before the call — the kernel does not apply a prefill mask).
+- Dtypes (all `.bfloat16`): `qkv`, `convState`, `a`, `b`, `conv1d.weight`,
+  `aLog`, `dtBias`.
+- Any gate miss → eager chain (unchanged, zero overhead when off).
+
+### Metal-version adaptation (minimal, bit-exact)
+
+The verbatim kernel does not compile under this MLX's Metal, which promotes
+`bfloat16_t op bfloat16_t` to `float` (the reference's Metal keeps it in
+`bfloat16_t`). Three `const InT x = <InT op InT>` lines needed explicit
+`static_cast<InT>(static_cast<float>(a) op static_cast<float>(b))`. Bit-exact
+because Metal emulates bf16 arithmetic in float32, so the value is unchanged.
+The 0xC0DB→0x3A8B `qwen35_prework_beta` fixup, the `metal::precise::exp`
+calls, the threadgroup barrier, and the stride-based memory access are
+**untouched**.
+
+### Bit-exactness (proven, not assumed)
+
+- **Unit** (`Qwen35FusedGDNProjectionTests`): full GDN layer output is
+  bit-identical (fused vs eager) for every S ∈ 3…9 on the production geometry;
+  the dispatch counter proves engagement (engagedTotal ≥ 1, per-width). Width
+  gate test: S ∈ {1,2,10,16} never engages and still matches eager.
+- **Real model** (14 GB 27B, `Qwen38MTPDiagnosticTests`): with
+  `MLX_QWEN_FUSED_GDN=1`, overall committed stream hash
+  `86cd9e8868988aef611512262936a11d717bf8f6882efa8997910b992784b1c5` (identical
+  to the OFF baseline) and `[FusedGDNDispatch] engagedTotal=9216 widths=[5: 9216]`
+  — the fused kernel **engaged** on every verify round, not a silent gate miss.
+  Wide-verify (depth 5) serial/wide hashes also match the OFF baseline.
+
+### Performance (honest finding)
+
+Controlled in-session A/B of the diagnostic test (3 reps each, median):
+- S=5 (depth 4): OFF 33.64 s vs ON 36.67 s.
+- S=6 (depth 5, `testWideVerifyStaysInSerialFamily`): OFF 30.99 s vs ON 31.55 s.
+
+The fused kernel is **bit-exact but not a clear wall-clock win** in these
+workloads: the verify path (S=5–6) is a small fraction of total wall-clock
+(prefill + decode dominate), and fusing small-tensor ops into one launch does
+not beat the eager chain's already-cheap small launches. **Verdict: retain as a
+correctness-preserving, default-OFF opt-in (rollback-safe), not a headline
+win.** No absolute tok/s is cited (cross-session absolutes are not comparable).
+
+### Tests
+
+- `Qwen35FusedGDNProjectionTests`: `testFusedGDNPreworkIsBitIdenticalAcrossVerifyWidths`
+  (S ∈ 3…9 bit-exact + engagement), `testFusedGDNPreworkWidthGate`
+  (S ∈ {1,2,10,16} gated off). 17/17 green in the suite.
+
+### Reproduction
+
+```
+cd ../mlx-swift-lm
+swift build --target MLXLLM
+swift test --filter Qwen35FusedGDNProjectionTests   # 17 green
+MLX_QWEN_FUSED_GDN=1 swift test --filter Qwen38MTPDiagnosticTests  # hashes match baseline, engagedTotal=9216
+```

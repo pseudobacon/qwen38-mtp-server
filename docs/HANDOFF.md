@@ -1,129 +1,124 @@
-# HANDOFF — Draft-depth calibration (wall-clock tokens/s per depth) (COMPLETE, merged to main)
+# HANDOFF — Fused GDN prework kernel (MLX_QWEN_FUSED_GDN) (IN PROGRESS — engine merged, server docs pending)
 
-> **Checkpoint status.** The fresh-checkpoint procedure **completed**:
-> `agent-checkpoint.sh` ran successfully (exit 0) in both repositories and
-> wrote `.dsh/last-agent-checkpoint` in each before this file was finalized.
-> Markers in the Checkpoint markers section below.
+> **Checkpoint status.** The fresh-checkpoint procedure **must** be run via
+> `./scripts/agent-checkpoint.sh` before this file is finalized (it writes
+> `.dsh/last-agent-checkpoint` in each repo). Markers in the Checkpoint
+> markers section below.
 
 ## Objective and acceptance criteria
 
-A **draft-depth calibration mode** for `qwen38-mtp-server` that measures
-wall-clock decode throughput at several speculative draft depths and selects
-the fastest one per model, storing the winner in a JSON config and serving at
-it. Acceptance: `--spec-draft-calibrate` flag + startup benchmark loop (off by
-default); JSON config storage (`spec-draft-calibration.json`, per model); the
-stored depth is a **hint** overridable by `--spec-draft-n-max`; runtime
-adaptation documented as future (not implemented); pure-Swift tests; docs +
-README example commands; no kernel/head/quantization/weight/sampling changes;
-full `HTTPServerTests` green; engine diagnostic suite green.
+Port `qwen35PackedGDNPreworkKernel` (from the oMLX/mlx-serve reference) into
+the engine so that the GDN prologue (conv1d + SiLU + Q/K/V split + Q/K
+rmsNorm-and-scale + g/beta) runs as **one Metal launch** for MTP verify widths
+S ∈ 3…9. Acceptance: kernel transcribed **verbatim** for the
+bit-exact-critical logic (0xC0DB→0x3A8B beta fixup, `precise::exp`, barriers,
+stride access); gated **OFF by default** (`MLX_QWEN_FUSED_GDN=1` to enable);
+**bit-exact** with the eager chain (proven, not assumed); engagement provable
+(dispatch counter > 0, not a silent gate miss); the non-fused path is
+bit-identical when the gate is off (zero overhead); tests; performance
+benchmark (honest); docs; engine commit precedes server commit.
 
 ## Result
 
-**Calibration (COMPLETE, merged to main).** Engine: one small init hook
-(`draftDepth` pin). Server: the calibration surface. No kernel, head topology,
-quantization, weight, or sampling-semantics changes. Off by default.
+**Fused GDN prework (engine merged to main at `4cd8603`; server docs this
+commit).** No sampling/greedy semantics change — the kernel is bit-exact with
+the eager chain, so committed tokens are unchanged. Off by default.
 
-- **Engine** (`Qwen38MTPBlockSession`, `mlx-swift-lm`, commit `d01535d`): new
-  optional `draftDepth: Int?` init param (pinned per-round depth). Pinned depth
-  takes highest priority in `draftPolicy` (pinned → `QWEN_MTP_DRAFT_K` →
-  default 2), above the offer cap. Lets the server sweep depths 0..3 in one
-  process (the env var is a process-global static; the per-session pin is not).
-  `nil` path unchanged (engine diagnostic 3/3 green).
-- **`SpecDraftCalibration`** (new, server): `DepthBenchmark`, `ModelCalibration`,
-  `SpecDraftCalibrationFile` (Codable); `parseDepths`, `selectOptimalDepth`
-  (max tok/s, ties → lower depth), `load`/`save` (pretty JSON; missing/corrupt →
-  nil), `report`, `iso8601Now`.
-- **`ServerConfig`**: `--spec-draft-calibrate` (off by default),
-  `--spec-draft-calibrate-depths` (default `0,1,2,3`),
-  `--spec-draft-calibrate-tokens` (default 100),
-  `--spec-draft-calibration-file` (default `./spec-draft-calibration.json`);
-  `--spec-draft-n-max` now sets `specDraftNMaxExplicit`; `QWEN_MTP_DRAFT_K` read
-  into `specDraftK`. `resolvedForcedDraftDepth(storedCalibratedDepth:)`:
-  explicit `--spec-draft-n-max` > `QWEN_MTP_DRAFT_K` > stored > default 2.
-- **`MLXGenerator`**: `forcedDraftK: Int?` init param (passed to both
-  production sessions); `calibrateDraftDepths(depths:tokens:)` (sweeps pinned
-  sessions, decode-only wall-clock, greedy, acceptance from accepted/rejected
-  counters); `applyCalibratedDepth(_:)` (sets the pin for the running process).
-- **`Qwen38Server`**: loads the store, resolves the forced k, passes it to the
-  generator; on `--spec-draft-calibrate`, runs the sweep after warmup, logs the
-  report, applies the winner, saves the store (keyed by canonical model id).
-  Calibration failure is non-fatal (serves at the resolved k).
-- **Docs**: `docs/DEPTH-CALIBRATION.md` (usage, config format, resolution
-  precedence, caveats, future runtime-adaptation roadmap), `docs/README.md`
-  (example commands + runtime-knobs note + test counts), `progress.md`.
+- **Engine** (`mlx-swift-lm`, `4cd8603`):
+  - `Qwen35Kernels.swift`: `qwen35PackedGDNPreworkKernel` (verbatim Metal
+    source + header, `ensureRowContiguous: false`), `Qwen35FusedGDNPreworkRouting`
+    (env flag, off by default), `Qwen35FusedGDNPreworkDispatch` (lock-protected
+    per-width + total counters), `qwen35PackedGDNPrework` helper.
+  - `Qwen35+FastPath.swift`: `fusedGDNPrework(qkv:a:b:convState:)` on
+    `Qwen35GatedDeltaNet` — the full geometry/dtype gate + the kernel call.
+  - `Qwen35.swift`: `forward` uses `if mask == nil, let prework =
+    fusedGDNPrework(...)` with the **unchanged** eager chain in the else branch;
+    per-instance `fusedGDNPreworkEnabled` (default from the env flag) for
+    testability; a load-time fusion summary line.
+  - `Qwen35FusedGDNProjectionTests`: `testFusedGDNPreworkIsBitIdenticalAcrossVerifyWidths`
+    (S ∈ 3…9 bit-exact + engagement), `testFusedGDNPreworkWidthGate`
+    (S ∈ {1,2,10,16} gated off). 17/17 green.
 
-### Tests (pure Swift, no model weights; 17 new)
+### Metal-version adaptation (minimal, bit-exact)
 
-- `DraftCalibrationTests` (17): `parseDepths` (basic/trim/dedupe/out-of-range/
-  empty), `selectOptimalDepth` (max/empty/tie→lower), `report` format, store
-  round-trip / missing→nil / corrupt→nil, `resolvedForcedDraftDepth` precedence
-  (default/env/stored/explicit-n-max), `iso8601Now` format.
-- **Full `HTTPServerTests`: 199 green** (182 → 199). Engine
-  `Qwen38MTPDiagnosticTests` 3/3 green.
+The verbatim kernel did not compile under this MLX's Metal, which promotes
+`bfloat16_t op bfloat16_t` to `float` (the reference's Metal keeps it in
+`bfloat16_t`). Three `const InT x = <InT op InT>` lines needed explicit
+`static_cast<InT>(static_cast<float>(a) op static_cast<float>(b))`. Bit-exact
+(Metal emulates bf16 in float32). The 0xC0DB→0x3A8B beta fixup, `precise::exp`,
+barriers, and stride access are **untouched**.
+
+### Bit-exactness (proven)
+
+- **Unit** (no 14 GB weights): full GDN layer output bit-identical (fused vs
+  eager) for S ∈ 3…9 on the production geometry; dispatch counter proves
+  engagement. The unit test casts in_proj / conv1d.weight / A_log / dt_bias to
+  bf16 to match production's dequantized dtypes (a fresh float32 layer would
+  emit float32 and the gate would miss).
+- **Real model** (14 GB 27B, `Qwen38MTPDiagnosticTests`): `MLX_QWEN_FUSED_GDN=1`
+  → overall committed stream hash
+  `86cd9e8868988aef611512262936a11d717bf8f6882efa8997910b992784b1c5` (identical
+  to the OFF baseline) and `[FusedGDNDispatch] engagedTotal=9216 widths=[5: 9216]`
+  — engaged on every verify round, not a silent gate miss. Wide-verify (depth 5)
+  serial/wide hashes also match the OFF baseline.
+
+### Performance (honest finding)
+
+Controlled in-session A/B of the diagnostic test (3 reps each, median): S=5
+(OFF 33.64 s vs ON 36.67 s), S=6 wide-verify (OFF 30.99 s vs ON 31.55 s).
+**Bit-exact but not a clear wall-clock win** in these workloads (the verify path
+is a small fraction of total wall-clock; fusing small-tensor ops does not beat
+the eager chain's already-cheap small launches). Retained as a
+correctness-preserving, default-OFF opt-in, not a headline win. No absolute
+tok/s cited (cross-session absolutes are not comparable).
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `main`, HEAD `148fa47` before this
-  task; the calibration commit is the fast-forward merge of
-  `feature/prompt-draft-calibrate` (branch deleted). Working tree clean (except
-  this `docs/HANDOFF.md` update).
-- `../mlx-swift-lm`: branch `main`; HEAD `d01535d` (the `draftDepth` pin), the
-  fast-forward merge of `feature/prompt-draft-calibrate` (branch deleted).
+- `../mlx-swift-lm`: branch `main`, HEAD `4cd8603` (the fused GDN kernel), the
+  merge of `feature/prompt-fused-gdn` (branch deleted). Working tree clean.
+- `qwen38-mtp-server` (this repo): branch `feature/prompt-fused-gdn` (off
+  `main` @ `e994ea5`); this commit carries the `progress.md` + `docs/HANDOFF.md`
+  updates.
 
 ## Commands / verification
 
 ```
-swift build --target HTTPServer          # clean, no warnings
-swift test --filter DraftCalibrationTests # 17 green
-swift test --filter HTTPServerTests      # 199 green
-cd ../mlx-swift-lm && swift build --target MLXLLM   # clean
-cd ../mlx-swift-lm && swift test --filter Qwen38MTPDiagnosticTests  # 3/3
-# live (optional, needs weights):
-#   qwen38-mtp-server serve --model ./weights --spec-draft-calibrate
+cd ../mlx-swift-lm
+swift build --target MLXLLM                                  # clean
+swift test --filter Qwen35FusedGDNProjectionTests            # 17 green
+MLX_QWEN_FUSED_GDN=1 swift test --filter Qwen38MTPDiagnosticTests  # hashes match baseline, engagedTotal=9216
 ```
 
 ## Unresolved risks / caveats
 
-- Wall-clock throughput measurement, **not** a 1024-token benchmark cell. Do
-  not cite calibration tok/s as a headline number; it is only for in-session
-  relative depth ranking.
-- Depth selection never changes correctness: greedy output is bit-identical
-  across depths (speculative decoding changes tokens-per-round, never which
-  tokens are committed).
-- The stored depth is a **hint**: an explicit `--spec-draft-n-max` or
-  `QWEN_MTP_DRAFT_K` overrides it. `--spec-draft-n-max 0` disables MTP.
-- Online runtime adaptation (rolling acceptance → depth) is **documented as
-  future, not implemented**.
+- The fused kernel is **off by default**; enabling it (`MLX_QWEN_FUSED_GDN=1`)
+  is bit-exact (proven) but not a measured win in the diagnostic workloads.
+- The kernel is gated on the 27B Qwen3.5 geometry; any geometry/dtype/width
+  mismatch falls back to the eager chain (silent, by design — a gate miss is
+  always safe).
+- The Metal-version adaptation (three explicit casts) is the only deviation
+  from the verbatim reference; it is bit-exact.
 
 ## Do-not-repeat
 
-- Do not cite the calibration tok/s as a headline number (wall-clock, 50–100
-  tokens, not the benchmark protocol).
-- Do not claim depth selection changes correctness (greedy is bit-identical
-  across depths).
-- Do not treat the stored depth as authoritative over an explicit
-  `--spec-draft-n-max` or `QWEN_MTP_DRAFT_K`.
-- Do not run `head -N` on checkpoint output (SIGPIPE aborts before the marker
-  write); redirect to a file.
-- The `agent-checkpoint.sh` script must be run **inside** each actual git repo
-  (the `qwen38-mlx-server` symlink wrapper is not a worktree), invoked by its
-  full path from the repo directory.
-- Engine commit precedes server commit; both merged to `main`, feature branches
-  deleted.
+- Do **not** rewrite the Metal kernel from understanding; transcribe verbatim
+  and change only what the Metal version forces (the three explicit casts).
+- Do **not** drop `mask == nil` from the `fusedDecode` check in the else branch,
+  nor the dtype checks (conv1d.weight/aLog/dtBias must be bf16 for the kernel).
+- Do **not** set `ensureRowContiguous: true` (it inserts a full-carrier copy).
+- Do **not** cite cross-session absolute tok/s as a conclusion; the fused kernel
+  is a wall-clock A/B, not a benchmark cell.
+- Do **not** use `try eval(x).asArray(...)` (eval returns Void).
+- Engine commit precedes server commit; engine already merged to `main`.
 
 ## Next step
 
-None — the calibration mode is complete, tested, documented, merged to `main`,
-and checkpointed. A successor session should independently verify (per the
-resume procedure): `git status --short` (clean) in both repos,
-`swift test --filter HTTPServerTests` (199 green), and
-`swift test --filter Qwen38MTPDiagnosticTests` (3/3). If an **online** runtime
-adaptive depth policy is requested, that is the documented-future work in
-`docs/DEPTH-CALIBRATION.md` (not implemented).
+Complete the server commit (`progress.md` + this `docs/HANDOFF.md`), merge
+`qwen38-mtp-server` `feature/prompt-fused-gdn` to `main`, delete the branch,
+then run `./scripts/agent-checkpoint.sh` in both repos and record the fresh
+checkpoint markers below.
 
 ## Checkpoint markers
 
-- server: 2026-09-15T13:20:43+01:00
-- engine: 2026-09-15T13:20:42+01:00
-
-The fresh-checkpoint procedure completed.
+- server: (pending — run `./scripts/agent-checkpoint.sh` in `qwen38-mtp-server`)
+- engine: (pending — run `./scripts/agent-checkpoint.sh` in `mlx-swift-lm`)
