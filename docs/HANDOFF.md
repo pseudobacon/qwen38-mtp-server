@@ -1,112 +1,128 @@
-# HANDOFF — OpenAI-compatible tool calling (Phase C) (COMPLETE, merged to main)
+# HANDOFF — Session API + token-ID echo (Phase D) (COMPLETE, merged to main)
 
 > **Checkpoint status.** The fresh-checkpoint procedure **completed**:
-> `agent-checkpoint.sh` ran successfully in both repositories (exit 0) and
+> `agent-checkpoint.sh` ran successfully (exit 0) in both repositories and
 > wrote `.dsh/last-agent-checkpoint` in each before this file was finalized.
 > Markers in the Checkpoint markers section below.
 
 ## Objective and acceptance criteria
 
-Server-side OpenAI-compatible **function calling** for the Qwen 3.8 MTP server.
-The server must **transport, render, and parse** tool calls and **NEVER execute**
-them. Acceptance: request validation before model execution; `tool_choice`
-`required`/named and `parallel_tool_calls: true` rejected with 400 (not
-silently treated as `auto`); `finish_reason: "tool_calls"` on normal stop;
-malformed tool blocks degrade to content (never throw/crash); tokenization
-and KV caches keyed on tool content; pure-Swift tests for render/parse/
-serialize/validate; docs; full `HTTPServerTests` green.
+A **server-owned conversation/session API** for `qwen38-mtp-server` plus an
+optional `include_token_ids` response extension, so multi-turn clients can
+own the history server-side and (optionally) read back the exact committed
+token IDs. Acceptance: session CRUD + one-turn completion; `include_token_ids`
+echoes committed target token IDs (stateless and session); TTL/LRU-bounded
+process-local sessions (no disk, no cross-process); honest cache semantics
+(a session guarantees conversation ownership, NOT a cache hit); no token
+splicing / no Jinja template duplication / no request-side `token_ids`;
+pure-Swift tests; docs; full `HTTPServerTests` green; engine untouched.
 
 ## Result
 
-**Phase C (COMPLETE, merged).** Phases A (MTP exactness) and B (RAM prefix
-cache) were already complete and merged to `main` before this task (server
-`ea89536`). This task adds Phase C; all changes are in the server repo only —
-the engine (`mlx-swift-lm`) is **untouched** (no engine commit needed).
+**Phase D (COMPLETE, merged to main).** Server repo only — the engine
+(`mlx-swift-lm`) is **untouched** (no engine commit; HEAD unchanged at
+`2028d66`).
 
-- **`finish_reason: "tool_calls"`** via a shared `toolCallFinishReason` helper in
-  `OpenAIRouter.swift`, used by both streaming and non-streaming paths.
-  Streaming now tracks emitted `toolCalls` (the `.toolCall` case previously
-  dropped them). Truncation reasons (`length`, `memory_pressure`) are
-  preserved.
-- **Rejections (400 `unsupported_parameter`):** `tool_choice: "required"` and
-  named `{function:{name}}` (the Qwen template cannot force a tool call);
-  `parallel_tool_calls: true` (no server-controlled parallel mode). `auto`/
-  `none` and `false`/omit accepted.
-- **Validation before model execution:** `validateTools` (type `function`, name
-  `[a-zA-Z0-9_-]` 1–64, unique names, `parameters` a JSON object, ≤ 128 tools),
-  `validateToolChoice`, `validateParallelToolCalls`, `validateToolConversation`
-  (every `tool`/`function` result references a prior assistant `tool_call` id —
-  no orphans, no cross-turn mismatch; assistant ids unique).
-- **Tokenization cache key** (`MLXGenerator.tokenizationCacheKey`, extracted
-  static) now includes assistant `tool_calls` (name|args) and tool-result
-  `tool_call_id`/`name` — closes a cross-conversation contamination gap.
-- **XML parameter newline fix** (`StreamingToolCallParser.parseXMLBlock`): the
-  template places each value on its own line; strip exactly one formatting
-  newline per side, preserving internal newlines.
-- **Docs:** `benchmarks/TOOL-CALLING.md` (internal contract),
-  `docs/TOOL-PROTOCOL.md` (public client contract).
+- **`include_token_ids`**: `include_token_ids: Bool?` on `ChatCompletionRequest`;
+  when `true`, `choices[0].message.token_ids` (non-streaming) / final delta
+  `token_ids` (streaming) carry the exact committed target token IDs.
+  Diagnostic only, absent by default, NOT a request-side splice input.
+- **`ChatMessage.token_ids`**: `let token_ids: [Int]?`, custom encode omits
+  nil; request schema unchanged.
+- **`SessionStore` actor** (new): process-local, in-memory, LRU-capped
+  (`--max-sessions`, default 128) + idle-TTL (`--session-ttl`, default 1800 s).
+  Owns the message history, a diagnostic cached prefix (seed + completion
+  token IDs), a per-session in-flight flag, and a token count. No disk, no
+  cross-process, no auth.
+- **Session routes**: `POST /v1/sessions`, `GET /v1/sessions/:id`,
+  `DELETE /v1/sessions/:id`, `POST /v1/sessions/:id/completions`. Completion
+  merges stored history + the new turn, re-renders, and commits the assistant
+  turn on success (via `onFinished`); nothing committed on failure (409 if a
+  completion is already in flight). `session_id` echoed on non-streaming
+  responses. `DELETE` best-effort releases the radix prefix (leaf removal only).
+- **`CompletionCommit`**: assistant-turn fields + committed token IDs;
+  `assistantMessage` builds the stored history message (NO token IDs).
+- **Router**: the completion body extracted into `@Sendable
+  performChatCompletion(app:request:serverConfig:runtimeState:scheduler:
+  generator:metricsCollector:logger:sessionID:onFinished:)`, shared by the
+  stateless and session endpoints (also a compiler-fragility win for the large
+  closure).
+- **`RadixKVCacheManager.remove`**: best-effort leaf removal for session delete.
+- **Config**: `maxSessions`, `sessionTTLSeconds` (+ `QWEN_MAX_SESSIONS` /
+  `QWEN_SESSION_TTL`).
+- **Docs**: `docs/SESSION-API.md` (client contract + curl/Python examples),
+  `docs/SESSION-BOUNDARIES.md` (design gate: token-boundary analysis),
+  `docs/TOOL-PROTOCOL.md` cross-ref.
 
-### Tests (pure Swift, no model weights; 43 new)
+### Tests (pure Swift, no model weights; 13 new + 1 gated)
 
-`StreamingToolCallParserTests` (11), `ToolCallingValidationTests` (17),
-`ToolCallingRenderTests` (7), `ToolCallingHTTPTests` (3), `ToolCallingCacheTests`
-(4), plus 3 `RequestValidationTests` updated for the new orphaned-result rule.
-Full **`HTTPServerTests`: 168 green** (baseline 125 + 43).
+- `SessionStoreTests` (6): CRUD, completion lifecycle (in-flight serialization
+  + history continuity), delete releases cached prefix, aborted completion
+  commits nothing, LRU eviction, TTL expiration.
+- `TokenIDEchoTests` (7): `token_ids` omitted-when-nil + round-trip, commit
+  assistant message carries no token IDs, empty tool calls collapse to nil,
+  `session_id` round-trip, `include_token_ids` decode.
+- `TokenBoundaryTests` (gated `QWEN_RUN_WEIGHTS=1`): full non-thinking prefix,
+  partial thinking divergence.
+- **Full `HTTPServerTests`: 182 green** (168 → 182).
 
 ## Git state
 
-- `qwen38-mtp-server` (this repo): branch `main`, HEAD `a781bad` (Phase C,
-  fast-forward merge of `feature/prompt-tool-calling`, branch deleted). Working
-  tree clean.
-- `../mlx-swift-lm`: branch `main`, HEAD `38f2bd2`. Untouched by this task.
+- `qwen38-mtp-server` (this repo): branch `main`, HEAD `220d68b` (Phase D,
+  fast-forward merge of `feature/prompt-session-api`, branch deleted). Working
+  tree clean (except this `docs/HANDOFF.md` update).
+- `../mlx-swift-lm`: branch `main`, HEAD `2028d66`. Untouched by this task.
 
 ## Commands / verification
 
 ```
 swift build --target HTTPServer          # clean
-swift test --filter HTTPServerTests      # 168 green
+swift test --filter HTTPServerTests      # 182 green
 # focused:
-swift test --filter StreamingToolCallParserTests   # 11
-swift test --filter ToolCallingValidationTests     # 17
-swift test --filter ToolCallingRenderTests         # 7
-swift test --filter ToolCallingHTTPTests           # 3
-swift test --filter ToolCallingCacheTests          # 4
+swift test --filter SessionStoreTests    # 6
+swift test --filter TokenIDEchoTests     # 7
+# gated (real tokenizer, no model):
+QWEN_RUN_WEIGHTS=1 QWEN_MODEL_PATH=./weights swift test --filter TokenBoundaryTests
 ```
 
 ## Unresolved risks / caveats
 
-- No tool execution (server parses/returns only); execution is the client's job.
-- `tool_choice` `required`/named are rejected, not emulated (no template
-  mechanism to force a tool call).
-- Parse correctness is guaranteed; model adherence to the tool format is not
-  (malformed output degrades to visible content, request still succeeds).
-- Reasoning-tag marker mismatch (parser `think`/`/think` vs the template
-  marker) is pre-existing and unchanged; it affects the reasoning path
-  identically with and without tools.
+- A session = conversation ownership + history continuity, **not** a cache hit.
+  Reuse is opportunistic and mode-dependent (full non-thinking, partial
+  thinking) — see `docs/SESSION-BOUNDARIES.md`. Do not market a TTFT win.
+- No token splicing, no Jinja template duplication in Swift, no request-side
+  `token_ids` (request message schema unchanged).
+- Sessions are process-local/in-memory: no disk persistence, no auth, no
+  cross-process sharing, no continuous batching.
+- `include_token_ids` returns the completion token IDs (diagnostic); they are
+  not validated for splicing and are not a request input.
 
 ## Do-not-repeat
 
-- Never execute a tool from the server; transport/render/parse only.
-- Never silently treat an unrepresentable `tool_choice`/`parallel_tool_calls`
-  as `auto` — reject with 400.
-- Never swallow malformed tool blocks — emit them verbatim as content.
-- Keep tool content in both the tokenization cache key and the KV/session cache
-  key so conversations never cross-contaminate.
+- Do not treat a session as a guaranteed cache-hit mechanism.
+- Do not hand-construct user/assistant/tool suffix tokens in Swift, duplicate
+  the Jinja chat template, or add request-side `token_ids`.
+- Do not persist sessions to disk, add auth, share across processes, or batch.
 - Do not run `head -N` on checkpoint output (SIGPIPE aborts before the marker
   write); redirect to a file.
+- The `agent-checkpoint.sh` script must be run **inside** each actual git repo
+  (the `qwen38-mlx-server` symlink wrapper is not a worktree), not from the
+  wrapper root.
 
 ## Next step
 
-None — Phase C is complete, tested, documented, merged to `main`, and
+None — Phase D is complete, tested, documented, merged to `main`, and
 checkpointed. A successor session should independently verify (per the resume
 procedure): `git status --short` (clean), `swift test --filter HTTPServerTests`
-(168 green), and confirm `docs/TOOL-PROTOCOL.md` + `benchmarks/TOOL-CALLING.md`
-exist. If new tool-calling scope is requested (e.g. an end-to-end model-in-
-the-loop tool-call harness), that is a new task.
+(182 green), and confirm `docs/SESSION-API.md` + `docs/SESSION-BOUNDARIES.md`
+exist. If end-to-end model-in-the-loop session testing (live multi-turn over
+HTTP) is requested, that is a new task (the pure-Swift suite covers the actor,
+serialization, and token-boundary contract; the live HTTP path is exercised by
+the radix benchmark + the live-server harness).
 
 ## Checkpoint markers
 
-- server: 2026-09-15T09:40:18+01:00
-- engine: 2026-09-15T09:40:18+01:00
+- server: 2026-09-15T12:28:51+01:00
+- engine: 2026-09-15T12:28:51+01:00
 
 The fresh-checkpoint procedure completed.
