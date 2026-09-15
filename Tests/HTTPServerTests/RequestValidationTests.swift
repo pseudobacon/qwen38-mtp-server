@@ -512,6 +512,37 @@ func defaultPenaltyValuesAreAccepted() throws {
     #expect(!params.hasNonDefaultPenalties)
 }
 
+@Test
+func effectiveMTPEnabledForcesSerialOnNonDefaultPenalty() throws {
+    // No penalty: MTP stays on.
+    var request = validRequest()
+    var params = try ChatCompletionRequestValidator.validate(
+        request: request, serverConfig: ServerConfig()
+    )
+    #expect(params.mtpEnabled)
+    #expect(params.effectiveMTPEnabled)
+
+    // Any single non-default penalty forces serial (MTP off) even with
+    // mtp_enabled: true, so the penalty contract (target-only selection) holds.
+    for (field, value) in [
+        ("repetition", Float(1.1)), ("presence", Float(0.1)), ("frequency", Float(-0.1))
+    ] {
+        var req = validRequest()
+        switch field {
+        case "repetition": req.repetition_penalty = value
+        case "presence": req.presence_penalty = value
+        case "frequency": req.frequency_penalty = value
+        default: break
+        }
+        var p = try ChatCompletionRequestValidator.validate(
+            request: req, serverConfig: ServerConfig()
+        )
+        #expect(p.mtpEnabled, "mtp_enabled should remain true")
+        #expect(p.hasNonDefaultPenalties)
+        #expect(!p.effectiveMTPEnabled, "penalty must force serial")
+    }
+}
+
 // MARK: - Chat template / TTL
 
 @Test

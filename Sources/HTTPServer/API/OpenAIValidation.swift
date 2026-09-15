@@ -376,9 +376,13 @@ public enum ChatCompletionRequestValidator {
     ///
     /// Out-of-range or non-finite values are rejected (400 `invalid_value`).
     /// When any penalty is non-default, the request is served at the serial
-    /// control depth (0) even with `mtp_enabled: true` — speculative
-    /// sampling is not implemented and penalties are never applied to MTP
-    /// draft logits.
+    /// control depth (0) even with `mtp_enabled: true`: the engine's
+    /// speculative (draft/verify) path does not apply penalties to draft or
+    /// verify logits, so a penalty request must run target-only for the
+    /// penalties to take effect. Non-greedy (temperature > 0) requests
+    /// without penalties DO use MTP: the engine implements mathematically
+    /// exact target-distribution speculative sampling (see
+    /// benchmarks/MTP-CORRECTNESS-CONTRACT.md).
     private static func validatePenalties(request: ChatCompletionRequest) throws {
         if let repetitionPenalty = request.repetition_penalty {
             guard repetitionPenalty.isFinite, repetitionPenalty > 0,

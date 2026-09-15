@@ -307,6 +307,13 @@ struct SamplingParameters: Sendable {
     var hasNonDefaultPenalties: Bool {
         repetitionPenalty != 1.0 || presencePenalty != 0.0 || frequencyPenalty != 0.0
     }
+
+    /// MTP is honored only when no non-default penalty is requested. The
+    /// engine's speculative (draft/verify) path does not apply penalties to
+    /// draft/verify logits, so any penalty request must be served at the
+    /// serial target-only depth to honor the documented penalty contract
+    /// (penalties applied to target logits before target token selection).
+    var effectiveMTPEnabled: Bool { mtpEnabled && !hasNonDefaultPenalties }
 }
 
 private struct InferenceContext: @unchecked Sendable {
@@ -705,7 +712,7 @@ actor MLXGenerator {
                 var prefillSeconds = 0.0
                 var decodeSeconds = 0.0
                 var rounds = 0
-                let decodeDepth = samplingParams.mtpEnabled ? maxDraftDepth : MLXFastConstants.qwenMTPSerialControlDepth
+                let decodeDepth = samplingParams.effectiveMTPEnabled ? maxDraftDepth : MLXFastConstants.qwenMTPSerialControlDepth
                 var proposedDraftTokens = 0
                 var acceptedDraftTokens = 0
                 var finishReason = "length"
@@ -1116,7 +1123,7 @@ actor MLXGenerator {
 
         _ = try session.begin(seedTokens: effectiveSeedTokens)
 
-        let decodeDepth = samplingParams.mtpEnabled ? maxDraftDepth : MLXFastConstants.qwenMTPSerialControlDepth
+        let decodeDepth = samplingParams.effectiveMTPEnabled ? maxDraftDepth : MLXFastConstants.qwenMTPSerialControlDepth
         var allTokens: [Int] = []
         var done = false
 
