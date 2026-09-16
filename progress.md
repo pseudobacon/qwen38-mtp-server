@@ -1706,8 +1706,44 @@ a physical path — the sibling working directory is a symlink hub).
   exists in this checkout**: no `efcf595` object, no "Task 1–6" sections in
   `progress.md` (this file uses Phase A–I naming, all present), no SSD-tier
   code, and no `WeightTestLock.swift` / `QWEN_MLX_SEED` / `active_bytes`
-  artifacts in this repo. The Task 3 "kv-ssd implemented" claim is therefore
-  resolved against Task 7's zero-occurrences audit as **not implemented** —
-  no section in this file ever claimed otherwise, so no in-file contradiction
-  needed correction. If those tasks were logged in a different clone/branch,
-  this file is not that file.
+  artifacts in this checkout's `main`. The Task 3 "kv-ssd implemented" claim is
+  therefore resolved against Task 7's zero-occurrences audit as **not
+  implemented on this main** — no section in this file ever claimed otherwise,
+  so no in-file contradiction needed correction.
+
+**Resolution (2026-09-16, follow-up exploration):** The Task 1–6 work was
+**found** — it lives in a sibling checkout of a parallel lineage:
+`/Users/cwong/ai/qwen-mtp-server` (old repo name; same origin remote
+`Layr-Labs/qwen-3.8-mtp-challenge`; "Prompt"-named lineage vs this repo's
+"Phase"-named lineage). Its `main` is at `efcf595` exactly, with the full
+lineage intact: `e03339f` (Task 1, branch
+`feature/compact-rejection-math`), `ab3456c` (Task 2 SSD artifact, was
+dangling — exposed as ref `recovered/ssd-artifact`), `40b2c36` (Task 5
+checkpoint), `820c9f4` (Task 4 reusable-path fix), `efcf595` (Task 6 merge +
+marker). Key files verified in the `efcf595` tree: `Sources/HTTPServer/
+Generation/RadixSSDStore.swift`, `DepthTuning.swift`, `Tests/HTTPServerTests/
+RadixSSDPersistenceTests.swift`, `RadixSSDWeightTests.swift`,
+`RadixReusablePathWeightTests.swift`, `DepthTuningTests.swift`,
+`WeightTestLock.swift`. The sibling repo's own `docs/HANDOFF.md` records Task 6
+gate PASS (G1 0.117×, G2 0.609 s median of 7) and a completed checkpoint.
+
+**Recovery into this repo (git-only, no build/test of the other lineage):**
+remote `recovered-qwenmtp` → `/Users/cwong/ai/qwen-mtp-server`; local branch
+`recovered/tasks-1-6` @ `efcf595`; also fetched
+`recovered-qwenmtp/feature/compact-rejection-math` (`e03339f`) and
+`recovered-qwenmtp/recovered/ssd-artifact` (`ab3456c`). All five task hashes
+now resolve in this repo.
+
+**Not done (explicit next step, separate task):** cross-lineage integration.
+The two lineages have **disjoint object sets** (no shared history — none of
+this repo's commits exist in the sibling and vice versa), so a merge would be
+an unrelated-histories merge of two diverged projects (both touch
+`RadixKVCacheManager.swift`, `MLXGenerator.swift`, `progress.md`,
+`HANDOFF.md`, validation, etc.). That is a full integration project with real
+build/memory risk, not a safe in-session operation. Next step: plan a
+lineage merge (decide which is the base, `git merge --allow-unrelated-histories`
+or rebase of `recovered/tasks-1-6` onto `main`), build + full test after.
+
+Untracked sibling artifacts left in place (not copied): `benchmarks/
+repro_cli_flag_crash.sh`, `benchmarks/results/compact-rejection/
+20260916_050447/`.
