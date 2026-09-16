@@ -55,6 +55,14 @@ struct GenerationMetrics: Sendable {
     /// Whether the prompt tokenization was served from the bounded
     /// tokenization cache (Stage 0). Never logs prompt content.
     let tokenizationCacheHit: Bool
+    /// Prefix tokens matched in the Radix tree (0 = no prior cache).
+    let matchedPrefixTokens: Int
+    /// Prefix tokens actually reused (0 on a desync fallback). Always
+    /// `<= matchedPrefixTokens`.
+    let reusedPrefixTokens: Int
+    /// Whether the prefill was skipped entirely (reused prefix == full
+    /// prompt). Implies `reusedPrefixTokens == promptTokens`.
+    let radixPrefillSkipped: Bool
 }
 
 /// Per-request metrics: identifiers, timing, throughput, MTP performance,
@@ -90,6 +98,14 @@ struct RequestMetrics: Sendable {
 
     // Tokenization cache (Stage 0)
     let tokenizationCacheHit: Bool
+
+    // Radix KV prefix reuse (Stage 1)
+    /// Prefix tokens matched in the Radix tree (0 = no prior cache).
+    let matchedPrefixTokens: Int
+    /// Prefix tokens actually reused (0 on a desync fallback).
+    let reusedPrefixTokens: Int
+    /// Whether the prefill was skipped entirely (reused prefix == full prompt).
+    let radixPrefillSkipped: Bool
 
     /// Prompt tokens / prefill time. Nil when prefill time is not measurable.
     var promptTokensPerSecond: Double? {
@@ -141,6 +157,15 @@ struct MetricsSummary: Codable, Sendable {
     var adaptiveRollingAcceptanceRate: Double? = nil
     var adaptiveDraftDepthAdjustments: Int? = nil
 
+    /// Radix KV prefix-reuse counters (Stage 1). Cumulative over the rolling
+    /// window. `prefixReuseHits` = requests that adopted a cached prefix;
+    /// `prefixReuseFallbacks` = requests that matched a prefix count but fell
+    /// back to full prefill (offset desync); `prefixReuseTokensSaved` = total
+    /// prompt tokens not re-prefilled thanks to reuse.
+    var prefixReuseHits: Int = 0
+    var prefixReuseFallbacks: Int = 0
+    var prefixReuseTokensSaved: Int = 0
+
     enum CodingKeys: String, CodingKey {
         case totalRequests = "total_requests"
         case totalPromptTokens = "total_prompt_tokens"
@@ -160,6 +185,9 @@ struct MetricsSummary: Codable, Sendable {
         case adaptiveDraftDepth = "adaptive_draft_depth"
         case adaptiveRollingAcceptanceRate = "adaptive_rolling_acceptance_rate"
         case adaptiveDraftDepthAdjustments = "adaptive_draft_depth_adjustments"
+        case prefixReuseHits = "prefix_reuse_hits"
+        case prefixReuseFallbacks = "prefix_reuse_fallbacks"
+        case prefixReuseTokensSaved = "prefix_reuse_tokens_saved"
     }
 }
 
@@ -202,7 +230,10 @@ actor MetricsCollector {
                 ? nil
                 : rates.reduce(0, +) / Double(rates.count),
             cancelledRequests: samples.filter { $0.cancellationCause != nil }.count,
-            windowSize: samples.count
+            windowSize: samples.count,
+            prefixReuseHits: samples.filter { $0.reusedPrefixTokens > 0 }.count,
+            prefixReuseFallbacks: samples.filter { $0.matchedPrefixTokens > 0 && $0.reusedPrefixTokens == 0 }.count,
+            prefixReuseTokensSaved: samples.reduce(0) { $0 + $1.reusedPrefixTokens }
         )
     }
 

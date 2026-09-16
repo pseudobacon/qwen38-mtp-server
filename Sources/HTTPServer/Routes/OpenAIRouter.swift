@@ -338,7 +338,10 @@ func registerOpenAIRoutes(
                                 finishReason: generatorMetrics?.finishReason ?? finalReason,
                                 cancellationCause: generatorMetrics?.cancellationCause,
                                 memoryAdmission: .admitted,
-                                tokenizationCacheHit: generatorMetrics?.tokenizationCacheHit ?? false
+                                tokenizationCacheHit: generatorMetrics?.tokenizationCacheHit ?? false,
+                                matchedPrefixTokens: generatorMetrics?.matchedPrefixTokens ?? 0,
+                                reusedPrefixTokens: generatorMetrics?.reusedPrefixTokens ?? 0,
+                                radixPrefillSkipped: generatorMetrics?.radixPrefillSkipped ?? false
                             )
                             Task { await metricsCollector.record(metrics) }
                         }
@@ -594,7 +597,10 @@ func registerOpenAIRoutes(
                 finishReason: generatorMetrics?.finishReason ?? finishReason,
                 cancellationCause: generatorMetrics?.cancellationCause,
                 memoryAdmission: .admitted,
-                tokenizationCacheHit: generatorMetrics?.tokenizationCacheHit ?? false
+                tokenizationCacheHit: generatorMetrics?.tokenizationCacheHit ?? false,
+                matchedPrefixTokens: generatorMetrics?.matchedPrefixTokens ?? 0,
+                reusedPrefixTokens: generatorMetrics?.reusedPrefixTokens ?? 0,
+                radixPrefillSkipped: generatorMetrics?.radixPrefillSkipped ?? false
             )
             Task { await metricsCollector.record(metrics) }
         }

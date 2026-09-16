@@ -957,6 +957,9 @@ actor MLXGenerator {
                 var proposedDraftTokens = 0
                 var acceptedDraftTokens = 0
                 var finishReason = "length"
+                var matchedPrefixTokens = 0
+                var reusedPrefixTokens = 0
+                var radixPrefillSkipped = false
 
                 func fragmentKindName(_ fragment: GenerationFragment) -> String {
                     switch fragment {
@@ -991,12 +994,27 @@ actor MLXGenerator {
                         promptTokens: promptTokens,
                         completionTokens: emitted,
                         cancellationCause: cancellationCause,
-                        tokenizationCacheHit: wasCacheHit
+                        tokenizationCacheHit: wasCacheHit,
+                        matchedPrefixTokens: matchedPrefixTokens,
+                        reusedPrefixTokens: reusedPrefixTokens,
+                        radixPrefillSkipped: radixPrefillSkipped
                     )))
                 }
 
                 var generationFailed = false
-                var exportedSessionState: (tokens: [Int], cache: [any KVCache], hidden: MLXArray, primary: Int, top2: ([Int], [Double]))?
+                // The KV state frozen at the full-prompt boundary (right after
+                // `begin`, before the decode loop advances the cache). The
+                // session's own cache is mutated in place by the decode loop,
+                // so `promptBoundaryCacheCopy` is a deep copy that stays at
+                // the prompt boundary. This is what gets stored in the Radix
+                // tree: a same-prompt repeat must fully match this node
+                // (stored length == prompt length). Storing the post-decode
+                // state (prompt + generated tokens) instead would make the
+                // prompt a strict prefix of the stored node, and the GDN
+                // recurrent state is not trimmable, so the match would always
+                // fall back to a full prefill.
+                var promptBoundaryState: (tokens: [Int], cache: [any KVCache], hidden: MLXArray, primary: Int, top2: ([Int], [Double]))?
+                var promptBoundaryCacheCopy: [any KVCache]?
 
                 do {
                     _ = await registry.register(id)
@@ -1087,6 +1105,24 @@ actor MLXGenerator {
                         reusablePrimary: cachedEntry?.primary,
                         reusableTop2: cachedEntry?.top2
                     )
+
+                    // Freeze the prompt-boundary state for Radix storage. At
+                    // this point the cache is at exactly `effectiveSeedTokens.count`
+                    // tokens (full prefill, or reusable prefix + suffix
+                    // prefill). The decode loop below mutates `currentSession`'s
+                    // cache in place, so copy it now to preserve the boundary.
+                    promptBoundaryState = currentSession.exportState()
+                    promptBoundaryCacheCopy = promptBoundaryState?.cache.map { $0.copy() }
+
+                    // Radix prefix-reuse metrics (Stage 1). `matchedPrefixTokens`
+                    // is what `matchPrefix` found in the tree; `reusedPrefixTokens`
+                    // is what `begin` actually adopts under its own desync guard
+                    // (offset == prefixCount), else 0 on a full-prefill fallback.
+                    matchedPrefixTokens = prefixCount
+                    let willAdopt = prefixCount > 0
+                        && cachedEntry.map { Qwen38MTPBlockSession.trimmableOffset($0.cache) } == prefixCount
+                    reusedPrefixTokens = willAdopt ? prefixCount : 0
+                    radixPrefillSkipped = reusedPrefixTokens == effectiveSeedTokens.count
 
                     let prefillElapsed = prefillStart.duration(to: .now)
                     prefillSeconds = Double(prefillElapsed.components.seconds) + Double(prefillElapsed.components.attoseconds) / 1e18
@@ -1266,9 +1302,6 @@ actor MLXGenerator {
                     }
 
                     await yieldMetrics()
-
-                    // Export session state for KV reuse
-                    exportedSessionState = currentSession.exportState()
                     continuation.finish()
 
                 } catch is GenerationCancelledError {
@@ -1285,15 +1318,16 @@ actor MLXGenerator {
 
                 await registry.deregister(id)
 
-                // Store completed session state into Radix Tree KV Cache Manager
-                if !generationFailed, let state = exportedSessionState {
+                // Store the prompt-boundary state (frozen copy) into the Radix
+                // tree so a same-prompt repeat fully matches this node.
+                if !generationFailed, let s = promptBoundaryState, let c = promptBoundaryCacheCopy {
                     await self.kvCacheManager.store(
                         RadixKVCacheManager.CacheEntry(
-                            tokens: state.tokens,
-                            cache: state.cache,
-                            hidden: state.hidden,
-                            primary: state.primary,
-                            top2: state.top2,
+                            tokens: s.tokens,
+                            cache: c,
+                            hidden: s.hidden,
+                            primary: s.primary,
+                            top2: s.top2,
                             config: samplingParams.kvCacheConfig,
                             namespace: self.cacheNamespace
                         )

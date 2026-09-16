@@ -17,7 +17,10 @@ final class ObservabilityTests: XCTestCase {
         completionTokens: Int = 50,
         proposedDraftTokens: Int = 8,
         acceptedDraftTokens: Int = 6,
-        cancellationCause: String? = nil
+        cancellationCause: String? = nil,
+        matchedPrefixTokens: Int = 0,
+        reusedPrefixTokens: Int = 0,
+        radixPrefillSkipped: Bool = false
     ) -> RequestMetrics {
         RequestMetrics(
             requestID: "gen-1",
@@ -38,7 +41,10 @@ final class ObservabilityTests: XCTestCase {
             finishReason: "stop",
             cancellationCause: cancellationCause,
             memoryAdmission: .admitted,
-            tokenizationCacheHit: false
+            tokenizationCacheHit: false,
+            matchedPrefixTokens: matchedPrefixTokens,
+            reusedPrefixTokens: reusedPrefixTokens,
+            radixPrefillSkipped: radixPrefillSkipped
         )
     }
 
@@ -274,11 +280,31 @@ func testMetricsSummaryEncodesSnakeCaseKeys() async throws {
                 "tokenization_cache_misses",
                 "tokenization_cache_evictions",
                 "tokenization_cache_entries",
-                "tokenization_cache_bytes"
+                "tokenization_cache_bytes",
+                "prefix_reuse_hits",
+                "prefix_reuse_fallbacks",
+                "prefix_reuse_tokens_saved"
             ]
         )
         XCTAssertEqual(object?["total_requests"] as? Int, 1)
         XCTAssertEqual(object?["window_size"] as? Int, 1)
+    }
+
+    func testMetricsSummaryAggregatesPrefixReuse() async {
+        let collector = MetricsCollector()
+        // Hit: adopted 128 prefix tokens.
+        await collector.record(makeMetrics(
+            matchedPrefixTokens: 128, reusedPrefixTokens: 128, radixPrefillSkipped: true
+        ))
+        // Fallback: matched 64, reused 0.
+        await collector.record(makeMetrics(matchedPrefixTokens: 64, reusedPrefixTokens: 0))
+        // Miss: no prior cache.
+        await collector.record(makeMetrics())
+
+        let summary = await collector.summary()
+        XCTAssertEqual(summary.prefixReuseHits, 1)
+        XCTAssertEqual(summary.prefixReuseFallbacks, 1)
+        XCTAssertEqual(summary.prefixReuseTokensSaved, 128)
     }
 
     func testMetricsSummaryNilFieldsEncodeAsNull() async throws {
