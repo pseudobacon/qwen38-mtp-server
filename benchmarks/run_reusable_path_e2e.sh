@@ -17,7 +17,7 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$REPO/.build/arm64-apple-macosx/debug/HTTPServer"
+BIN="$REPO/.build/arm64-apple-macosx/debug/qwen38-mtp-server"
 PORT=8170
 HOST=127.0.0.1
 PROMPT="$REPO/benchmarks/reusable-path-prompt.json"
@@ -30,7 +30,7 @@ mkdir -p "$OUT_DIR"
 
 # --- Build ----------------------------------------------------------------
 echo "Building HTTPServer..."
-( cd "$REPO" && swift build --product HTTPServer ) || { echo "BUILD FAILED"; exit 1; }
+( cd "$REPO" && swift build --target HTTPServer ) || { echo "BUILD FAILED"; exit 1; }
 
 # --- Start server ---------------------------------------------------------
 QWEN_STREAM_DIAG=1 "$BIN" --host "$HOST" --port "$PORT" > "$OUT_DIR/server.log" 2>&1 &

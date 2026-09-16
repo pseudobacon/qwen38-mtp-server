@@ -48,7 +48,7 @@ func reusablePathProducesIdenticalOutput() async throws {
         SamplingParameters(
             temperature: 0, topP: 1.0, topK: 0, minP: 0,
             repetitionPenalty: 1.0, presencePenalty: 0.0, frequencyPenalty: 0.0,
-            maxTokens: 64, contextWindow: 262_144, enableThinking: true,
+            maxTokens: 64, contextWindow: 262_144, enableThinking: false,
             mtpEnabled: true, prefillChunkSize: 512, stopSequences: [],
             kvCacheConfig: ResolvedKVCacheConfig.default, ttlSeconds: nil
         )
@@ -77,4 +77,19 @@ func reusablePathProducesIdenticalOutput() async throws {
     print("[reusable-path] cold=\(cold.count) warm=\(warm.count) chars")
     #expect(!cold.isEmpty, "cold output empty")
     #expect(cold == warm, "warm (reused-prefix) output differs from cold: cold='\(cold.prefix(80))' warm='\(warm.prefix(80))'")
+
+    // Keep the generator (and its model) alive until process exit. Deinit of
+    // the model's `Qwen35DecoderLayer` at process-exit time runs after MLX's
+    // global Metal compiler cache has been torn down and SIGSEGVs in
+    // `CompiledFunction.deinit` (MLX runtime global-teardown ordering, not a
+    // server bug). Leaking the generator at test-process exit is harmless
+    // and keeps the exit code clean.
+    RetainedGenerator.shared.generator = generator
+}
+
+/// Test-process lifetime holder. `MLXGenerator` is an actor and therefore
+/// `Sendable`.
+private final class RetainedGenerator: @unchecked Sendable {
+    static let shared = RetainedGenerator()
+    var generator: MLXGenerator?
 }

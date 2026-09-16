@@ -884,6 +884,14 @@ actor MLXGenerator {
         return await kvCacheManager.remove(tokens: tokens, namespace: cacheNamespace)
     }
 
+    /// Drop every in-RAM Radix KV entry for this generator's namespace.
+    /// Used by tests (to release the deep-copied prompt-boundary caches
+    /// before process exit) and by the SSD shutdown-flush path.
+    func clearKVCache() async {
+        await kvCacheManager.clear()
+    }
+
+
     func tokenizationCacheStats() -> TokenizationCache.Stats {
         tokenizationCache.stats()
     }
