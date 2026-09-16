@@ -158,7 +158,16 @@ struct ServerConfig: Sendable {
     /// Vapor-native flags (e.g. `--env`). All server-specific flags and
     /// their values are stripped, because Vapor rejects unknown commands.
     static func vaporArguments() -> [String] {
-        let args = CommandLine.arguments
+        vaporArguments(from: CommandLine.arguments)
+    }
+
+    /// The subset of `arguments` that Vapor's `Environment.detect` accepts:
+    /// the first entry (the executable path) plus any entry that is not a
+    /// server-specific flag or a value consumed by one. All server-specific
+    /// flags and their values are stripped, because Vapor rejects unknown
+    /// commands.
+    static func vaporArguments(from arguments: [String]) -> [String] {
+        let args = arguments
         var kept: [String] = []
         var skipNext = false
 
@@ -188,9 +197,41 @@ struct ServerConfig: Sendable {
         return kept
     }
 
+    /// Returns a human-readable error if `arguments` contains a flag the
+    /// server does not recognize, `nil` otherwise. Unknown flags are rejected
+    /// loudly at startup (before Vapor dispatch) because `vaporArguments` can
+    /// only strip flags it knows about — an unknown `--flag` (and its value)
+    /// would otherwise leak through to Vapor's command dispatcher and crash
+    /// `app.execute()` with an opaque "unknown command" failure.
+    static func unknownFlagError(in arguments: [String]) -> String? {
+        var skipNext = false
+        for (index, arg) in arguments.enumerated() {
+            guard index > 0 else { continue }
+            if skipNext {
+                skipNext = false
+                continue
+            }
+            guard arg.hasPrefix("-") else { continue }
+            if valueTakingFlags.contains(arg) {
+                skipNext = true
+                continue
+            }
+            guard valuelessFlags.contains(arg) else {
+                return "Unknown option \"\(arg)\". Run with --help for supported options."
+            }
+        }
+        return nil
+    }
+
     static func fromCommandLine() -> ServerConfig {
         var config = ServerConfig()
         let args = CommandLine.arguments
+
+        if let unknownFlagError = Self.unknownFlagError(in: args) {
+            FileHandle.standardError.write(Data((unknownFlagError + "\n").utf8))
+            exit(2)
+        }
+
         var kvSchemeExplicitlySet = false
 
         for (index, arg) in args.enumerated() {

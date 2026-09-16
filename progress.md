@@ -1602,3 +1602,42 @@ Server:
   docs/PREFILL-PROFILE-INDEX.md created; docs/HANDOFF.md updated.
 - Runners: benchmarks/run_lcp_p1.sh / run_lcp_p2.sh / run_lcp_p3.sh (hash-gated).
 - Next: commit engine (feature/prompt-1) → commit server → merge both to main.
+
+## 2026-09-16: Task 7 — `--kv-ssd-*` CLI "crash" diagnosis (code-only, zero server launches) — COMPLETE
+
+### Diagnosis
+
+- **`--kv-ssd-cache-dir`, `--kv-ssd-cache-gb`, `--kv-ssd-ttl-seconds` do not exist in
+  this codebase** — zero occurrences in server sources, engine repo, docs, or git
+  history. They were never implemented flags.
+- The "crash" mechanism was real but not a strip-list gap: `fromCommandLine()`
+  silently ignored unknown flags (`default: break`), while `vaporArguments()` only
+  strips *known* flags and keeps everything else — so an unknown `--kv-ssd-cache-dir
+  /tmp/...` (flag **and** value) leaked into `Environment.detect(arguments:)` and
+  Vapor's dispatcher rejected it, crashing `app.execute()`. The reported
+  "intermittent" crashes were this leak (deterministic for the flag) plus the
+  separately-discovered port-8000/OOM races from a stray background repro loop.
+- **Full audit:** every implemented `ServerConfig` flag (`--host` … `--tools-disabled`,
+  `--help`; incl. `--prefill-chunk-size`, `--spec-draft-*`, `--kv-scheme`, KV
+  quant flags) is covered by `valueTakingFlags` ∪ `valuelessFlags`. No implemented
+  flag ever leaked to Vapor. The only leak path was unknown flags.
+
+### Fix (server repo only; engine untouched)
+
+- `ServerConfig.unknownFlagError(in:)` — pure function; rejects any `--flag` not in
+  the known set (skips values of value-taking flags; ignores positionals).
+- `fromCommandLine()` now fails loudly at startup (stderr + `exit(2)`) on any
+  unknown flag, before Vapor dispatch — actionable message instead of an opaque
+  Vapor crash. Satisfies "never silently accept."
+- `vaporArguments()` refactored to `vaporArguments(from:)` (pure) + thin
+  `CommandLine.arguments` wrapper for testability.
+- New `Tests/HTTPServerTests/ServerConfigArgumentTests.swift` (9 tests, pure Swift):
+  asserts `vaporArguments(from:)` strips ALL known flags and keeps Vapor-native
+  args/positionals; asserts `unknownFlagError(in:)` accepts the full known set and
+  rejects each `--kv-ssd-*` flag, typo flags, and consecutive unknown flags.
+
+### Verification
+
+- `swift build --target HTTPServer` — 0 errors, 0 warnings.
+- `swift test --filter HTTPServerTests` — 224 tests green (suite grew 215 → 224).
+- No server launches; no engine changes.
