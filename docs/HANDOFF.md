@@ -24,6 +24,8 @@
   all edits; engine suites green.
 - **Governance:** `docs/PREFILL-PROFILE-INDEX.md` (central table + flag reference), this
   file, `progress.md`. Runners: `benchmarks/run_lcp_p{1,2,3}.sh` (hash-gated).
+- **Checkpoint:** fresh checkpoint completed 2026-09-16 03:33:04 +01:00 in both repos
+  (engine `d189c61`, server `ac9e019`, both merged to `main`, trees clean).
 
 **Prior: COMPLETE: pc=0 single-pass prefill trap fix (engine-only).**
 
