@@ -1,7 +1,31 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: pc=0 single-pass prefill trap fix (engine-only).**
+**COMPLETE: Long-Context Prefill Optimization & Exactness Guardrails (LCP) — P1/P2/P3.**
+
+- **P1** baseline profile at 8K/16K/32K/64K (pc=512, eval-sync per-phase, RSS, bit-exact
+  hash gate — all 4 pass): FFN 56.3→36.5 %, full-attention 12.8→42.1 % (SDPA 5.7→35.6 %,
+  O(L²)), GDN 27.3→19.1 %, norms+residuals ~3 %. Report:
+  `benchmarks/results/prefill-opt-20260915/P1_PROFILE_LCP_m5pro_20260915.md`.
+- **P2** two toggle-gated default-OFF kernel extensions (engine `feature/prompt-1`):
+  `MLX_QWEN_FUSED_RESIDUAL_3D` (fused residual+RMSNorm on 3-D prefill tensors) and
+  `MLX_QWEN_FUSED_GDN_PREFILL` (fused GDN prework at prefill widths). Bit-exact: unit
+  tests (S=1,2,512,1000 and 16,512) + real-model content-hash gate at 8K/16K/32K/64K,
+  all pass. Wall-time uplift not resolvable: session thermal/state variance is up to
+  ~1.6× (a flag-off 32K re-run was 19 % faster than the P1 baseline and 33 % faster than
+  the slowest flag-on cell). Recommendation: keep default-OFF. Report:
+  `P2_KERNEL_LCP_residual3d_gdn-prefill_20260915.md`.
+- **P3** gate validation: `ENABLE_BIT_EXACT_ATTENTION=1` (dense reference) bit-exact at
+  8K/16K and 507-rejects at 32K/64K (dense infeasible); `=0` chunked bit-exact at
+  32K/64K; `ENABLE_BIT_EXACT=1` (dense + all fusions off) bit-exact at 8K/16K against
+  the optimized default. Report: `P3_ATTN_LCP_bit_exact_gate_20260915.md`.
+- **Server:** admission now uses the shared `MLXChunkedPrefill.enabled` resolver
+  (respects the gates). Full server suite green (111 XCTest + 224 Swift Testing) after
+  all edits; engine suites green.
+- **Governance:** `docs/PREFILL-PROFILE-INDEX.md` (central table + flag reference), this
+  file, `progress.md`. Runners: `benchmarks/run_lcp_p{1,2,3}.sh` (hash-gated).
+
+**Prior: COMPLETE: pc=0 single-pass prefill trap fix (engine-only).**
 
 `--prefill-chunk-size 0` (single-pass prefill) fatal-`[reshape]`'d on an empty
 chunk (both prefill loops computed `start=0, end=min(0+0,count)=0`). Extracted

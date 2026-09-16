@@ -1504,3 +1504,101 @@ on an empty array. The 32K single-pass request trapped the process.
 - pc=0 is **slower** than pc=512 (205 s vs 117 s at 32K) — single-pass is not a
   perf win. This is a correctness/robustness fix (a documented option no longer
   traps), not an optimization.
+
+## 2026-09-15: Long-context prefill optimization & exactness guardrails (LCP) — IN PROGRESS
+
+Task: measurement-driven prefill optimization with a strict user-gated bit-exact
+fallback (`ENABLE_BIT_EXACT=1`). Spec is CUDA/PyTorch-flavored; adapted to this
+MLX/Swift stack: eval-synchronized GPU timing (the established `MLX_TRACE_PREFILL`
+method), content-SHA-256 token-stream hashes for bit-exactness, greedy
+(temperature 0) + pinned fixtures (`req8k/16k/32k/64k.json` in
+`benchmarks/results/prefill-verify-2026-09-15/`) as the determinism protocol
+(SEED=42 analog; no RNG in the prefill path). EXP_ID `LCP`, device `m5pro`.
+
+Plan (phases sequential, engine committed before server per git policy):
+- **P1** `P1_PROFILE_LCP_m5pro_20260915.md`: re-add the eval-synced
+  `MLX_TRACE_PREFILL` instrumentation (env-gated, default off, zero-overhead
+  when off; previously removed after the 32K/64K runs), run 8K/16K/32K/64K
+  with `MLX_CHUNKED_PREFILL=1` pc=512 (baseline config), capture wall +
+  per-phase (FFN / GDN / full-attn block + SDPA / QKV / O / RoPE / norms) +
+  peak RSS + content hash. Table `Phase | 8K | 16K | 32K | 64K | % of Total
+  (64K)` + bottleneck analysis.
+- **P2** `P2_KERNEL_LCP_*_20260915.md`: two toggle-gated, non-destructive
+  kernel extensions (both bit-exact, unoptimized path retained):
+  (a) `residual_norm_3d` (`MLX_QWEN_FUSED_RESIDUAL_3D`, default OFF): extend
+  the fused residual+RMSNorm Metal kernel (already bit-exact for 2-D decode)
+  to 3-D prefill shapes [B, S, 5120] — the kernel is row-parallel and
+  shape-agnostic; the `ndim == 2` guard is the only blocker.
+  (b) `gdn_prefill_prework` (`MLX_QWEN_FUSED_GDN_PREFILL`, default OFF):
+  extend the fused GDN prework kernel (bit-exact verified at verify widths
+  S 3..9) to prefill widths (S up to 4096) — one Metal launch replaces
+  conv1d + SiLU + split + Q/K RMSNorm + scale + g/beta.
+  Validation: bitwise unit tests + 8K/16K/32K content-hash exactness vs
+  baseline + 32K/64K re-profile.
+- **P3** `P3_ATTN_LCP_bit_exact_gate_20260915.md`: user-gated attention
+  path. `ENABLE_BIT_EXACT_ATTENTION` (default 1): 1 = reference dense
+  attention, 0 = chunked/fused attention path (implies the
+  `MLX_CHUNKED_PREFILL` routing); unset = legacy behavior unchanged.
+  Global `ENABLE_BIT_EXACT=1`: strict unoptimized fallback — forces dense
+  attention and disables every fusion (SwiGLU/QKV/4-GDN/residual-3D/GDN
+  prework). Single resolver in the engine (MLXLMCommon); server admission
+  uses the same resolver. Validation: =1 matches P1 outputs identically at
+  8K/16K (and 32K pc=512); 32K pc=0: =1 rejected (507, dense buffer),
+  =0 completes (known pc=0 knife-edge hash, documented drift); quantify
+  uplift (32K/64K enabling vs dense rejection).
+- **Governance**: `docs/PREFILL-PROFILE-INDEX.md` (central table + links),
+  `docs/HANDOFF.md` (peak speedups, recommended default flags, active
+  bottlenecks), this log.
+
+Known framing facts (verified in code):
+- Session prefill chunk size default is 512 (`--prefill-chunk-size`,
+  `QWEN_PREFILL_CHUNK_SIZE`); the engine query-tile SDPA gate engages only
+  for single attention calls with L > 4096, i.e. pc=0/large-pc single-pass
+  prefills. At pc=512 the per-chunk scores buffer is linear (0.81 GB at 32K)
+  regardless of the flag; the quadratic [L,L] buffer exists only for
+  single-pass. Admission models the dense path as quadratic (conservative
+  worst case) — unchanged by this task (contract surface).
+- FFN (43-49 %) and GDN (21-25 %) GEMM structure is already minimal at the
+  Swift level (fused wide gate+up / 4-proj GEMMs, compiled activations); the
+  remaining body is the prebuilt MLX 4-bit GEMM (out of scope, discouraged).
+  SDPA (18.5 % at 32K → 29.3 % at 64K, O(L²), dense unfused path) is the
+  growing center; a flash-style kernel is not bit-exact (Phase 1 Bug A) and
+  stays out of the default path.
+
+## LCP implementation status (2026-09-16, feature/prompt-1)
+
+Engine (mlx-swift-lm), all changes on `feature/prompt-1`, flags default-off:
+- `MLXBitExact` + `qwen35FusedResidual3DEnabled` +
+  `qwen35FusedGDNPreworkPrefillEnabled` (new `BitExactConfig.swift`);
+  `MLXChunkedPrefill.enabled` now resolves
+  ENABLE_BIT_EXACT > ENABLE_BIT_EXACT_ATTENTION > MLX_CHUNKED_PREFILL.
+- Fusion switches (SwiGLU/QKV/4-GDN) respect `ENABLE_BIT_EXACT=1`.
+- `Qwen35PrefillTrace` (new, MLX_TRACE_PREFILL=1, default off): eval-synced
+  per-section prefill timing; PF2 line emitted by the session after each
+  prefill.
+- `applyResidualNorm` 3-D prefill branch (MLX_QWEN_FUSED_RESIDUAL_3D, off).
+- `fusedGDNPrework` width gate extended to prefill widths S>9 up to 4096
+  (MLX_QWEN_FUSED_GDN_PREFILL, off).
+- Unit tests `Qwen35PrefillFusionTests` (residual-3D S=1,2,512,1000; GDN
+  prework S=16,512) — both PASS bit-exact.
+Server:
+- `MLXGenerator` admission uses `MLXChunkedPrefill.enabled` (shared resolver).
+- Full suite PASS (111 XCTest + 224 Swift Testing) after all edits.
+- Release binary rebuilt; `benchmarks/run_lcp_p1.sh` (4-cell P1 matrix,
+  pc=512, trace on, hash-gated) running.
+
+## LCP complete (2026-09-16)
+
+- P1 matrix (8K/16K/32K/64K pc=512, trace on): all hashes PASS. FFN 56.3→36.5 %,
+  full-attn 12.8→42.1 % (SDPA 5.7→35.6 %), GDN 27.3→19.1 %, norms+resid ~3 %.
+- P2 matrix (8 cells, both toggles, per-flag at 32K/64K): all hashes PASS
+  (bit-exact end-to-end). Wall-time uplift not resolvable (±1.6× session state
+  variance; flag-off 32K re-run 211 s vs P1 baseline 311 s). Toggles stay
+  default-OFF.
+- P3 matrix (8 cells): dense reference bit-exact at 8K/16K, 507 at 32K/64K;
+  chunked under gate bit-exact at 32K/64K; ENABLE_BIT_EXACT=1 bit-exact at
+  8K/16K vs optimized default.
+- Reports: benchmarks/results/prefill-opt-20260915/P{1,2,3}_*.md;
+  docs/PREFILL-PROFILE-INDEX.md created; docs/HANDOFF.md updated.
+- Runners: benchmarks/run_lcp_p1.sh / run_lcp_p2.sh / run_lcp_p3.sh (hash-gated).
+- Next: commit engine (feature/prompt-1) → commit server → merge both to main.

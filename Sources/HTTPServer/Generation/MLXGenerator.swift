@@ -510,7 +510,10 @@ actor MLXGenerator {
             keyBits: kvScheme.keyBits,
             valueBits: kvScheme.valueBits,
             tailSize: kvTailSize,
-            chunkedPrefillEnabled: ProcessInfo.processInfo.environment["MLX_CHUNKED_PREFILL"] == "1"
+            // Shared resolver so the admission policy and the engine agree on
+            // the attention path, including the user-gated bit-exactness
+            // switches (ENABLE_BIT_EXACT / ENABLE_BIT_EXACT_ATTENTION).
+            chunkedPrefillEnabled: MLXChunkedPrefill.enabled
         )
         self.memoryRecoveryPolicy = MemoryRecoveryPolicy(
             enabled: memoryRecoveryEnabled,
