@@ -358,6 +358,14 @@ actor MLXGenerator {
     /// multi-session and branched prefix reuse.
     private let kvCacheManager: RadixKVCacheManager
 
+    /// Cold-disk tier beneath the in-RAM radix cache. `nil` when SSD
+    /// persistence is disabled (see docs/radix-ssd-persistence-rfc.md).
+    private var ssdStore: RadixSSDStore?
+    private var ssdConfig: KVSSDConfig = KVSSDConfig(
+        enabled: false, directory: URL(fileURLWithPath: "/"),
+        budgetGB: 0, ttlSeconds: 0)
+    private var weightIdentityCache: (digest: String, hardware: String)?
+
     private var tokenizationCache: TokenizationCache
     private let cacheNamespace: String
     private let logger: Logger
@@ -378,8 +386,17 @@ actor MLXGenerator {
         tokenizationCacheMaxEntries: Int = 1024,
         tokenizationCacheMaxBytes: Int = 256 * 1024 * 1024,
         tokenizationCacheTTLSeconds: Int = 300,
+        kvSSDEnabled: Bool = false,
+        kvSSDCacheDir: String = "~/.qwen38-mtp/kv-ssd",
+        kvSSDCacheGB: Int = 8,
+        kvSSDTTLSeconds: Int = 86400,
         logger: Logger = Logger(label: "HTTPServer.MLXGenerator")
     ) async throws {
+        // Opt-in deterministic RNG seed for benchmarking (default off: with
+        // the env var unset the global PRNG stream is untouched).
+        if let seed = ProcessInfo.processInfo.environment["QWEN_MLX_SEED"].flatMap(UInt64.init) {
+            MLXRandom.seed(seed)
+        }
         self.modelPath = modelPath
         self.mtpHeadPath = mtpHeadPath
         self.maxDraftDepth = maxDraftDepth
@@ -524,6 +541,30 @@ actor MLXGenerator {
         self.tokenizer = loadedTokenizer
         self.stopTokens = resolveStopTokens(directory: targetURL, tokenizer: loadedTokenizer, logger: logger)
 
+        // Set up the cold-disk tier (Radix SSD persistence). When enabled, wire
+        // the LRU-eviction callback to persist evicted nodes, and restore the
+        // prefix-set skeleton from disk (no tensors loaded). See
+        // docs/radix-ssd-persistence-rfc.md.
+        if kvSSDEnabled {
+            let expandedDir = (kvSSDCacheDir as NSString).expandingTildeInPath
+            let ssdCfg = KVSSDConfig(
+                enabled: true,
+                directory: URL(fileURLWithPath: expandedDir),
+                budgetGB: kvSSDCacheGB,
+                ttlSeconds: kvSSDTTLSeconds)
+            let weightID = self.weightIdentity()
+            let keyDims = KVSSDKeyDimensions(
+                weightDigest: weightID.digest,
+                templateHash: self.templateFingerprint())
+            let store = RadixSSDStore(config: ssdCfg, keyDims: keyDims)
+            self.ssdConfig = ssdCfg
+            self.ssdStore = store
+            await self.kvCacheManager.setOnEvict { [store] node in
+                store.persistEvicted(node)
+            }
+            await self.restoreFromSSD()
+        }
+
         _ = await runtimeState?.transition(to: .warming)
 
         let warmup = try Qwen38MTPBlockSession(model: model, stopTokens: stopTokens)
@@ -537,6 +578,154 @@ actor MLXGenerator {
 
     func recordMemoryRecovery() {
         memoryRecoveryCount += 1
+    }
+
+    // MARK: - Radix SSD persistence (docs/radix-ssd-persistence-rfc.md)
+
+    /// Computes the weight-tree digest and hardware id. Static so it can be
+    /// called from `init` before `self` is fully initialized.
+    static func computeWeightIdentity(modelPath: String) -> (digest: String, hardware: String) {
+        let url = URL(fileURLWithPath: modelPath).resolvingSymlinksInPath()
+        let digest = WeightTreeDigests.compute(rootURL: url)?.sha256 ?? ""
+        return (digest, WeightTreeDigests.hardwareID())
+    }
+
+    private func weightIdentity() -> (digest: String, hardware: String) {
+        if let cached = weightIdentityCache { return cached }
+        let id = Self.computeWeightIdentity(modelPath: modelPath)
+        weightIdentityCache = id
+        return id
+    }
+
+    /// A stable fingerprint of the chat template: the token IDs produced by
+    /// applying the template to a fixed probe message. Combined with the weight
+    /// digest and KV geometry this forms the prefix-set key (template changes
+    /// invalidate all stored entries).
+    private func templateFingerprint() -> String {
+        let probe: [[String: any Sendable]] = [
+            ["role": "user" as String, "content": "__qwen_ssd_template_probe__" as String]
+        ]
+        guard let ids = try? tokenizer.applyChatTemplate(
+            messages: probe, tools: nil, additionalContext: nil) else {
+            return ""
+        }
+        let payload = ids.map(String.init).joined(separator: ",")
+        return Data(payload.utf8).sha256Hex
+    }
+
+    /// Restore the in-RAM radix tree as a skeleton (no tensors) from the disk
+    /// tier. Failures are logged and non-fatal (start with an empty tree).
+    private func restoreFromSSD() async {
+        guard let store = self.ssdStore else { return }
+        guard let index = store.loadIndex() else { return }
+        let nodes = index.nodes
+        guard !nodes.isEmpty else { return }
+        await self.kvCacheManager.restoreSkeleton(nodes: nodes)
+        logger.info(
+            "Restored \(nodes.count) radix prefix(es) from SSD tier at \(store.config.directory)")
+    }
+
+    /// The graceful-shutdown write point: snapshot every in-RAM stateful node
+    /// and persist it to the disk tier. Call on the model lane after a drain
+    /// (see `Qwen38Server`).
+    func flushToSSD() async {
+        guard let store = self.ssdStore else { return }
+        let nodes = await self.kvCacheManager.snapshot()
+        guard !nodes.isEmpty else { return }
+        if store.persistTree(nodes) {
+            logger.info("Flushed \(nodes.count) radix prefix(es) to SSD tier at shutdown")
+        } else {
+            logger.warning("SSD tier shutdown flush reported a failure")
+        }
+    }
+
+    /// Lazy-load a disk node's tensors into a fresh `CacheEntry` on the model
+    /// lane: read the arrays, rebuild caches of the same shape/type via
+    /// `model.newCache` + `maybeQuantizeKVCache`, and set state. Returns `nil`
+    /// on any failure (the caller treats it as a miss).
+    private func loadDiskEntry(
+        _ diskHit: KVSSDIndexNode,
+        prefixCount: Int
+    ) -> RadixKVCacheManager.CacheEntry? {
+        let loadStart = ContinuousClock.now
+        guard let store = self.ssdStore else { return nil }
+        guard let arrays = store.loadNodeArrays(diskHit.fileBase) else { return nil }
+        let model = self.model
+        let config = diskHit.config?.resolved ?? .default
+        // Rebuild caches of the correct shape/type, then quantize to match the
+        // stored format (the session's `begin` does the same newCache +
+        // maybeQuantizeKVCache pair).
+        guard var freshCache = try? model.newCache(parameters: nil),
+              freshCache.count == (diskHit.cacheCounts?.count ?? -1) else {
+            return nil  // shape mismatch (model changed) -> miss
+        }
+        maybeQuantizeKVCache(
+            cache: &freshCache,
+            kvBits: config.kvBits,
+            kvGroupSize: config.groupSize,
+            quantizedKVStart: config.quantizedKVStart)
+        guard let entry = store.decodeEntry(node: diskHit, arrays: arrays, freshCache: freshCache) else {
+            return nil
+        }
+        let loadEnd = ContinuousClock.now
+        let loadSpan = loadStart.duration(to: loadEnd)
+        let loadSeconds = Double(loadSpan.components.seconds)
+            + Double(loadSpan.components.attoseconds) / 1e18
+        let loadMs = String(format: "%.3f", loadSeconds * 1000.0)
+        logger.info("Lazy-loaded radix prefix (\(prefixCount) tokens) from SSD tier in \(loadMs) ms")
+        return entry
+    }
+
+    /// TEST-ONLY: exercise the full SSD persist/restore round-trip on a real
+    /// in-RAM `CacheEntry`. Runs a (greedy) generation to populate the manager,
+    /// snapshots + persists it, restores it, and verifies the reconstructed
+    /// state is bit-identical to the original. Returns `true` on success.
+    func testSSDRoundTrip() async -> Bool {
+        guard let store = self.ssdStore else { return false }
+        let message = ChatMessage(
+            role: "user", content: "Explain what a speculative decoding system does in one paragraph.",
+            reasoning: nil, reasoning_content: nil)
+        let request = ChatCompletionRequest(
+            model: "qwen3.8-27b", messages: [message], max_tokens: 8)
+        let params = SamplingParameters(
+            temperature: 0, topP: 1, topK: 0, minP: 0,
+            repetitionPenalty: 1.0, presencePenalty: 0.0, frequencyPenalty: 0.0,
+            maxTokens: 8, contextWindow: 262_144,
+            enableThinking: false, mtpEnabled: false,
+            prefillChunkSize: 512, stopSequences: [],
+            kvCacheConfig: ResolvedKVCacheConfig.default, ttlSeconds: nil)
+        // `generateStream` (unlike `generateTokenIDs`) stores the completed
+        // session state in the manager, which is what the snapshot reads.
+        let stream = self.generateStream(request: request, samplingParams: params)
+        for await _ in stream {}  // drain to completion
+        // The manager store happens in a detached task after the continuation
+        // finishes; poll briefly until the entry lands.
+        var snapshot = await self.kvCacheManager.snapshot()
+        var attempts = 0
+        while snapshot.isEmpty, attempts < 200 {
+            try? await Task.sleep(nanoseconds: 50_000_000)  // 50 ms
+            snapshot = await self.kvCacheManager.snapshot()
+            attempts += 1
+        }
+        guard !snapshot.isEmpty else { return false }
+        guard store.persistTree(snapshot) else { return false }
+        guard let index = store.loadIndex() else { return false }
+        guard index.nodes.count == snapshot.count else { return false }
+        for (node, original) in zip(index.nodes, snapshot) {
+            guard store.loadNodeArrays(node.fileBase) != nil else { return false }
+            guard let rebuilt = self.loadDiskEntry(node, prefixCount: node.fullPrefix.count)
+            else { return false }
+            let orig = store.encodeEntry(original.entry).arrays
+            let new = store.encodeEntry(rebuilt).arrays
+            guard orig.count == new.count else { return false }
+            for (key, a) in orig {
+                guard let b = new[key] else { return false }
+                guard a.shape == b.shape, a.dtype == b.dtype else { return false }
+                let allEqual: Bool = MLX.all(MLX.equal(a, b)).item()
+                guard allEqual else { return false }
+            }
+        }
+        return true
     }
 
     /// Update the per-round draft-depth pin after a calibration sweep. Takes
@@ -927,6 +1116,7 @@ actor MLXGenerator {
         let forcedDraftK = self.forcedDraftK
         let memoryRecoveryPolicy = self.memoryRecoveryPolicy
         let memoryAdmissionPolicy = self.memoryAdmissionPolicy
+        let ssdTTLSeconds = self.ssdConfig.ttlSeconds
         let logger = self.logger
 
         let (seedTokens, wasCacheHit): ([Int], Bool)
@@ -1097,21 +1287,42 @@ actor MLXGenerator {
 
                     let prefillStart = ContinuousClock.now
 
-                    // Stage 1: Consult Radix KV Cache Manager
-                    let (prefixCount, cachedEntry) = await self.kvCacheManager.matchPrefix(
-                        tokens: effectiveSeedTokens,
-                        config: samplingParams.kvCacheConfig,
-                        namespace: self.cacheNamespace,
-                        ttlSeconds: samplingParams.ttlSeconds
-                    )
+                    // Stage 1: Consult Radix KV Cache Manager (RAM + disk).
+                    // A RAM hit returns the entry directly; a disk hit is
+                    // lazily loaded (under a memory budget) and promoted to
+                    // RAM. See docs/radix-ssd-persistence-rfc.md.
+                    let (prefixCount, ramEntry, diskHit, diskIndexPath) = await self.kvCacheManager
+                        .matchPrefixForGeneration(
+                            tokens: effectiveSeedTokens,
+                            config: samplingParams.kvCacheConfig,
+                            namespace: self.cacheNamespace,
+                            ttlSeconds: samplingParams.ttlSeconds,
+                            diskTTLSeconds: ssdTTLSeconds
+                        )
+                    let effectiveEntry: RadixKVCacheManager.CacheEntry?
+                    if let ramEntry {
+                        effectiveEntry = ramEntry
+                    } else if let diskHit, let diskPath = diskIndexPath,
+                              Double(Memory.activeMemory)
+                                  < 0.9 * Double(memoryAdmissionPolicy.memoryLimitBytes) {
+                        if let loaded = await self.loadDiskEntry(diskHit, prefixCount: prefixCount) {
+                            effectiveEntry = loaded
+                            await self.kvCacheManager.promoteToRAM(
+                                indexPath: diskPath, entry: loaded)
+                        } else {
+                            effectiveEntry = nil
+                        }
+                    } else {
+                        effectiveEntry = nil
+                    }
 
                     _ = try currentSession.begin(
                         seedTokens: effectiveSeedTokens,
                         prefixCount: prefixCount,
-                        reusableCache: cachedEntry?.cache,
-                        reusableHidden: cachedEntry?.hidden,
-                        reusablePrimary: cachedEntry?.primary,
-                        reusableTop2: cachedEntry?.top2
+                        reusableCache: effectiveEntry?.cache,
+                        reusableHidden: effectiveEntry?.hidden,
+                        reusablePrimary: effectiveEntry?.primary,
+                        reusableTop2: effectiveEntry?.top2
                     )
 
                     // Freeze the prompt-boundary state for Radix storage. At
@@ -1128,7 +1339,7 @@ actor MLXGenerator {
                     // (offset == prefixCount), else 0 on a full-prefill fallback.
                     matchedPrefixTokens = prefixCount
                     let willAdopt = prefixCount > 0
-                        && cachedEntry.map { Qwen38MTPBlockSession.trimmableOffset($0.cache) } == prefixCount
+                        && effectiveEntry.map { Qwen38MTPBlockSession.trimmableOffset($0.cache) } == prefixCount
                     reusedPrefixTokens = willAdopt ? prefixCount : 0
                     radixPrefillSkipped = reusedPrefixTokens == effectiveSeedTokens.count
 
@@ -1309,6 +1520,26 @@ actor MLXGenerator {
                         await self.recordAdaptiveSample(acceptanceRate: acceptance, tokensPerSecond: tps)
                     }
 
+                    // Store the prompt-boundary state (frozen copy) into the
+                    // Radix tree so a same-prompt repeat fully matches this
+                    // node. Done BEFORE finish() so a caller that snapshots the
+                    // manager as soon as the stream completes (e.g. the SSD
+                    // shutdown flush, a weight-test round-trip) sees the stored
+                    // entry, not an empty tree.
+                    if !generationFailed, let s = promptBoundaryState, let c = promptBoundaryCacheCopy {
+                        await self.kvCacheManager.store(
+                            RadixKVCacheManager.CacheEntry(
+                                tokens: s.tokens,
+                                cache: c,
+                                hidden: s.hidden,
+                                primary: s.primary,
+                                top2: s.top2,
+                                config: samplingParams.kvCacheConfig,
+                                namespace: self.cacheNamespace
+                            )
+                        )
+                    }
+
                     await yieldMetrics()
                     continuation.finish()
 
@@ -1325,22 +1556,6 @@ actor MLXGenerator {
                 }
 
                 await registry.deregister(id)
-
-                // Store the prompt-boundary state (frozen copy) into the Radix
-                // tree so a same-prompt repeat fully matches this node.
-                if !generationFailed, let s = promptBoundaryState, let c = promptBoundaryCacheCopy {
-                    await self.kvCacheManager.store(
-                        RadixKVCacheManager.CacheEntry(
-                            tokens: s.tokens,
-                            cache: c,
-                            hidden: s.hidden,
-                            primary: s.primary,
-                            top2: s.top2,
-                            config: samplingParams.kvCacheConfig,
-                            namespace: self.cacheNamespace
-                        )
-                    )
-                }
 
                 // Opt-in memory recovery
                 if generationFailed {

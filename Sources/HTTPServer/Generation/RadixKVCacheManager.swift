@@ -79,6 +79,11 @@ public actor RadixKVCacheManager {
         var namespace: String
         var lastAccessed: ContinuousClock.Instant
         var children: [RadixNode]
+        /// Disk-resident state reference (set by `restoreSkeleton`, cleared
+        /// when the node is loaded into RAM). Non-nil when this node's state
+        /// lives on the SSD tier and has not been loaded. A node is matchable
+        /// if `cache != nil` (RAM) OR `diskState != nil` (disk).
+        var diskState: KVSSDIndexNode?
     }
 
     /// Conservative KV footprint bound per token, mirroring
@@ -97,6 +102,18 @@ public actor RadixKVCacheManager {
     private(set) var misses = 0
     private(set) var evictions = 0
     private(set) var stores = 0
+
+    /// Invoked (synchronously, on the model lane) with a snapshot of a leaf
+    /// just before it is evicted by `evictLRULeaf`. The owner (the
+    /// `MLXGenerator`) uses this to serialize the evicted node to the SSD tier
+    /// before its in-RAM state is dropped. `nil` (default) = eviction is a
+    /// plain drop (no persistence).
+    var onEvict: (@Sendable (RadixSSDStore.SnapshotNode) -> Void)?
+
+    /// Set the eviction callback (the SSD tier's write point on eviction).
+    func setOnEvict(_ closure: @escaping @Sendable (RadixSSDStore.SnapshotNode) -> Void) {
+        self.onEvict = closure
+    }
 
     /// `maxCacheBytes` bounds the radix cache's own estimated footprint (the
     /// per-cache budget, independent of the global memory-admission limit). At
@@ -117,7 +134,8 @@ public actor RadixKVCacheManager {
             config: .default,
             namespace: "",
             lastAccessed: .now,
-            children: []
+            children: [],
+            diskState: nil
         )
     }
     /// Traverses the tree along matching token sub-arrays and returns the
@@ -370,6 +388,21 @@ public actor RadixKVCacheManager {
     /// estimated KV bytes, or `nil` when there is no leaf to evict.
     private func evictLRULeaf() -> Int? {
         guard let leaf = self.findLRULeaf() else { return nil }
+        // Persist the evicted node to the SSD tier before dropping its in-RAM
+        // state (the LRU-eviction write point). Only stateful leaves have
+        // tensors to persist.
+        if let onEvict = self.onEvict,
+           let cache = leaf.node.cache, let hidden = leaf.node.hidden,
+           let primary = leaf.node.primary, let top2 = leaf.node.top2 {
+            onEvict(RadixSSDStore.SnapshotNode(
+                fullPrefix: leaf.fullPrefix,
+                entry: CacheEntry(
+                    tokens: leaf.fullPrefix, cache: cache, hidden: hidden,
+                    primary: primary, top2: top2, config: leaf.node.config,
+                    namespace: leaf.node.namespace
+                ),
+                createdAt: Date()))
+        }
         self.removeLeaf(path: leaf.path)
         self.evictions += 1
         return leaf.prefixTokens * Self.estimatedBytesPerToken
@@ -410,22 +443,26 @@ public actor RadixKVCacheManager {
         return nil
     }
 
-    /// The child-index path from the root to the LRU leaf, plus that leaf's
-    /// full prefix length.
-    private func findLRULeaf() -> (path: [Int], prefixTokens: Int)? {
-        var best: (path: [Int], prefixTokens: Int, instant: ContinuousClock.Instant)? = nil
-        var stack: [(node: RadixNode, path: [Int], prefix: Int)] = [(root, [], 0)]
-        while let (node, path, prefix) = stack.popLast() {
+    /// The child-index path from the root to the LRU leaf, that leaf's node,
+    /// full prefix length, and full token prefix.
+    private func findLRULeaf()
+        -> (path: [Int], prefixTokens: Int, node: RadixNode, fullPrefix: [Int])? {
+        var best: (path: [Int], prefixTokens: Int, node: RadixNode, fullPrefix: [Int],
+                  instant: ContinuousClock.Instant)? = nil
+        var stack: [(node: RadixNode, path: [Int], fullPrefix: [Int])] = [(root, [], [])]
+        while let (node, path, fullPrefix) = stack.popLast() {
             if node.children.isEmpty, !path.isEmpty {
                 if best == nil || node.lastAccessed < best!.instant {
-                    best = (path, prefix, node.lastAccessed)
+                    best = (path, fullPrefix.count, node, fullPrefix, node.lastAccessed)
                 }
             }
             for (i, child) in node.children.enumerated() {
-                stack.append((child, path + [i], prefix + child.tokens.count))
+                stack.append((child, path + [i], fullPrefix + child.tokens))
             }
         }
-        return best.map { (path: $0.path, prefixTokens: $0.prefixTokens) }
+        return best.map {
+            (path: $0.path, prefixTokens: $0.prefixTokens, node: $0.node, fullPrefix: $0.fullPrefix)
+        }
     }
 
     /// Removes the leaf addressed by `path` (child indices from the root) and
@@ -493,8 +530,209 @@ public actor RadixKVCacheManager {
             config: entry.config,
             namespace: entry.namespace,
             lastAccessed: .now,
-            children: []
+            children: [],
+            diskState: nil
         )
+    }
+
+    // MARK: - SSD tier integration
+
+    /// DFS snapshot of every stateful node (the graceful-shutdown write point).
+    /// Returns each node's full token prefix plus its `CacheEntry`.
+    func snapshot() -> [RadixSSDStore.SnapshotNode] {
+        var out: [RadixSSDStore.SnapshotNode] = []
+        var stack: [(node: RadixNode, fullPrefix: [Int])] = [(root, [])]
+        while let (node, fullPrefix) = stack.popLast() {
+            let full = fullPrefix + node.tokens
+            if !node.tokens.isEmpty,
+               let cache = node.cache, let hidden = node.hidden,
+               let primary = node.primary, let top2 = node.top2 {
+                out.append(RadixSSDStore.SnapshotNode(
+                    fullPrefix: full,
+                    entry: CacheEntry(
+                        tokens: full, cache: cache, hidden: hidden,
+                        primary: primary, top2: top2, config: node.config,
+                        namespace: node.namespace
+                    ),
+                    createdAt: Date()))
+            }
+            for child in node.children {
+                stack.append((child, full))
+            }
+        }
+        return out
+    }
+
+    /// Rebuild the in-RAM tree as a skeleton from a loaded prefix set: one
+    /// node per entry with `diskState` set (no tensors). Re-inserting each
+    /// fullPrefix recreates the tree topology; every node's `diskState` is set
+    /// by its own set entry, so LCP match semantics (including partial matches
+    /// at internal shared-prefix nodes) survive.
+    func restoreSkeleton(nodes: [KVSSDIndexNode]) {
+        self.root = Self.emptyNode()
+        for node in nodes {
+            self.insertSkeleton(
+                into: &self.root, remaining: node.fullPrefix, state: node)
+        }
+    }
+
+    private static func skeletonNode(tokens: [Int], state: KVSSDIndexNode) -> RadixNode {
+        RadixNode(
+            tokens: tokens, cache: nil, hidden: nil, primary: nil, top2: nil,
+            config: state.config?.resolved ?? .default,
+            namespace: state.namespace,
+            lastAccessed: .now, children: [], diskState: state)
+    }
+
+    private func insertSkeleton(into node: inout RadixNode, remaining: [Int], state: KVSSDIndexNode) {
+        var bestIndex: Int? = nil
+        var bestLCP = 0
+        for (i, child) in node.children.enumerated() {
+            let lcp = Self.commonPrefixLength(child.tokens, remaining)
+            if lcp > bestLCP {
+                bestLCP = lcp
+                bestIndex = i
+            }
+        }
+        guard let bestIndex else {
+            node.children.append(Self.skeletonNode(tokens: remaining, state: state))
+            return
+        }
+        let lcp = bestLCP
+        if lcp == remaining.count {
+            if lcp == node.children[bestIndex].tokens.count {
+                var child = node.children[bestIndex]
+                child.diskState = state
+                node.children[bestIndex] = child
+            } else {
+                var suffix = node.children[bestIndex]
+                suffix.tokens = Array(suffix.tokens[lcp...])
+                var prefix = node.children[bestIndex]
+                prefix.tokens = Array(prefix.tokens[0..<lcp])
+                prefix.diskState = state
+                prefix.children = [suffix]
+                node.children[bestIndex] = prefix
+            }
+            return
+        }
+        if lcp == node.children[bestIndex].tokens.count {
+            self.insertSkeleton(
+                into: &node.children[bestIndex],
+                remaining: Array(remaining[lcp...]), state: state)
+        } else {
+            var suffix = node.children[bestIndex]
+            suffix.tokens = Array(suffix.tokens[lcp...])
+            var prefix = node.children[bestIndex]
+            prefix.tokens = Array(prefix.tokens[0..<lcp])
+            prefix.children = [suffix]
+            node.children[bestIndex] = prefix
+            self.insertSkeleton(
+                into: &node.children[bestIndex],
+                remaining: Array(remaining[lcp...]), state: state)
+        }
+    }
+
+    /// Like `matchPrefix`, but a node is matchable if it has state in RAM
+    /// (`cache != nil`) OR on disk (`diskState != nil`). A RAM hit returns the
+    /// entry; a disk hit returns the `diskState` (and the node's child-index
+    /// path, so the caller can promote it to RAM after lazy-loading). Used by
+    /// the `MLXGenerator`; the benchmark uses `matchPrefix` (RAM-only).
+    func matchPrefixForGeneration(
+        tokens: [Int],
+        config: ResolvedKVCacheConfig,
+        namespace: String = "default",
+        ttlSeconds: Int? = nil,
+        diskTTLSeconds: Int = 86400
+    ) -> (prefixCount: Int, entry: CacheEntry?, diskHit: KVSSDIndexNode?, diskIndexPath: [Int]?) {
+        guard !tokens.isEmpty else { return (0, nil, nil, nil) }
+        let ttl = TimeInterval(ttlSeconds ?? Int(defaultTTLSeconds))
+        let diskTTL = TimeInterval(diskTTLSeconds)
+
+        var path: [RadixNode] = []
+        var indexPath: [Int] = []
+        var lcpAtEachStep: [Int] = []
+        var remaining = tokens
+        var current = root
+        while !remaining.isEmpty {
+            var bestIndex: Int? = nil
+            var bestLCP = 0
+            for (i, child) in current.children.enumerated() {
+                let lcp = Self.commonPrefixLength(child.tokens, remaining)
+                if lcp > bestLCP {
+                    bestLCP = lcp
+                    bestIndex = i
+                }
+            }
+            guard let index = bestIndex, bestLCP > 0 else { break }
+            let child = current.children[index]
+            path.append(child)
+            indexPath.append(index)
+            lcpAtEachStep.append(bestLCP)
+            remaining = Array(remaining[bestLCP...])
+            current = child
+            if bestLCP < child.tokens.count { break }
+        }
+
+        for depth in (0..<path.count).reversed() {
+            let node = path[depth]
+            guard node.config == config, node.namespace == namespace else { continue }
+            let matchedPrefix = lcpAtEachStep[0...depth].reduce(0, +)
+            let lcpHere = lcpAtEachStep[depth]
+            let fullyMatched = (lcpHere == node.tokens.count)
+            let ip = Array(indexPath[0...depth])
+
+            // RAM node (unchanged semantics vs `matchPrefix`).
+            if let cache = node.cache, let hidden = node.hidden,
+               let primary = node.primary, let top2 = node.top2 {
+                let age = node.lastAccessed.duration(to: .now)
+                guard age <= .seconds(ttl) else { continue }
+                let supportsTrimming = cache.allSatisfy { $0.isTrimmable }
+                guard fullyMatched || supportsTrimming else { continue }
+                self.hits += 1
+                self.touch(indexPath: ip)
+                return (matchedPrefix, CacheEntry(
+                    tokens: Array(tokens[0..<matchedPrefix]), cache: cache,
+                    hidden: hidden, primary: primary, top2: top2,
+                    config: node.config, namespace: node.namespace), nil, nil)
+            }
+
+            // Disk node: config guarantees trimmability; the `begin` desync
+            // check (trimmableOffset == prefixCount) is the real gate.
+            if let disk = node.diskState, disk.namespace == namespace {
+                let age = Date().timeIntervalSince(disk.createdAt)
+                guard age <= diskTTL else { continue }
+                self.hits += 1
+                self.touch(indexPath: ip)
+                return (matchedPrefix, nil, disk, ip)
+            }
+        }
+        self.misses += 1
+        return (0, nil, nil, nil)
+    }
+
+    /// After the generator lazy-loads a disk node's tensors, promote it to RAM:
+    /// set the in-RAM state and clear `diskState`. `indexPath` is the node's
+    /// child-index path (as returned by `matchPrefixForGeneration`).
+    func promoteToRAM(
+        indexPath: [Int], entry: CacheEntry
+    ) {
+        self.promote(&self.root, indexPath: indexPath, entry: entry)
+    }
+
+    private func promote(_ node: inout RadixNode, indexPath: [Int], entry: CacheEntry) {
+        guard let first = indexPath.first else { return }
+        if indexPath.count == 1 {
+            node.children[first].cache = entry.cache
+            node.children[first].hidden = entry.hidden
+            node.children[first].primary = entry.primary
+            node.children[first].top2 = entry.top2
+            node.children[first].config = entry.config
+            node.children[first].namespace = entry.namespace
+            node.children[first].diskState = nil
+            node.children[first].lastAccessed = .now
+            return
+        }
+        self.promote(&node.children[first], indexPath: Array(indexPath.dropFirst()), entry: entry)
     }
 
     /// Drop all cached state and clear the MLX allocator cache. Lifetime

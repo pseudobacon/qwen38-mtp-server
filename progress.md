@@ -1747,3 +1747,102 @@ or rebase of `recovered/tasks-1-6` onto `main`), build + full test after.
 Untracked sibling artifacts left in place (not copied): `benchmarks/
 repro_cli_flag_crash.sh`, `benchmarks/results/compact-rejection/
 20260916_050447/`.
+
+## Cross-lineage port of Tasks 1–6 (2026-09-16) — DONE (Phases 0–5)
+
+The recovered Task 1–6 work (sibling `qwen-mtp-server`, branch
+`recovered/tasks-1-6` @ `efcf595`) is ported into this canonical `main` via
+**file-by-file manual adaptation** (the two lineages have disjoint object
+sets, so no git merge). Decisions and file mapping are recorded in
+`docs/port-inventory.md` (Phase 0 inventory) and `docs/task2-comparison.md`
+(Task 2 comparison/decision).
+
+### What was ported
+
+- **Task 4 (reusable-path repair)** — already landed earlier this session as
+  `fa804ed` + `59c282b` (prompt-boundary freeze, adoption computation,
+  `clearKVCache()`, 3 new RequestMetrics keys, weight test, E2E gate PASS
+  ratio 0.0221). See `docs/metrics.md`.
+- **Task 2 (depth autotune)** — **KEEP canonical** depth-tuning; the Task 2
+  safety gaps are deferred. Only the identity primitives the SSD tier needs
+  were ported: `WeightTreeDigest(s)` + `hardwareID()` + `SHA256File` (into
+  `SpecDraftCalibration.swift`) and the `QWEN_MLX_SEED` deterministic-RNG hook
+  (into `MLXGenerator`).
+- **Tasks 3+5+6 (SSD tier)** — the full cold-disk persistence tier:
+  - `RadixSSDStore.swift` (new, 409→426 ln): safetensors node encode/decode,
+    flat prefix-set index, byte-budget sweep, `KVSSDIndexNode` gains a
+    `namespace` field (canonical is multi-namespace; the recovered lineage was
+    single-namespace).
+  - `RadixKVCacheManager.swift` (merged SSD tier into the canonical
+    namespace-aware manager): `diskState` on `RadixNode`, `onEvict`/`setOnEvict`,
+    `evictLRULeaf` persist-on-evict, `snapshot()`, `restoreSkeleton`/
+    `insertSkeleton`/`skeletonNode`, `matchPrefixForGeneration` (RAM-or-disk
+    hit, namespace-checked), `promoteToRAM`/`promote`.
+  - `MLXGenerator.swift` (SSD wiring): `ssdStore`/`ssdConfig`/`weightIdentity`
+    members, `kvSSD*` init params, `weightIdentity()`/`templateFingerprint()`,
+    `restoreFromSSD()` (startup), `flushToSSD()` (graceful shutdown),
+    `loadDiskEntry()` (lazy load under a memory budget), `testSSDRoundTrip()`,
+    and the generation path switched to `matchPrefixForGeneration` +
+    lazy-load + `promoteToRAM`. The Radix `store` was moved **before**
+    `continuation.finish()` (success path only) so a caller that snapshots the
+    manager the moment the stream completes (the SSD flush, the weight-test
+    round-trip) sees the entry, not an empty tree — this was the root cause of
+    the integration test's `reused=0` first failure.
+  - `Qwen38Server.swift`: `ModelShutdownHandler` gains `generator` and calls
+    `flushToSSD()` after drain.
+  - `ServerConfig.swift`: 5 new flags — `--kv-ssd-enabled`/`--kv-ssd-disabled`
+    (valueless), `--kv-ssd-cache-dir`/`--kv-ssd-cache-gb`/`--kv-ssd-ttl-seconds`
+    (value-taking) + `QWEN_KV_SSD_*` env overrides. Defaults: enabled, dir
+    `~/.qwen38-mtp/kv-ssd`, 8 GB, 86400 s.
+  - `ServerConfigArgumentTests.swift`: the 5 flags added to the known-flag sets;
+    the old "unknown `--kv-ssd-*`" expectations flipped to a typo-of-a-known-flag
+    rejection test (Task 7's `unknownFlagError` now accepts them).
+  - **Engine fork** (`mlx-swift-lm` `6fa481d`): `restoreKVCacheState(cache:
+    state:metaState:)` added to `KVCache.swift` (the paired change that
+    reconstructs in-RAM cache state from persisted arrays).
+- **Task 1 (compact-rejection negative result)** — the artifacts, not the walk:
+  `docs/compact-rejection-rfc.md`, `Tests/HTTPServerTests/CompactRejectionTests.
+  swift` (404 ln; pure distributional chi-square/TV tests + 1 weight-gated),
+  `benchmarks/compact-rejection-prompt.json`,
+  `benchmarks/run_compact_rejection_ab.sh`. The compact-space walk itself was
+  REJECTED in the recovered lineage and is **not** ported.
+
+### New / updated files (server repo)
+- `Sources/HTTPServer/Generation/RadixSSDStore.swift` (new)
+- `Sources/HTTPServer/Generation/RadixKVCacheManager.swift` (SSD merge)
+- `Sources/HTTPServer/Generation/MLXGenerator.swift` (SSD wiring + seed hook)
+- `Sources/HTTPServer/Generation/SpecDraftCalibration.swift` (identity fns)
+- `Sources/HTTPServer/Qwen38Server.swift` (shutdown flush)
+- `Sources/HTTPServer/ServerConfig.swift` (5 flags)
+- `Tests/HTTPServerTests/RadixSSDPersistenceTests.swift` (new, 6 pure)
+- `Tests/HTTPServerTests/RadixSSDWeightTests.swift` (new, 2 weight-gated)
+- `Tests/HTTPServerTests/CompactRejectionTests.swift` (new)
+- `Tests/HTTPServerTests/ServerConfigArgumentTests.swift` (5 flags)
+- `benchmarks/run_radix_ssd_restart.sh`, `run_radix_ssd_equilibrate.sh`,
+  `run_compact_rejection_ab.sh` (new; binary name fixed to
+  `qwen38-mtp-server`)
+- `docs/radix-ssd-persistence-rfc.md`, `docs/compact-rejection-rfc.md`
+  (new; paths/defaults normalized to `qwen38`)
+
+### Verification
+- `swift build --target HTTPServer` — 0 errors, 0 warnings.
+- `swift test --filter HTTPServerTests` — **237 Swift Testing tests in 7
+  suites, all passed** (baseline 224 → +6 SSD persistence, +2 SSD weight, +4
+  compact-rejection, +1 net ServerConfigArgument; the 2 SSD weight tests are
+  skipped without `QWEN_RUN_WEIGHT_TESTS=1`).
+- Weight-gated SSD tests (separate `QWEN_RUN_WEIGHT_TESTS=1` invocations):
+  - `radixSSDPersistRestoreIsBitIdentical` — **PASS** (persist/restore
+    bit-identity on a real `CacheEntry`; lazy-load of a 24-token prefix).
+  - `radixSSDRestoreReportsRealReuse` — **PASS** (gen1 flush → gen2
+    restore → lazy-load 1254 tokens → `matched=1254 reused=1255…` reports
+    `reusedPrefixTokens>0` and `radixPrefillSkipped==true`).
+- **E2E restart benchmark** (`benchmarks/run_radix_ssd_restart.sh`, 2 server
+  launches): TTFT_warm=0.137 s, TTFT_disk=0.144 s, TTFT_cold=5.535 s →
+  disk/warm=1.05× (≤2.0), disk/cold=0.03× (≤0.7) → **OVERALL PASS**.
+
+### Not ported (deliberate)
+- Task 2 full depth-autotune surface (`DepthTuning.swift`, `--tune`,
+  `POST /tune`, `DepthTuningTests`) — canonical depth-tuning retained.
+- Task 1 compact-space rejection walk (rejected result, artifacts only).
+- Sibling untracked artifacts (`repro_cli_flag_crash.sh`, compact-rejection
+  results dir) — left in the sibling repo, not copied.

@@ -5,7 +5,7 @@ import XCTest
 /// - `vaporArguments(from:)` must strip EVERY implemented `ServerConfig`
 ///   flag (and its value) so Vapor's command dispatcher never sees them.
 /// - `unknownFlagError(in:)` must reject any `--flag` the server does not
-///   implement, so unknown flags (e.g. `--kv-ssd-cache-dir`) fail loudly at
+///   implement, so unknown flags (e.g. `--kv-ssd-cache-gbbs`) fail loudly at
 ///   startup instead of leaking through to `Environment.detect` /
 ///   `app.execute()`.
 final class ServerConfigArgumentTests: XCTestCase {
@@ -43,6 +43,9 @@ final class ServerConfigArgumentTests: XCTestCase {
         "--kv-group-size",
         "--kv-bits",
         "--kv-tail-size", "--cache-type-v-tail",
+        "--kv-ssd-cache-dir",
+        "--kv-ssd-cache-gb",
+        "--kv-ssd-ttl-seconds",
         "--memory-limit",
         "--max-queue-depth",
     ]
@@ -54,6 +57,8 @@ final class ServerConfigArgumentTests: XCTestCase {
         "--tools-disabled",
         "--spec-draft-calibrate",
         "--spec-draft-adaptive",
+        "--kv-ssd-enabled",
+        "--kv-ssd-disabled",
     ]
 
     private func fullFlagCommandLine(exe: String = "/usr/local/bin/HTTPServer") -> [String] {
@@ -94,18 +99,12 @@ final class ServerConfigArgumentTests: XCTestCase {
     }
 
     func testUnknownFlagErrorDetectsUnknownValueTakingFlag() {
-        let args = fullFlagCommandLine() + ["--kv-ssd-cache-dir", "/tmp/kv-ssd"]
+        // `--kv-ssd-cache-dir` is implemented (Task: Radix SSD persistence);
+        // a typo of it must still fail loudly.
+        let args = fullFlagCommandLine() + ["--kv-ssd-cache-dire", "/tmp/kv-ssd"]
         let error = ServerConfig.unknownFlagError(in: args)
         XCTAssertNotNil(error)
-        XCTAssertTrue(error!.contains("--kv-ssd-cache-dir"))
-    }
-
-    func testUnknownFlagErrorDetectsEveryReportedKVSSDFlag() {
-        for flag in ["--kv-ssd-cache-dir", "--kv-ssd-cache-gb", "--kv-ssd-ttl-seconds"] {
-            let error = ServerConfig.unknownFlagError(in: ["/usr/local/bin/HTTPServer", flag, "x"])
-            XCTAssertNotNil(error, "expected \(flag) to be rejected")
-            XCTAssertTrue(error!.contains(flag))
-        }
+        XCTAssertTrue(error!.contains("--kv-ssd-cache-dire"))
     }
 
     func testUnknownFlagErrorDetectsTypoedFlag() {

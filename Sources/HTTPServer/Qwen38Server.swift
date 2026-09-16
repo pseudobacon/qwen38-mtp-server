@@ -103,7 +103,11 @@ struct QwenServer {
                 kvTailSize: config.kvTailSize,
                 tokenizationCacheMaxEntries: config.tokenizationCacheMaxEntries,
                 tokenizationCacheMaxBytes: config.tokenizationCacheMaxBytes,
-                tokenizationCacheTTLSeconds: config.tokenizationCacheTTLSeconds
+                tokenizationCacheTTLSeconds: config.tokenizationCacheTTLSeconds,
+                kvSSDEnabled: config.kvSSDEnabled,
+                kvSSDCacheDir: config.kvSSDCacheDir,
+                kvSSDCacheGB: config.kvSSDCacheGB,
+                kvSSDTTLSeconds: config.kvSSDTTLSeconds
             )
             _ = await runtimeState.transition(to: .ready)
             app.logger.info("Model runtime is ready.")
@@ -207,7 +211,8 @@ struct QwenServer {
         // 5c. Graceful shutdown: transition to `.draining` and let the active
         //     generation finish or hit its cooperative cancellation boundary.
         app.lifecycle.use(
-            ModelShutdownHandler(runtimeState: runtimeState, scheduler: scheduler)
+            ModelShutdownHandler(
+                runtimeState: runtimeState, scheduler: scheduler, generator: generator)
         )
 
         do {
@@ -244,6 +249,7 @@ struct QwenServer {
 struct ModelShutdownHandler: LifecycleHandler {
     let runtimeState: ModelRuntimeState
     let scheduler: GenerationScheduler?
+    let generator: MLXGenerator?
 
     func shutdownAsync(_ application: Application) async {
         // Item D: final cumulative QMV verify dispatch counters for the run
@@ -255,6 +261,11 @@ struct ModelShutdownHandler: LifecycleHandler {
         application.logger.info("Model runtime draining; waiting for active generation.")
         if let scheduler {
             await scheduler.drain(timeout: .seconds(30))
+        }
+        // Graceful-shutdown write point: persist every in-RAM radix node to the
+        // SSD tier before the process exits (no-op when the tier is disabled).
+        if let generator {
+            await generator.flushToSSD()
         }
     }
 }

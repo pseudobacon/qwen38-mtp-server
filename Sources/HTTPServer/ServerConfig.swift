@@ -89,6 +89,13 @@ struct ServerConfig: Sendable {
     /// so speculative verification is numerically exact.
     var kvTailSize: Int = 1024             // --kv-tail-size, --cache-type-v-tail
 
+    // Radix SSD persistence (cold-disk tier beneath the in-RAM radix cache).
+    // See docs/radix-ssd-persistence-rfc.md.
+    var kvSSDEnabled: Bool = true          // --kv-ssd-enabled, --kv-ssd-disabled
+    var kvSSDCacheDir: String = "~/.qwen38-mtp/kv-ssd"  // --kv-ssd-cache-dir
+    var kvSSDCacheGB: Int = 8              // --kv-ssd-cache-gb
+    var kvSSDTTLSeconds: Int = 86400       // --kv-ssd-ttl-seconds
+
     // Tokenization cache (Stage 0 of the prefix-cache RFC). Bounded, actor-
     // isolated cache of prompt tokenization results. Stores only encoded token
     // IDs — no MLX/KV state. Safe KV reuse is out of scope (no copy-on-write).
@@ -140,6 +147,9 @@ struct ServerConfig: Sendable {
         "--kv-group-size",
         "--kv-bits",
         "--kv-tail-size", "--cache-type-v-tail",
+        "--kv-ssd-cache-dir",
+        "--kv-ssd-cache-gb",
+        "--kv-ssd-ttl-seconds",
         "--memory-limit",
         "--max-queue-depth",
     ]
@@ -151,6 +161,8 @@ struct ServerConfig: Sendable {
         "--tools-disabled",
         "--spec-draft-calibrate",
         "--spec-draft-adaptive",
+        "--kv-ssd-enabled",
+        "--kv-ssd-disabled",
     ]
 
     /// The subset of `CommandLine.arguments` that Vapor's
@@ -319,6 +331,16 @@ struct ServerConfig: Sendable {
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvGroupSize = val }
             case "--kv-bits":
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvBits = val }
+            case "--kv-ssd-cache-dir":
+                if index + 1 < args.count { config.kvSSDCacheDir = args[index + 1] }
+            case "--kv-ssd-cache-gb":
+                if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvSSDCacheGB = val }
+            case "--kv-ssd-ttl-seconds":
+                if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvSSDTTLSeconds = val }
+            case "--kv-ssd-enabled":
+                config.kvSSDEnabled = true
+            case "--kv-ssd-disabled":
+                config.kvSSDEnabled = false
             case "--kv-tail-size", "--cache-type-v-tail":
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvTailSize = val }
             case "--memory-limit":
@@ -361,6 +383,10 @@ struct ServerConfig: Sendable {
         if let val = ProcessInfo.processInfo.environment["QWEN_KV_GROUP_SIZE"], let intVal = Int(val) { config.kvGroupSize = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_KV_BITS"], let intVal = Int(val) { config.kvBits = intVal }
         if let val = ProcessInfo.processInfo.environment["QWEN_KV_TAIL_SIZE"], let intVal = Int(val) { config.kvTailSize = intVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_KV_SSD_ENABLED"], let boolVal = Bool(val) { config.kvSSDEnabled = boolVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_KV_SSD_CACHE_DIR"] { config.kvSSDCacheDir = val }
+        if let val = ProcessInfo.processInfo.environment["QWEN_KV_SSD_CACHE_GB"], let intVal = Int(val) { config.kvSSDCacheGB = intVal }
+        if let val = ProcessInfo.processInfo.environment["QWEN_KV_SSD_TTL_SECONDS"], let intVal = Int(val) { config.kvSSDTTLSeconds = intVal }
         if let val = ProcessInfo.processInfo.environment["LLAMA_ARG_CACHE_TYPE_K"] { config.cacheTypeK = val }
         if let val = ProcessInfo.processInfo.environment["LLAMA_ARG_CACHE_TYPE_V"] { config.cacheTypeV = val }
 

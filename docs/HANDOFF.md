@@ -1,7 +1,40 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Long-Context Prefill Optimization & Exactness Guardrails (LCP) — P1/P2/P3.**
+**COMPLETE: Cross-lineage port of Tasks 1–6 from `qwen-mtp-server` (2026-09-16).**
+
+The recovered Task 1–6 work (sibling `qwen-mtp-server`, branch
+`recovered/tasks-1-6` @ `efcf595`) is ported into canonical `main` by
+file-by-file manual adaptation (disjoint object sets → no git merge). Details
+in `progress.md` ("Cross-lineage port of Tasks 1–6") and `docs/port-inventory.md`
++ `docs/task2-comparison.md`.
+
+- **Task 4 (reusable-path repair):** `fa804ed` + `59c282b` (earlier this session).
+- **Tasks 3+5+6 (SSD tier):** `RadixSSDStore.swift` (new, multi-namespace),
+  `RadixKVCacheManager.swift` (disk tier merged into the namespace-aware
+  manager), `MLXGenerator.swift` (SSD wiring + `QWEN_MLX_SEED`; Radix `store`
+  moved before `continuation.finish()` so a post-stream snapshot sees the
+  entry), `Qwen38Server.swift` (`ModelShutdownHandler` calls `flushToSSD()`),
+  `ServerConfig.swift` (5 `--kv-ssd-*` flags + env), `ServerConfigArgumentTests`
+  (5 flags now known), `RadixSSDPersistenceTests` (6 pure) +
+  `RadixSSDWeightTests` (2 weight-gated). Engine fork `6fa481d` adds
+  `restoreKVCacheState`.
+- **Task 2 (depth autotune):** KEEP canonical; only the identity primitives the
+  SSD key needs were ported (`WeightTreeDigest(s)`/`hardwareID`/`SHA256File` +
+  `QWEN_MLX_SEED`). Full autotune surface NOT ported.
+- **Task 1 (compact-rejection negative result):** artifacts ported
+  (`docs/compact-rejection-rfc.md`, `CompactRejectionTests.swift`, 2 benchmark
+  files); the walk itself is NOT ported (rejected result).
+- **Verification:** `swift build --target HTTPServer` 0 errors/0 warnings;
+  `swift test --filter HTTPServerTests` = **237 Swift Testing, all green**;
+  weight-gated SSD tests PASS (bit-identity + `reused>0`/`radixPrefillSkipped`
+  on a 1254-token SSD-restored prefix); E2E restart benchmark **PASS**
+  (TTFT_warm 0.137 s, TTFT_disk 0.144 s, TTFT_cold 5.535 s; disk/warm 1.05×,
+  disk/cold 0.03×).
+- **Prior LCP status (unchanged, still valid):** see the LCP P1/P2/P3 block
+  below.
+
+**Prior: COMPLETE: Long-Context Prefill Optimization & Exactness Guardrails (LCP) — P1/P2/P3.**
 
 - **P1** baseline profile at 8K/16K/32K/64K (pc=512, eval-sync per-phase, RSS, bit-exact
   hash gate — all 4 pass): FFN 56.3→36.5 %, full-attention 12.8→42.1 % (SDPA 5.7→35.6 %,
@@ -96,14 +129,20 @@ rejected pre-prefill (507, `51.6 GB > 27.1 GB`). Engine KVCache 118/118 + MTP
 3/3, server 224/224 all green. See `docs/CHUNKED-PREFILL.md`.
 
 ## Repository state
-- **Engine** `/Users/cwong/ai/mlx-swift-lm`: `main` @ `4cd8603`, with Phase I
-  changes (uncommitted until this task's engine commit):
-  - `Libraries/MLXLMCommon/AttentionUtils.swift` — `chunkedCausalPrefill` + gate
-  - `Libraries/MLXLMCommon/KVCache.swift` — `MLXChunkedPrefill`, quantized chunked
-  - `Tests/MLXLMTests/KVCacheTests.swift` — 2 new tests
-- **Server** `/Users/cwong/ai/qwen38-mtp-server`: `main` @ `1a247b4`, with Phase I
-  changes (uncommitted until this task's server commit):
-  - `Sources/HTTPServer/Generation/MemoryAdmission.swift` — transient buffer model
+**Current (cross-lineage port, 2026-09-16):**
+- **Server** `/Users/cwong/ai/qwen38-mtp-server` (canonical): on
+  `feature/port-radix-ssd` (branched from `main` @ `59c282b`). Uncommitted:
+  the SSD tier (Phase 3) + Task 1 artifacts (Phase 4) + this doc/progress
+  update (Phase 5) — see `git status --short` for the exact file list.
+- **Engine** `/Users/cwong/ai/mlx-swift-lm` (fork): `main` @ `6fa481d` —
+  `restoreKVCacheState(cache:state:metaState:)` added to
+  `Libraries/MLXLMCommon/KVCache.swift` (the paired change the SSD lazy-load
+  path depends on). Committed before the server-side code that calls it.
+
+**Prior (Phase I chunked prefill):**
+- **Engine** `main` @ `4cd8603`: `AttentionUtils.swift` (`chunkedCausalPrefill`),
+  `KVCache.swift` (`MLXChunkedPrefill`), `KVCacheTests.swift` (2 tests).
+- **Server** `main` @ `1a247b4`: `MemoryAdmission.swift` — transient buffer model
   - `Sources/HTTPServer/Generation/MLXGenerator.swift` — passes `chunkedPrefillEnabled`
   - `Sources/HTTPServer/API/OpenAIValidation.swift` — 507 error response
   - `Sources/HTTPServer/Routes/OpenAIRouter.swift` — catches `TransientBufferFailure`
@@ -201,17 +240,20 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
-Fresh checkpoint procedure completed successfully in **both** repositories:
-`2026-09-15T19:21:15+00:00` (server `b4374be`, engine `62c4ac7`; both
-`agent-checkpoint.sh` exit 0).
+Cross-lineage port checkpoint: server on `feature/port-radix-ssd` (Phases 0–5
+complete), engine `mlx-swift-lm` @ `6fa481d` (restored, `restoreKVCacheState`).
+`swift test --filter HTTPServerTests` = 237 Swift Testing, all green; E2E
+restart benchmark PASS. (Prior LCP checkpoint: `2026-09-15T19:21:15+00:00`,
+server `b4374be`, engine `62c4ac7`.)
 
 ## Next step (exact)
-None. Phase I (chunked causal prefill) is complete and committed to `main` in
-both repos; the roadmap (`progress.md` open item 7, Done list, `docs/README.md`
-runtime knobs) records chunked prefill as the long-context solution for 32K–64K
-(Flash attention not required). All gates green: engine KVCache 118/118 + MTP
-diagnostic 3/3, server 224/224; 8K dense == chunked stream hash; 32K completes
-chunked, rejected dense (507). No follow-up work is required for this task.
+None outstanding for the port. Commit `feature/port-radix-ssd` to `main` (server
+repo) after the final `git diff --check` and a clean full-suite run; the engine
+fork change (`6fa481d`) is already committed and must be merged/landed before
+any server-side code that depends on `restoreKVCacheState` is published.
+
+**Prior LCP next step (closed):** Phase I (chunked causal prefill) complete;
+all gates green (engine KVCache 118/118 + MTP diagnostic 3/3, server 224/224).
 
 ## 2026-09-16 addendum — Task 7 resolution + reconciliation audit
 
