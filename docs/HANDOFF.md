@@ -212,3 +212,24 @@ runtime knobs) records chunked prefill as the long-context solution for 32K–64
 (Flash attention not required). All gates green: engine KVCache 118/118 + MTP
 diagnostic 3/3, server 224/224; 8K dense == chunked stream hash; 32K completes
 chunked, rejected dense (507). No follow-up work is required for this task.
+
+## 2026-09-16 addendum — Task 7 resolution + reconciliation audit
+
+- **Task 7 (CLI-flag crash) is RESOLVED (server `76054e3`, merged to `main`):**
+  the `--kv-ssd-cache-dir` / `--kv-ssd-cache-gb` / `--kv-ssd-ttl-seconds` flags
+  **never existed** in this codebase (zero occurrences in sources, engine fork,
+  docs, git history). The reported `app.execute()` crash was unknown-flag
+  leakage into `Environment.detect(arguments:)`. `ServerConfig` now rejects any
+  unknown `--flag` loudly at startup (stderr + `exit(2)`, "Unknown option …
+  Run with --help") **before** Vapor dispatch, so no launch command of the
+  "pass the kv-ssd flags" form can reach the Vapor dispatcher. There is no
+  env-var launch to work around anything.
+- This handoff was checked for the obsolete follow-up line ("fix
+  `app.execute()` so the `--kv-ssd-*` flags work directly — env-var launch is
+  the current stable workaround"): **grep found no such line in the current
+  `docs/HANDOFF.md`**, so no removal was needed; this addendum records Task 7
+  as the resolution.
+- `progress.md` was reconciled against the repository state on 2026-09-16
+  (see its "Documentation reconciliation audit" section): main @ `76054e3`,
+  clean tree, `swift test --filter HTTPServerTests` = 224 Swift Testing +
+  120 XCTest, all green (default invocation, no weight-gated tests).
