@@ -1993,3 +1993,48 @@ simdgroup-matrix, in-register dequant K-restructure) and micro-bench them
 candidate must show ≥2× sustained throughput on down_proj at M=512 within the
 accepted numeric bound, else stop and record the negative result (no engine
 touch).
+
+## FFP4 — FFN prefill GEMM kill-switch (relaxed bit-exactness): **NO-GO**
+
+Reopened the FFP1 NO-GO under a scoped bit-exactness relaxation (policy v2,
+contract §0): FFN GEMMs at prefill widths (M ≥ 256) may differ from `quantizedMM`
+by a few ulp, enabling tiling changes (split-K). Gate: a candidate must hit ≥ 2×
+sustained throughput at M=512 within tolerance, else stop with a negative result.
+
+**Result: NO-GO.** The FFP4 kill-switch was run via `qmvbench --ffn-prefill
+--ffn-cand` (5 candidates: incumbent, splitk2/4/8, bf16_gemm; tolerance at
+M=256/512/1024/8192; interleaved DVFS-fair timing at M=512, 2 reps):
+
+| Candidate   | Rep 1 speedup | Rep 2 speedup |
+|-------------|--------------:|--------------:|
+| splitk2_qmm | 0.87x         | 0.88x         |
+| splitk4_qmm | 0.82x         | 0.83x         |
+| splitk8_qmm | 0.71x         | 0.73x         |
+| bf16_gemm   | 0.67x         | 0.69x         |
+
+**Every candidate is *slower* than the incumbent** (none even reaches 1.0×, let
+alone 2×). More K-splits are monotonically slower (splitk8 < splitk4 < splitk2):
+the extra kernel launches + fp32 cross-split accumulation cost more than the
+K-parallelism gain. The M=512 down_proj slowness is a fundamental small-M/large-K
+GEMM property of the Metal quantized engine, not a tiling artifact — **split-K
+cannot capture the 10× headroom**. This extends FFP1's NO-GO: the bit-exactness
+relaxation does not open a viable kernel fix.
+
+- **Tolerance:** all split-K candidates ≈99% of elements within 8 ulp (the
+  `maxRel`/`maxRelUlp` columns are inflated by near-zero reference denominators —
+  a GEMM metric artifact, not a correctness issue). `bf16_gemm` (the slowest
+  candidate) hit a bf16 NaN at M=1024 (large-K reference overflow); irrelevant to
+  the split-K verdict.
+- **Decision:** **FFP5 (engine integration), FFP6 (model-level audit), FFP7
+  (A/B matrix) NOT pursued.** FFP1 NO-GO stands, confirmed under policy v2. The
+  M=512 down_proj inefficiency remains a known, quantified limitation with no
+  kernel-side fix.
+- **Bugs fixed in `qmvbench` FFP4 path:** (1) format string `%-14s`/`%s`/`%d` →
+  `%@`/`%lld` (Swift String/Int bridging; the `%s` on a Swift String crashed in
+  `strlen`); (2) `best.meanUs` initialized to `Double.infinity` (was 0.0, so the
+  summary line never updated).
+- **Reports/docs:** `benchmarks/results/ffp4/ffp4-report.md` (NO-GO),
+  `docs/PREFILL-FFN-KERNEL.md` (status → NO-GO), contract §0 (policy v2).
+- **Reproduce:** `cd ../mlx-swift-lm && swift build --product qmvbench -c release &&
+  ./.build/arm64-apple-macosx/release/qmvbench --ffn-prefill --ffn-cand --ffn-ms 512
+  --ffn-batch 4 --ffn-wall 15`

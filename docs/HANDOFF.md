@@ -1,7 +1,38 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: FFP1 FFN prefill GEMM kill-switch — NO-GO for a bit-exact kernel (2026-09-17).**
+**COMPLETE: FFP4 FFN prefill GEMM kill-switch (relaxed bit-exactness) — NO-GO (2026-09-17).**
+
+Objective: reopen the FFP1 NO-GO under a scoped bit-exactness relaxation (policy
+v2, contract §0): FFN GEMMs at prefill widths (M ≥ 256) may differ from
+`quantizedMM` by a few ulp, enabling tiling changes (split-K). Gate: a candidate
+must hit ≥ 2× sustained throughput at M=512 within tolerance, else stop with a
+negative result.
+
+**Finding (stable, 2 reps, `qmvbench --ffn-prefill --ffn-cand`):** every candidate
+is *slower* than the incumbent down_proj at M=512 — splitk2 0.87–0.88×, splitk4
+0.82–0.83×, splitk8 0.71–0.73×, bf16_gemm 0.67–0.69×. More K-splits are
+monotonically *slower* (extra kernel launches + fp32 cross-split accumulation
+outweigh the K-parallelism gain). No candidate reaches 2× (none even reaches 1.0×).
+
+**Decision: NO-GO.** The M=512 down_proj slowness is a fundamental small-M/
+large-K GEMM property of the Metal quantized engine, not a tiling artifact —
+**split-K cannot capture the 10× headroom**. This extends FFP1's NO-GO, now
+confirmed under the relaxed policy. **FFP5 (engine integration), FFP6 (model-level
+audit), FFP7 (A/B matrix) are NOT pursued.** FFP1 NO-GO stands.
+
+- **Engine (`mlx-swift-lm`):** `qmvbench` `--ffn-cand` mode (5 candidates,
+  tolerance at M=256/512/1024/8192, interleaved DVFS-fair kill-switch timing).
+  Bugs fixed: format-string `%s`→`%@` (Swift String crash), `best.meanUs` init.
+- **Server:** `benchmarks/results/ffp4/ffp4-report.md` (NO-GO),
+  `docs/PREFILL-FFN-KERNEL.md` (status → NO-GO), contract §0 (policy v2),
+  `progress.md` entry.
+- **Next step:** none for this task (valid negative result). A future FFN GEMM
+  win would need a fundamentally different approach (not tiling/split-K).
+
+---
+
+**Prior: COMPLETE: FFP1 FFN prefill GEMM kill-switch — NO-GO for a bit-exact kernel (2026-09-17).**
 
 Objective: reduce long-context prefill wall time by optimizing the FFN-phase
 4-bit GEMMs at the default 512-chunk prefill width (M=512). FFP1 is the cheap

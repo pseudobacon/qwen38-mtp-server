@@ -4,6 +4,11 @@ Central document for the prefill-FFN GEMM optimization: the FFP1 finding, the
 scoped bit-exactness relaxation that reopens it (policy v2), and the FFP4–FFP7
 plan.
 
+**Status:** FFP4 kill-switch **NO-GO** (best candidate 0.87–0.88× at M=512, gate
+requires ≥ 2×; all candidates *slower* than the incumbent). FFP1 NO-GO stands, now
+confirmed under the relaxed policy. FFP5/FFP6/FFP7 not pursued. See
+`benchmarks/results/ffp4/ffp4-report.md`.
+
 ## Background (established)
 
 - **FFP1 finding** (`benchmarks/results/ffp1/ffp1-report.md`): incumbent
