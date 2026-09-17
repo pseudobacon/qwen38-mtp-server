@@ -163,6 +163,22 @@ suite is green (MoE kernel loads); (3) then run the decode A/B matrix (essay-102
 specdec-800, 6 reps, both binary SHAs recorded) + 32K prefill regression cell + qmvbench
 M=1..9 + one step-trace cell, per the U2 plan in §5.
 
+### 7b. MET result (the follow-up, executed) — **unblocked; A/B INCONCLUSIVE (marginal)**
+
+The follow-up was executed (see `progress.md` MET section, `BUILD-MLX-UPGRADE.md`, and
+`scripts/build-metallib.sh`):
+- **Metallib unblocked durably.** `scripts/build-metallib.sh` builds the metallib via the CMake
+  `mlx-metallib` target for the pinned C++ MLX revision (`1f8e74e` = v0.32.2), cached per
+  revision, places it colocated (`<exe-dir>/mlx.metallib`, the first runtime search path), and
+  records provenance (SHA-256 `b57de586…`). A `check` mode is the stale-metallib detector.
+- **v0.32.2 kernels proven active.** The U2 crash case (`MoE … dot_product`) **PASSES** with the
+  fresh metallib; the release server starts clean (`readyz=200`).
+- **Decode A/B (cross-session, v0.32.2 vs v0.31.6 baselines):** essay 22.22 vs 21.89 (**+1.5%**),
+  specdec 23.56 vs 23.29 (**+1.1%**) — **below the 3% KEEP gate**. All correctness gates pass
+  (determinism/phaseSum/depthDist/acc all match incumbents). **INCONCLUSIVE** — marginal and
+  cross-session-thermal-confounded; a proper interleaved A/B is the definitive next step. If it
+  also shows <3%, the upgrade is a REJECT (keep v0.31.6).
+
 ## 8. MER2 result — interleaved A/B (v0.31.6 incumbent vs v0.32.2 upgrade)
 
 Both binaries built and provenance-recorded (engine production code identical on main vs
@@ -177,19 +193,21 @@ A/B matrix (rotating start), essay-1024 + specdec-800, 32K prefill cells.
 **Prefill (32K, pc=2048):** incumbent 144.06 s, upgraded 125.50 s → **-12.9%** (faster,
 within-noise gate satisfied); both sides content-hash `97bc0d74…` (deterministic).
 
-**Determinism gate: FAIL (incumbent side).**
+**Determinism gate: FAIL (incumbent side) — later root-caused as cache HIT/MISS (see ND).**
 - essay: both sides fully deterministic (12/12 reps = `949b9423…`).
-- specdec-inc (v0.31.6): r1 = `139acb9d…` (registry), r2 = `06882d85…` (diverged); 8/9 total
-  runs = `06882d85…`. **The incumbent is non-deterministic on specdec (pre-existing).**
+- specdec-inc (v0.31.6): r1 = `139acb9d…` (MISS), r2 = `06882d85…` (HIT); 8/9 total runs =
+  `06882d85…`. **The incumbent is non-deterministic on specdec (pre-existing — the cache
+  HIT/MISS, root-caused in ND1/ND2, NOT a decode-path regression).**
 - specdec-upg (v0.32.2): all runs = `139acb9d…` (deterministic, matches registry).
 - First-divergence inc(`0688`) vs upg(`139a`): char 4847/5150 (94% through), 94.5% similar —
   a knife-edge decision near the end of the stream.
 
-**Merge decision: STOP (do not merge).** Per the task gate, "If determinism fails on either
-side, STOP and report — do not merge." The incumbent (v0.31.6) is non-deterministic on specdec
-(a pre-existing issue, not a regression — the upgraded is *more* deterministic). The upgrade
-is strictly better on every axis (decode +7.7%, prefill -12.9%, determinism stable), but the
-strict determinism gate on the incumbent side is triggered.
+**Merge decision: SUPERSEDED by ND.** The initial STOP was based on the strict
+"determinism on either side" gate. ND1/ND2 root-caused the incumbent's non-determinism as the
+store-on-success prefix-cache HIT/MISS (per-prompt, persists across processes via SSD), which
+is the registered knife-edge family (gap ≤ 4 ulp, first flip 95 %). The gate was amended
+(policy v3 §0d: determinism is per cache state). The upgraded binary is deterministic at
+`139acb9d…` for BOTH cache states (fixing the split). **Merge proceeds (see progress.md MER3).**
 
 **Upstream issue filed:** the swift-testing `ParallelFileReader` fatal error (MER1.3) —
 C++ MLX `ParallelFileReader::thread_pool()` static `ThreadPool{4}` throws

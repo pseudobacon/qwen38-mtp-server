@@ -77,6 +77,39 @@ and
 
 ---
 
+## 0d. Cache-state dependence of the stream hash (2026-09-17) — determinism is per cache state
+
+The committed stream hash is a function of **both** the config **and** the prefix-cache
+state (MISS vs HIT), not the config alone. The store-on-success prefix cache
+(`RadixKVCacheManager`, RAM + `RadixSSDStore` SSD) replays a prompt-boundary
+KV/hidden snapshot on a HIT; the snapshot is a **different bf16 reduction path** than a
+fresh full prefill, so it can differ by ulps and flip the same knife-edge positions
+characterized in §0c. Root cause: ND1/ND2 (2026-09-17), `benchmarks/results/nd-specdec-*/`.
+
+**Determinism is therefore per cache state.** Same config + same cache state must
+reproduce an identical stream hash across reps. The two cache states of the specdec-800
+fixture:
+
+| cache state | incumbent v0.31.6 | upgraded v0.32.2 |
+|---|---|---|
+| cold / MISS (fresh prefill) | `139acb9d30fe…` | `139acb9d30fe…` |
+| warm / HIT (snapshot replay) | `06882d856267…` | `139acb9d30fe…` |
+
+The v0.32.2 routed-QMV prefill kernel makes the snapshot replay bit-identical to the full
+prefill, so the upgrade **fixes** the cold/warm split (the upgraded binary is deterministic
+at `139acb9d30fe…` for both states).
+
+**Gate amendment (MER3 gate 3).** The determinism gate is re-scoped from "identical stream
+hash across all reps" to **"no regression relative to the incumbent, measured per cache
+state"**: a binary PASSES if, for each cache state, its stream is a single stable knife-edge
+variant (gap ≤ 4 ulp, first flip in the accepted band) and is not a logic regression vs the
+incumbent's stream for that state. The v0.32.2 upgrade PASSES strictly (identical on
+MISS, strictly better on HIT). The SSD store persists across process restarts
+(`~/.qwen38-mtp/kv-ssd/`); a "fresh" server is a SSD HIT unless the store is cleared, so
+A/B matrices must clear the store (or pin the state) to isolate a single cache state.
+
+---
+
 ## 1. The two exactness regimes
 
 The speculative path is only ever used with one of two sampling configurations, and the

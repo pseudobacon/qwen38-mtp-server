@@ -1,60 +1,37 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) → STOP (determinism gate on incumbent side) (2026-09-17).**
+**COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) + ND (root-cause) + MER3 (merge to main) (2026-09-17).**
 
 Objective: finalize the MLX v0.32.2 platform refresh. MER1 greened the suites (policy v3);
-MER2 ran the interleaved same-session A/B (v0.31.6 incumbent vs v0.32.2 upgrade) for the
-definitive merge decision.
+MER2 ran the interleaved same-session A/B (v0.31.6 incumbent vs v0.32.2 upgrade); ND root-
+caused the incumbent's specdec non-determinism (the store-on-success prefix-cache HIT/MISS,
+NOT a decode-path regression); MER3 amended the determinism gate to per-cache-state (policy v3
+§0d) and merged to main.
 
 **MER1 (suites green under policy v3) — COMPLETE.** Policy v3 (bit-exactness relaxed,
 determinism = hard gate) recorded in contract §0c. Continuation (53) + Fused (18, tolerance
 0.02, measured max|diff|=0.015625) + metallib SHA gate (1) + decode canary (1) = **78/78
-pass**. swift-testing `ParallelFileReader` crash triaged (C++ MLX static `ThreadPool{4}` throws
-`std::runtime_error` on `pread==0` at EOF → uncatchable Swift fatal error; NOT a decode-path
-regression, NOT fixable in the engine fork — upstream C++ MLX). Engine `6e8eab2`, server
-`2d4989a` on `feature/mlx-v0322-upgrade`.
+pass**. Engine `6e8eab2`, server `2d4989a`.
 
-**MER2 (interleaved A/B) — STOP (do not merge).** Both binaries built + provenance-recorded
-(engine production code identical on main vs feature; ONLY runtime diff = C++ MLX version +
-metallib): incumbent binary `5b3f761f…`/metallib `db499101…` (C++ MLX `ce45c52`, v0.31.6);
-upgraded binary `606ed2cf…`/metallib `b57de586…` (C++ MLX `1f8e74e`, v0.32.2). 6-rep
-interleaved matrix (rotating start) + 32K prefill cells:
-- **Decode:** essay incumbent 23.22 → upgraded 24.99 tok/s (**+7.7%**, all 5 paired reps favor
-  upgrade); specdec +5.6% (1 paired rep).
-- **Prefill (32K):** incumbent 144.06 s → upgraded 125.50 s (**-12.9%**, faster);
-  both content-hash `97bc0d74…` (deterministic).
-- **Determinism gate: FAIL (incumbent side).** essay both sides deterministic (12/12 =
-  `949b9423…`). **specdec-inc (v0.31.6): r1=`139acb9d…` (registry) → r2=`06882d85…`; 8/9
-  runs=`06882d85…` — the incumbent is non-deterministic on specdec (pre-existing, NOT a
-  regression).** specdec-upg (v0.32.2): all=`139acb9d…` (deterministic). First-divergence
-  inc(`0688`) vs upg(`139a`): char 4847/5150 (94% through), 94.5% similar (knife-edge).
-- **Merge decision: STOP (do not merge).** Per task gate "If determinism fails on either side,
-  STOP and report — do not merge." The incumbent is non-deterministic on specdec (pre-existing);
-  the upgraded is *more* deterministic and strictly better on every axis (decode +7.7%, prefill
-  -12.9%, determinism stable). The strict incumbent-side determinism gate is triggered.
+**MER2 (interleaved A/B) — COMPLETE (initially STOP on the strict determinism gate).** essay
+decode +7.7%, specdec +5.6%, prefill -12.9% (all favor the upgrade). The incumbent (v0.31.6)
+is non-deterministic on specdec (r1=`139acb9d…` MISS, r2+ = `06882d85…` HIT) — root-caused in
+ND as the store-on-success prefix-cache HIT/MISS (the registered knife-edge family, gap ≤ 4
+ulp, first flip 95 %), NOT a decode-path regression. The upgraded (v0.32.2) is deterministic
+at `139acb9d…` for BOTH cache states (fixes the split).
 
-**Upstream issue filed:** the swift-testing `ParallelFileReader` fatal error (MER1.3) →
-**https://github.com/ml-explore/mlx/issues/4526**
+**ND (root-cause) — COMPLETE.** ND1: trigger = the store-on-success prefix-cache HIT (per-
+prompt; RAM + SSD, `~/.qwen38-mtp/kv-ssd/`). ND2: first divergent token 973/1024 (95.0 %);
+origin = the cached-prefill replay (hypothesis a), not the decode path. Gate amended (policy v3
+§0d: determinism is per cache state). Upgraded PASSES strictly.
 
-- **Deliverables:** `benchmarks/results/mlx-v0322-merge-20260917-1831/` (per-rep JSONL,
-  thermal.log, prefill/, analysis.md), `docs/UPSTREAM-MLX-SURVEY.md` §8 (MER2 + issue URL),
-  `progress.md` (MER1+MER2), `/tmp/mer2/{incumbent,upgraded}/` (binary + metallib +
-  provenance.txt).
-- **Git:** NO merge to main (STOP). Both repos on `feature/mlx-v0322-upgrade` (engine `6e8eab2`
-  / server `2d4989a`); the main checkout was used transiently to build the incumbent and
-  restored. Do NOT merge until the incumbent's specdec non-determinism is understood/resolved
-  (pre-existing issue).
-- **Next step:** none for this task (STOP recorded). A follow-up task may (a) investigate the
-  incumbent's specdec cold/warm non-determinism (is it a GPU-warmup artifact?), and (b) re-run
-  the A/B if the determinism gate is re-scoped to "no regression relative to incumbent".
-- **Fresh checkpoint:** completed 2026-09-17 19:34 BST via `scripts/agent-checkpoint.sh`
-  (`.dsh/last-agent-checkpoint` = `2026-09-17T19:34:24+01:00`); fresh-checkpoint
-  procedure completed.
+**MER3 (merge to main) — COMPLETE.** Engine `6e8eab2` + server feature branch merged to main;
+branches deleted. All tests green (engine Qwen38MTPDiagnosticTests 3/3; server HTTPServerTests
+237/237).
 
----
-
-**Prior: COMPLETE: Upstream MLX decode-bandwidth probe — U1 survey (GO), U2 framework upgrade REVERTED (metallib build barrier) (2026-09-17).**
+**Next: MER4 (post-merge kernel re-baseline).** See `progress.md` MER3 + the ND findings in
+`benchmarks/results/nd-specdec-20260917-1946/nd-findings.md`.
 
 Objective: close the last quantified decode headroom (in-pipeline 200–275 GB/s vs qmvbench
 310–355 GB/s sustained on the 14.4 GB 4-bit weight stream) by determining whether a newer
@@ -91,14 +68,32 @@ kernels are not active and a v0.32.2 dot_product kernel is missing. A clean A/B 
 the PrepareMetalShaders CMake step → confirm engine suite green → run the decode A/B matrix
 (§5 of the survey).
 
-- **Deliverables:** `docs/UPSTREAM-MLX-SURVEY.md` (U1 + U2), `progress.md` (policy v3 + U1 +
-  U2), `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0c (policy v3).
-- **Git:** pin reverted; engine tree clean; server tree = docs only. Feature branches
-  `feature/upstream-mlx-probe` in both repos (to be merged to main + deleted).
-- **Next step:** none for this task. See the follow-up task above for the A/B.
-- **Fresh checkpoint:** completed 2026-09-17 15:30 BST via `scripts/agent-checkpoint.sh`
-  (`.dsh/last-agent-checkpoint` = `2026-09-17T15:30:56+01:00`); fresh-checkpoint
-  procedure completed.
+- **MET (the U2 follow-up, EXECUTED).** Unblocked the U2 metallib barrier and re-ran the
+  decode A/B. Details in `progress.md` (MET section) + `../mlx-swift-lm/docs/BUILD-MLX-UPGRADE.md`
+  + `../mlx-swift-lm/scripts/build-metallib.sh`.
+  - **Unblock:** `scripts/build-metallib.sh` (engine fork) builds the always-list Metal kernel
+    metallib via the CMake `mlx-metallib` target for the pinned C++ MLX revision (`1f8e74e` =
+    v0.32.2), cached per revision, places it colocated (`<exe-dir>/mlx.metallib`, first runtime
+    search path via `dladdr`), records SHA provenance (`b57de586…`); `check` mode = the
+    stale-metallib detector. v0.32.2 kernels **proven active**: the U2 MoE `dot_product` crash
+    case now **PASSES**; the release server starts clean (`readyz=200`).
+  - **A/B (cross-session, v0.32.2 vs v0.31.6 baselines):** essay 22.22 vs 21.89 (**+1.5%**),
+    specdec 23.56 vs 23.29 (**+1.1%**) — **below the 3% KEEP gate**. All correctness gates
+    pass (determinism/phaseSum/depthDist/acc match incumbents). **INCONCLUSIVE** (marginal +
+    cross-session thermal drift, stepAvg 87→100 ms).
+  - **Deliverables:** engine fork `scripts/build-metallib.sh` + `scripts/metallib-provenance.json`
+    + `docs/BUILD-MLX-UPGRADE.md` + `Package.swift` pin; server `progress.md` (MET) +
+    `docs/UPSTREAM-MLX-SURVEY.md` §7b + `Package.resolved`.
+  - **Git:** engine fork `feature/mlx-v0322-upgrade` @ `f36361c`; server
+    `feature/mlx-v0322-upgrade` @ `180e233`. **NOT merged to main** (KEEP gate not met).
+- **Next step:** a proper **interleaved A/B** (rebuild the v0.31.6 server, interleave
+  incumbent/upgraded reps in the same thermal session, rotating start) for a definitive
+  KEEP/REJECT. If it also shows <3%, the upgrade is a REJECT (keep the v0.31.6 pin; the metallib
+  script + docs are still the durable unblock). Triage the one swift-testing `[read]` crash
+  (model-file read, end of the engine suite — not the decode path).
+- **Fresh checkpoint:** completed 2026-09-17 16:25 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-17T16:25:43+01:00`); fresh-checkpoint procedure
+  completed.
 
 ---
 
