@@ -48,7 +48,9 @@ interleaved matrix (rotating start) + 32K prefill cells:
 - **Next step:** none for this task (STOP recorded). A follow-up task may (a) investigate the
   incumbent's specdec cold/warm non-determinism (is it a GPU-warmup artifact?), and (b) re-run
   the A/B if the determinism gate is re-scoped to "no regression relative to incumbent".
-- **Fresh checkpoint:** recorded at end of this task via `scripts/agent-checkpoint.sh`.
+- **Fresh checkpoint:** completed 2026-09-17 19:34 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-17T19:34:24+01:00`); fresh-checkpoint
+  procedure completed.
 
 ---
 
