@@ -20,6 +20,10 @@ PROMPT_FILE=$4
 EXTRA_ARGS=${5:-}
 EXPECT_HEAD=${6:-}
 MAX_TOKENS=${7:-1024}
+# MER4.0 cache-state control: MISS (clear SSD + fresh server) | RAM-HIT (fresh server + prime RAM).
+# The prefix cache is RAM (in-process) + SSD (cross-process, ~/.qwen38-mtp/kv-ssd/), so a
+# "fresh server" is NOT cold state — the SSD persists. Force a controlled, per-rep state.
+CACHE_STATE=${8:-MISS}
 
 SERVER=/Users/cwong/ai/qwen38-mtp-server
 cd "$SERVER" || exit 1
@@ -54,6 +58,31 @@ REQUEST=/tmp/mtp-bench-$TAG.request.json
 
 rm -f "$STDERR_LOG" "$STDOUT_LOG" "$RESPONSE" "$REQUEST"
 
+# --- cache-state control (MER4.0) -----------------------------------------
+# MISS: clear the SSD + fresh server (no RAM cache) -> full prefill by construction.
+SSD_DIR=$HOME/.qwen38-mtp/kv-ssd
+if [ "$CACHE_STATE" = "MISS" ]; then
+  rm -rf "$SSD_DIR" 2>/dev/null
+fi
+
+# request body: prompt read from the fixture file at request time (no inline copy).
+# Created before the server starts so the RAM-HIT priming request can reuse it.
+/tmp/benchvenv/bin/python - "$PROMPT_FILE" "$REQUEST" "$MAX_TOKENS" <<'PYEOF'
+import json, sys
+prompt = open(sys.argv[1]).read()
+body = {
+    "model": "qwen3.8-27b-mtp",
+    "messages": [{"role": "user", "content": prompt}],
+    "max_tokens": int(sys.argv[3]),
+    "temperature": 0,
+    "top_k": 1,
+    "mtp_enabled": True,
+    "enable_thinking": False,
+    "stream": False,
+}
+open(sys.argv[2], "w").write(json.dumps(body))
+PYEOF
+
 # never run against a stale server holding the port
 pkill -f "qwen38-mtp-server serve --port $PORT" 2>/dev/null
 sleep 1
@@ -81,22 +110,14 @@ if [ "$CODE" != "200" ]; then
   exit 1
 fi
 
-# request body: prompt read from the fixture file at request time (no inline copy)
-/tmp/benchvenv/bin/python - "$PROMPT_FILE" "$REQUEST" "$MAX_TOKENS" <<'PYEOF'
-import json, sys
-prompt = open(sys.argv[1]).read()
-body = {
-    "model": "qwen3.8-27b-mtp",
-    "messages": [{"role": "user", "content": prompt}],
-    "max_tokens": int(sys.argv[3]),
-    "temperature": 0,
-    "top_k": 1,
-    "mtp_enabled": True,
-    "enable_thinking": False,
-    "stream": False,
-}
-open(sys.argv[2], "w").write(json.dumps(body))
-PYEOF
+# RAM-HIT: prime the in-process RAM cache with one throwaway request (SSD cleared so the
+# priming hit is a pure RAM store, not an SSD promotion). The measured request below is
+# then a guaranteed RAM hit — never mixed with a MISS in the same cell.
+if [ "$CACHE_STATE" = "RAM-HIT" ]; then
+  rm -rf "$SSD_DIR" 2>/dev/null
+  curl -s --max-time 900 "http://127.0.0.1:$PORT/v1/chat/completions" \
+    -H 'Content-Type: application/json' -d @"$REQUEST" -o /dev/null -w '' > /dev/null 2>&1
+fi
 
 WALL_SECONDS=$(curl -s --max-time 900 "http://127.0.0.1:$PORT/v1/chat/completions" \
   -H 'Content-Type: application/json' \
@@ -108,13 +129,21 @@ pkill -f "qwen38-mtp-server serve --port $PORT" 2>/dev/null
 wait $SRV 2>/dev/null
 
 /tmp/benchvenv/bin/python - "$TAG" "$STDERR_LOG" "$STDOUT_LOG" "$RESPONSE" "$REQUEST" "$PROMPT_FILE" "$FIXTURE_HASH" "$WALL_SECONDS" \
-  "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" "$EXPECT_HEAD" "$MAX_TOKENS" <<'PYEOF'
+  "$BIN_SHA256" "$BIN_MTIME" "$SERVER_HEAD" "$ENGINE_HEAD" "$SERVER_DIRTY" "$ENGINE_DIRTY" "$EXPECT_HEAD" "$MAX_TOKENS" "$CACHE_STATE" <<'PYEOF'
 import json, sys, hashlib
 
 tag, stderr_log, stdout_log, response, request, prompt_file, fixture_hash, wall_seconds = sys.argv[1:9]
 bin_sha256, bin_mtime, server_head, engine_head, server_dirty, engine_dirty = sys.argv[9:15]
 max_tokens = int(sys.argv[16]) if len(sys.argv) > 16 else 1024
 expect_head = sys.argv[15] if len(sys.argv) > 15 else ""
+cache_state = sys.argv[17] if len(sys.argv) > 17 else "MISS"
+# Verify the controlled cache state from the server log: an SSD promotion logs
+# "Lazy-loaded radix prefix (N tokens) from SSD tier"; a RAM/MISS cell never does.
+ssd_promoted = False
+for line in open(stderr_log, errors="replace"):
+    if "Lazy-loaded radix prefix" in line:
+        ssd_promoted = True
+        break
 out = {
     "tag": tag,
     "fixture_hash": fixture_hash,
@@ -124,6 +153,8 @@ out = {
     "engine_head": engine_head,
     "server_dirty": server_dirty,
     "engine_dirty": engine_dirty,
+    "cache_state": cache_state,
+    "cache_ssd_promoted": ssd_promoted,
 }
 
 try:

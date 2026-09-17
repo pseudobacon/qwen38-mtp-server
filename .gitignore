@@ -21,3 +21,7 @@ default.metallib
 # DeepSeek Harness
 .dsh/
 .tmp/.build-incumbent/
+
+# Incumbent scratch build (MER2 A/B) + generic tmp
+.build-incumbent/
+.tmp/

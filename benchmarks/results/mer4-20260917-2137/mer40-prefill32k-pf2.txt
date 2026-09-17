@@ -1,0 +1,1 @@
+PF2 prefill wall_ms=132480.53 total_ms=132445.71 ffn_ms=62710.50 gdn_ms=29232.19 attn_ms=38110.22 sdpa_ms=29963.88 qkv_ms=4791.95 oproj_ms=2706.36 rope_ms=638.78 norm_ms=1485.83 residual_ms=906.98 nfull=256 ngdn=768STEP-TRACE round=1 d=2 acc=2 tGraphBuildMs=11583.748 tEvalMs=15851.804 tHostReadMs=0.292 tCacheStateMs=0.882 stepMs=27436.726

@@ -1,13 +1,23 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) + ND (root-cause) + MER3 (merge to main) (2026-09-17).**
+**COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) + ND (root-cause) + MER3 (merge to main) + MER4 (post-merge kernel re-baseline) (2026-09-17).**
 
 Objective: finalize the MLX v0.32.2 platform refresh. MER1 greened the suites (policy v3);
 MER2 ran the interleaved same-session A/B (v0.31.6 incumbent vs v0.32.2 upgrade); ND root-
 caused the incumbent's specdec non-determinism (the store-on-success prefix-cache HIT/MISS,
 NOT a decode-path regression); MER3 amended the determinism gate to per-cache-state (policy v3
-§0d) and merged to main.
+§0d) and merged to main; MER4 re-baselined the v0.32.2 kernels at our geometry (post-merge).
+
+**MER4 (post-merge kernel re-baseline) — COMPLETE.** Only qmv_wide/M5-batch engage at our
+geometry (verify-width M=1..9 profile **unchanged** vs v0.31.1); the split-K matmul does NOT
+close the FFN M=512 down_proj anomaly (persists at 9.818 µs/tok, 3.4× the M=1024 2.857 —
+**pc=2048 NOT stale**, no re-sweep); gqa-8 (our GQA 6) and NVFP4 (M5 Pro) are unreachable. In-
+pipeline BW = 176.6 GB/s vs 310–355 GB/s sustained — the gap PERSISTS, so the decode ceiling
+is per-dispatch/state-bound (next lever = scheduling, not kernels). Controlled-protocol
+verification: essay decode + 32K prefill both reproduce the registered values. `run_cell.sh`
+now takes a `CACHE_STATE` arg (MISS/RAM-HIT) + records `cache_ssd_promoted`. Engagement map +
+ranked next tasks → `docs/V0322-KERNEL-BASELINE.md`. Run `mer4-20260917-2137`.
 
 **MER1 (suites green under policy v3) — COMPLETE.** Policy v3 (bit-exactness relaxed,
 determinism = hard gate) recorded in contract §0c. Continuation (53) + Fused (18, tolerance
@@ -449,26 +459,23 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
-**FFP4 fresh-checkpoint procedure COMPLETED 2026-09-17 09:46 BST** (exit 0).
-Server `main` @ `8a055a3` (tree clean, `git diff --check` clean); engine
-`main` @ `c575e19` (tree clean). `qmvbench` `--ffn-cand` NO-GO (2 reps);
-engine `Qwen38MTPDiagnosticTests` 3/3. FFP4 NO-GO recorded; FFP5/FFP6/FFP7 not
-pursued.
+**MER4 fresh checkpoint: PENDING (record the timestamp below after `scripts/agent-checkpoint.sh`).**
+Server `main` (MER3 @ `628c0fc` + MER4 docs/progress); engine `main` @ `6e8eab2` (clean).
 
-Prior — Cross-lineage port checkpoint: server on `feature/port-radix-ssd`
-(Phases 0–5 complete), engine `mlx-swift-lm` @ `6fa481d` (restored,
-`restoreKVCacheState`). `swift test --filter HTTPServerTests` = 237 Swift
-Testing, all green; E2E restart benchmark PASS. (Prior LCP checkpoint:
-`2026-09-15T19:21:15+00:00`, server `b4374be`, engine `62c4ac7`.)
+MER4 (post-merge kernel re-baseline) COMPLETE — engagement map
+`docs/V0322-KERNEL-BASELINE.md`. Run `mer4-20260917-2137`.
+
+Prior — MER3 merge checkpoint: `2026-09-17T21:18:43+01:00` (server `main` @
+`628c0fc`, engine `main` @ `6e8eab2`, both clean). FFP4 checkpoint `2026-09-17
+09:46 BST` (server `8a055a3`, engine `c575e19`).
 
 ## Next step (exact)
-None outstanding for the port. Commit `feature/port-radix-ssd` to `main` (server
-repo) after the final `git diff --check` and a clean full-suite run; the engine
-fork change (`6fa481d`) is already committed and must be merged/landed before
-any server-side code that depends on `restoreKVCacheState` is published.
-
-**Prior LCP next step (closed):** Phase I (chunked causal prefill) complete;
-all gates green (engine KVCache 118/118 + MTP diagnostic 3/3, server 224/224).
+**None outstanding for the MLX v0.32.2 platform refresh (MER1–MER4 all COMPLETE).** The
+ranked follow-on (NOT part of this refresh — a separate task) is the in-pipeline scheduling
+lever from `docs/V0322-KERNEL-BASELINE.md`: the decode weight-stream BW is per-
+dispatch/state-bound (176.6 GB/s in-pipeline vs 310–355 GB/s sustained), so the next lever,
+if pursued, is batched/fused dispatch + state amortization across MTP steps — scheduling,
+not a new GEMM kernel.
 
 ## 2026-09-16 addendum — Task 7 resolution + reconciliation audit
 

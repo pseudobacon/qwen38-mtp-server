@@ -2286,3 +2286,51 @@ swift-testing `ParallelFileReader` fatal error (MER1.3) →
 - `benchmarks/results/nd-specdec-20260917-1946/` (ND1/ND2 findings)
 - `/tmp/mer2/incumbent/` + `/tmp/mer2/upgraded/` (binary + metallib + provenance.txt)
 - `docs/UPSTREAM-MLX-SURVEY.md` §7b + §8 (MET + MER2 results + issue URL)
+
+## 2026-09-17: MER4 — Post-merge kernel re-baseline on MLX v0.32.2 (COMPLETE)
+
+Map which v0.32.2 kernel changes actually engage at our geometry, measure their effect, and
+re-check the config decisions (pc, QMV thresholds) that were optimized against v0.31.6 kernel
+behavior. No speculative work — only measurements that change a decision. Run ID
+`mer4-20260917-2137`.
+
+### MER4.0 — Benchmark cache hygiene (harness)
+- `run_cell.sh` now takes an 8th arg `CACHE_STATE` (default `MISS`):
+  - `MISS`: clear `~/.qwen38-mtp/kv-ssd/` + fresh server (no RAM cache) → full prefill by
+    construction.
+  - `RAM-HIT`: fresh server + one throwaway priming request → guaranteed RAM hit by
+    construction (SSD cleared so the prime is a pure RAM store, not an SSD promotion).
+- Per-rep recording: `cache_state` (controlled value) + `cache_ssd_promoted` (verified from
+  the server's `Lazy-loaded radix prefix (N tokens) from SSD tier` log line) in the cell JSON.
+- Re-verify one essay decode + one 32K prefill cell under the controlled protocol (reproduce
+  the registered values) before proceeding to the re-baseline.
+
+### MER4A — qmvbench sustained re-baseline (v0.32.2)
+- **MER4A.1 (verify-width M=1..9): DONE — UNCHANGED.** Sustained `wide_global`: M=1 wash
+  (0.94→0.97x), M=2..9 routed wins (1.18–1.55x) — identical profile to v0.31.1. The QMV
+  dispatch threshold does NOT need re-tuning. (`mer4a1-verify-comparison.md`.)
+- **MER4A.2 (FFN M-curve M=512..8192): DONE — anomaly PERSISTS.** M=512 down_proj = 9.818
+  µs/tok vs 2.857 at M=1024 (3.4×) — the upstream split-K did NOT close the small-M/large-K
+  tiling anomaly. The curve did NOT flatten; interior minimum still at M=1024. **pc=2048 NOT
+  stale.** (`mer4a2-ffn-mcurve-comparison.md`.)
+- **MER4A.3 (ffn-check, dequant reference): DONE.** M=512 bit-exact (max|diff|=0.0);
+  M=1024/2048 dequant-ref overflow (test artifact). No tolerance concern.
+
+### MER4B — In-pipeline attribution (one essay decode cell, controlled state) — DONE
+- tEvalAvg=81.6 ms (reproduces MER2's 80.7). **In-pipeline BW = 14.4 GB / 81.6 ms = 176.6
+  GB/s** vs 310–355 GB/s sustained. Gap PERSISTS on the v0.32.2 kernels → ceiling is
+  **per-dispatch/state-bound**; decode-bandwidth question closes with a mechanism (next lever
+  = scheduling, not kernels).
+
+### MER4C — Conditional config re-checks (only if MER4A moved) — DONE, both CLOSED
+- pc sweep NOT triggered (M-curve did not flatten); QMV threshold NOT re-tuned (profile
+  unchanged). **pc=2048 stands.** No sweep.
+
+### MER4D — Engagement map + ranked next tasks — DONE → `docs/V0322-KERNEL-BASELINE.md`
+- Only qmv_wide/M5-batch engage (profile unchanged); split-K does NOT close the anomaly;
+  gqa-8 (our GQA 6) and NVFP4 (M5 Pro) unreachable. No new kernel lever at our geometry.
+
+### MER4.0 — Verification (controlled protocol) — DONE
+- essay decode: ttlt=25.65 (registered 24.99), tEval=81.6 ms (registered 80.7), stream hash
+  `949b9423` EXACT. 32K prefill: wall=132.5 s (registered 125.50 s, Δ+5.6%), prompt_tokens=
+  32780 EXACT, cache_state=MISS controlled. **All reproduce.** (`mer40-verification.md`.)
