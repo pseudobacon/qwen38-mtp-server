@@ -162,3 +162,19 @@ CMake step to regenerate `default.metallib` for C++ MLX v0.32.2; (2) confirm the
 suite is green (MoE kernel loads); (3) then run the decode A/B matrix (essay-1024 +
 specdec-800, 6 reps, both binary SHAs recorded) + 32K prefill regression cell + qmvbench
 M=1..9 + one step-trace cell, per the U2 plan in §5.
+
+### 7b. MET result (the follow-up, executed) — **unblocked; A/B INCONCLUSIVE (marginal)**
+
+The follow-up was executed (see `progress.md` MET section, `BUILD-MLX-UPGRADE.md`, and
+`scripts/build-metallib.sh`):
+- **Metallib unblocked durably.** `scripts/build-metallib.sh` builds the metallib via the CMake
+  `mlx-metallib` target for the pinned C++ MLX revision (`1f8e74e` = v0.32.2), cached per
+  revision, places it colocated (`<exe-dir>/mlx.metallib`, the first runtime search path), and
+  records provenance (SHA-256 `b57de586…`). A `check` mode is the stale-metallib detector.
+- **v0.32.2 kernels proven active.** The U2 crash case (`MoE … dot_product`) **PASSES** with the
+  fresh metallib; the release server starts clean (`readyz=200`).
+- **Decode A/B (cross-session, v0.32.2 vs v0.31.6 baselines):** essay 22.22 vs 21.89 (**+1.5%**),
+  specdec 23.56 vs 23.29 (**+1.1%**) — **below the 3% KEEP gate**. All correctness gates pass
+  (determinism/phaseSum/depthDist/acc all match incumbents). **INCONCLUSIVE** — marginal and
+  cross-session-thermal-confounded; a proper interleaved A/B is the definitive next step. If it
+  also shows <3%, the upgrade is a REJECT (keep v0.31.6).
