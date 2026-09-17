@@ -43,7 +43,9 @@ the PrepareMetalShaders CMake step → confirm engine suite green → run the de
 - **Git:** pin reverted; engine tree clean; server tree = docs only. Feature branches
   `feature/upstream-mlx-probe` in both repos (to be merged to main + deleted).
 - **Next step:** none for this task. See the follow-up task above for the A/B.
-- **Fresh checkpoint:** <PENDING>
+- **Fresh checkpoint:** completed 2026-09-17 15:30 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-17T15:30:56+01:00`); fresh-checkpoint
+  procedure completed.
 
 ---
 
