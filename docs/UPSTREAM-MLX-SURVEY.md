@@ -162,3 +162,36 @@ CMake step to regenerate `default.metallib` for C++ MLX v0.32.2; (2) confirm the
 suite is green (MoE kernel loads); (3) then run the decode A/B matrix (essay-1024 +
 specdec-800, 6 reps, both binary SHAs recorded) + 32K prefill regression cell + qmvbench
 M=1..9 + one step-trace cell, per the U2 plan in §5.
+
+## 8. MER2 result — interleaved A/B (v0.31.6 incumbent vs v0.32.2 upgrade)
+
+Both binaries built and provenance-recorded (engine production code identical on main vs
+feature; the ONLY runtime difference is the C++ MLX version + metallib). 6-rep interleaved
+A/B matrix (rotating start), essay-1024 + specdec-800, 32K prefill cells.
+
+**Decode throughput** (rep 1 discarded as warmup):
+- essay: incumbent mean 23.22 tok/s, upgraded 24.99 tok/s → **mean +7.7%** (all 5 paired
+  reps favor the upgrade).
+- specdec: only 1 measured paired rep each (matrix stopped at the determinism gate) → +5.6%.
+
+**Prefill (32K, pc=2048):** incumbent 144.06 s, upgraded 125.50 s → **-12.9%** (faster,
+within-noise gate satisfied); both sides content-hash `97bc0d74…` (deterministic).
+
+**Determinism gate: FAIL (incumbent side).**
+- essay: both sides fully deterministic (12/12 reps = `949b9423…`).
+- specdec-inc (v0.31.6): r1 = `139acb9d…` (registry), r2 = `06882d85…` (diverged); 8/9 total
+  runs = `06882d85…`. **The incumbent is non-deterministic on specdec (pre-existing).**
+- specdec-upg (v0.32.2): all runs = `139acb9d…` (deterministic, matches registry).
+- First-divergence inc(`0688`) vs upg(`139a`): char 4847/5150 (94% through), 94.5% similar —
+  a knife-edge decision near the end of the stream.
+
+**Merge decision: STOP (do not merge).** Per the task gate, "If determinism fails on either
+side, STOP and report — do not merge." The incumbent (v0.31.6) is non-deterministic on specdec
+(a pre-existing issue, not a regression — the upgraded is *more* deterministic). The upgrade
+is strictly better on every axis (decode +7.7%, prefill -12.9%, determinism stable), but the
+strict determinism gate on the incumbent side is triggered.
+
+**Upstream issue filed:** the swift-testing `ParallelFileReader` fatal error (MER1.3) —
+C++ MLX `ParallelFileReader::thread_pool()` static `ThreadPool{4}` throws
+`std::runtime_error("[read] Unable to read from file.")` on `pread == 0` at EOF, crossing the
+C API as an uncatchable Swift fatal error. **https://github.com/ml-explore/mlx/issues/4526**

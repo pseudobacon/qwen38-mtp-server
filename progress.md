@@ -2205,3 +2205,48 @@ Attempted the pin bump `mlx-swift 0.31.6 → main 2bebe4e` (C++ MLX **v0.31.1 �
 - **Follow-up (separate task):** regenerate `default.metallib` for v0.32.2 via the
   PrepareMetalShaders CMake step → confirm engine suite green → then run the decode A/B matrix
   (§U2 plan in `docs/UPSTREAM-MLX-SURVEY.md` §5).
+
+## 2026-09-17: MLX v0.32.2 platform refresh — MER1 (green suites) + MER2 (interleaved A/B)
+
+### MER1 — Suites green under policy v3 (COMPLETE)
+- Policy v3 (bit-exactness relaxed, determinism = hard gate) recorded in contract §0c.
+- Continuation tests (53), Fused bit-exactness (18 → tolerance 0.02, measured max|diff|=0.015625),
+  metallib SHA gate (1), decode canary (1) — **78/78 pass**.
+- swift-testing `ParallelFileReader` crash triaged (MER1.3): C++ MLX static `ThreadPool{4}`
+  throws `std::runtime_error` on `pread==0` at EOF → uncatchable Swift fatal error. NOT a
+  decode-path regression; NOT fixable in the engine fork (upstream C++ MLX).
+- Engine `6e8eab2`, server `2d4989a` on `feature/mlx-v0322-upgrade`.
+
+### MER2 — Interleaved A/B (v0.31.6 incumbent vs v0.32.2 upgrade): **STOP (determinism gate)**
+Both binaries built + provenance-recorded (engine production code identical on main vs feature;
+ONLY runtime diff = C++ MLX version + metallib):
+- incumbent: binary `5b3f761f…`, metallib `db499101…` (C++ MLX `ce45c52`, v0.31.6)
+- upgraded: binary `606ed2cf…`, metallib `b57de586…` (C++ MLX `1f8e74e`, v0.32.2)
+
+6-rep interleaved matrix (rotating start), essay-1024 + specdec-800, 32K prefill cells:
+- **Decode:** essay incumbent 23.22 → upgraded 24.99 tok/s (**+7.7%**, all 5 paired reps favor
+  upgrade); specdec +5.6% (1 paired rep, matrix stopped at determinism gate).
+- **Prefill (32K):** incumbent 144.06 s → upgraded 125.50 s (**-12.9%**, faster, within-noise
+  gate satisfied); both content-hash `97bc0d74…` (deterministic).
+- **Determinism gate: FAIL (incumbent side).**
+  - essay: both sides deterministic (12/12 = `949b9423…`).
+  - **specdec-inc (v0.31.6): r1=`139acb9d…` (registry) → r2=`06882d85…`; 8/9 runs=`06882d85…`.
+    The incumbent is non-deterministic on specdec (pre-existing, NOT a regression).**
+  - specdec-upg (v0.32.2): all = `139acb9d…` (deterministic, matches registry).
+  - First-divergence inc(`0688`) vs upg(`139a`): char 4847/5150 (94% through), 94.5% similar —
+    knife-edge decision near the stream end.
+- **Merge decision: STOP (do not merge).** Per task gate "If determinism fails on either side,
+  STOP and report — do not merge." The incumbent (v0.31.6) is non-deterministic on specdec
+  (pre-existing); the upgraded is *more* deterministic. The upgrade is strictly better on every
+  axis (decode +7.7%, prefill -12.9%, determinism stable), but the strict incumbent-side
+  determinism gate is triggered.
+
+### Upstream issue filed
+swift-testing `ParallelFileReader` fatal error (MER1.3) →
+**https://github.com/ml-explore/mlx/issues/4526**
+
+### Artifacts
+- `benchmarks/results/mlx-v0322-merge-20260917-1831/` (per-rep JSONL, thermal.log, prefill/,
+  analysis.md)
+- `/tmp/mer2/incumbent/` + `/tmp/mer2/upgraded/` (binary + metallib + provenance.txt)
+- `docs/UPSTREAM-MLX-SURVEY.md` §8 (MER2 result + issue URL)

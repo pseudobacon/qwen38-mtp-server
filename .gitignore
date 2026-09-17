@@ -20,4 +20,4 @@ default.metallib
 
 # DeepSeek Harness
 .dsh/
-.tmp/
+.tmp/.build-incumbent/
