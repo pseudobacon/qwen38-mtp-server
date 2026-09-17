@@ -1,7 +1,21 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Upstream MLX decode-bandwidth probe — U1 survey (GO), U2 REVERTED (metallib barrier), MET: metallib UNBLOCKED + v0.32.2 decode A/B INCONCLUSIVE (2026-09-17).**
+**MER1 COMPLETE (2026-09-17): suites green under policy v3 (continuation + Fused + metallib SHA gate). MER2-MER4 pending.**
+
+MER (finalize v0.32.2 as a platform refresh; KEEP gate superseded by a platform-upgrade
+decision). **MER1 = green the suites (merge blocker) — DONE**: continuation tests (24
+methods) + Fused QKV/SwiGLU verify-shape (2 methods) converted to policy v3 (determinism
+hard gate + justified tolerance bounds), metallib SHA gate wired into the suite
+(`MetallibProvenanceTests`), all 78 changed/canary tests pass. The swift-testing `[read]`
+crash is triaged as a non-deterministic upstream C++ MLX parallel-file-reader issue (not a
+decode-path regression, not fixable in the engine fork). Engine commit `6e8eab2`, server
+commit `0df4a90` on `feature/mlx-v0322-upgrade`. **Next: MER2** (interleaved A/B — rebuild
+v0.31.6 incumbent, interleave in the same thermal session) → MER3 (merge to main) → MER4
+(post-merge kernel re-baseline).
+
+---
+**Prior: U1 survey (GO), U2 REVERTED (metallib barrier), MET: metallib UNBLOCKED + v0.32.2 decode A/B INCONCLUSIVE (2026-09-17).**
 
 Objective: close the last quantified decode headroom (in-pipeline 200–275 GB/s vs qmvbench
 310–355 GB/s sustained on the 14.4 GB 4-bit weight stream) by determining whether a newer
