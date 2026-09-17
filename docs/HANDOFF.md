@@ -459,8 +459,10 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
-**MER4 fresh checkpoint: PENDING (record the timestamp below after `scripts/agent-checkpoint.sh`).**
-Server `main` (MER3 @ `628c0fc` + MER4 docs/progress); engine `main` @ `6e8eab2` (clean).
+**MER4 fresh checkpoint: COMPLETED 2026-09-17 22:54 BST** via `scripts/agent-checkpoint.sh`
+(`.dsh/last-agent-checkpoint` = `2026-09-17T22:54:37+01:00`); fresh-checkpoint procedure
+completed.
+Server `main` @ `1c1a677` (MER4; clean, 0 tracked changes); engine `main` @ `6e8eab2` (clean).
 
 MER4 (post-merge kernel re-baseline) COMPLETE — engagement map
 `docs/V0322-KERNEL-BASELINE.md`. Run `mer4-20260917-2137`.
