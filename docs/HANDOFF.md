@@ -14,6 +14,9 @@ commit `0df4a90` on `feature/mlx-v0322-upgrade`. **Next: MER2** (interleaved A/B
 v0.31.6 incumbent, interleave in the same thermal session) → MER3 (merge to main) → MER4
 (post-merge kernel re-baseline).
 
+**Fresh checkpoint completed: `2026-09-17T17:17:20+01:00`** (`./scripts/agent-checkpoint.sh`
+succeeded; marker `.dsh/last-agent-checkpoint` updated).
+
 ---
 **Prior: U1 survey (GO), U2 REVERTED (metallib barrier), MET: metallib UNBLOCKED + v0.32.2 decode A/B INCONCLUSIVE (2026-09-17).**
 
