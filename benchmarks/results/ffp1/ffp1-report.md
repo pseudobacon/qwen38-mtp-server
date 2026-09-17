@@ -78,6 +78,17 @@ This is a **tiling anomaly** in the generic quantized GEMM: the small N
 dimension (5120 → few N-tiles) combined with large K (17408) under-utilizes the
 GPU at exactly M=512, the default prefill chunk.
 
+**Correctness (not a Metal JIT bug).** The `quantizedMM` down_proj output at
+M=512 is **bit-exact** with a dequantize→bf16-GEMM reference (`max|diff| = 0.0`;
+`--ffn-check`). The headroom is therefore real work being done slowly, not a
+zero-result / garbage kernel.
+
+**Localization (not quantizedMM-specific).** Timing the same-shape bf16 GEMM
+(`x @ W^T`) at M=512 gives **14.2 TF — slower than the quantizedMM's 21.6 TF**.
+The anomaly is in the MLX GEMM tiling engine for the small-N/large-K shape at
+M=512, common to both the 4-bit and bf16 paths, not a defect in `quantizedMM`
+alone.
+
 ## Headroom (per layer, M=512)
 
 | Scenario | gateup (µs) | downproj (µs) | FFN total (µs) | saved/layer |
@@ -90,13 +101,38 @@ Over 64 layers: incumbent FFN ≈ 346 ms; fixing down_proj to the M=1024 level
 saves ≈ 228 ms (≈4–5% of a ~5.5 s 32K prefill) — right at the FFP3 ≥5% gate;
 matching gateup efficiency would save ≈ 267 ms.
 
-## Decision: **GO**
+## Decision: **NO-GO** (for a bit-exact kernel) — stop here
 
-The incumbent has 10× headroom on the down_proj GEMM at the default prefill
-chunk width. A specialized FFN kernel (or a tiling fix) targeting the
-small-N/large-K down_proj shape at M=512 has a clear path to a large win.
-Proceed to **FFP2** (design + implement an FFN-phase kernel, env-gated
-`QWEN_FFN_KERNEL=off|on`, default off, with a per-phase gateup/downproj counter).
+The 10× down_proj headroom at M=512 is real, but it is **not capturable by a
+bit-exact kernel**, which is the FFP2 hard requirement (element-wise equality
+with `quantizedMM` at every M):
+
+- Bit-exactness forces the **same tiling / accumulation order** as the
+  incumbent (FP addition is non-associative; a different tile order changes the
+  result). The M=512 headroom is *precisely* in the tiling, so preserving it
+  for bit-exactness preserves the slowness.
+- The diagnostic above shows the anomaly is in the GEMM tiling engine (both the
+  4-bit `quantizedMM` at 21.6 TF and the bf16 `x @ W^T` at 14.2 TF are off-peak
+  at M=512). Any bit-exact FFN kernel inherits that tiling and that slowness.
+- The only bit-exact FFN wins are **fusions** (fewer memory round-trips), and
+  the down_proj is a bare GEMM (its input is already the swiglu output) — there
+  is no fusion that changes its tiling. Fusing swiglu into down_proj would still
+  leave the M=512 GEMM occupancy anomaly intact.
+- Precedent confirms it: the existing specialized kernels are "bit-identical to
+  their eager counterpart" and QMV is documented **~5% slower** than
+  `quantizedMM` even at M=1. A bit-exact GEMM kernel in this codebase is
+  competitive with, not faster than, the incumbent.
+
+Therefore no bit-exact FFN kernel can reach the FFP1 ≥10% sustained win at
+M=512. **Stop at FFP1; do not proceed to FFP2/FFP3.** The finding is recorded
+as a negative result with the headroom quantified, in case a future relaxation
+of the bit-exact requirement (e.g., a non-strict-tolerance prefill-only path)
+reopens it.
+
+> Note: the headroom would be capturable by a *non*-bit-exact kernel (a new
+> GEMM tiling for the small-N/large-K shape), but that violates the
+> token-identical speculative-decoding invariant and is out of scope for this
+> task.
 
 ## Caveats
 
@@ -107,10 +143,12 @@ Proceed to **FFP2** (design + implement an FFN-phase kernel, env-gated
 - **DVFS:** the sustained protocol intentionally includes DVFS downclocking
   (it is part of real prefill). The gateup/downproj interleaving removes the
   order/DVFS confound for the shape comparison.
-- **Random inputs:** valid for dense-GEMM throughput; a real-activation run is
-  a worthwhile FFP2 confirmation but not required for the GO decision.
-- The ≥10% FFP1 gate is about the incumbent's headroom (a candidate kernel's
-  *actual* win is measured in FFP2/FFP3). Headroom here is ~10×, far above 10%.
+- **Random inputs:** valid for dense-GEMM throughput (dense GEMM cost is
+  input-value-independent). The `--ffn-check` bit-exactness check uses random
+  bf16 inputs and confirms the incumbent is correct at M=512.
+- The ≥10% FFP1 gate is about whether a *bit-exact* candidate kernel can win
+  at M=512. The incumbent headroom is ~10×, but it sits in the GEMM tiling
+  which bit-exactness must preserve — hence NO-GO.
 
 ## Reproduce
 
@@ -119,4 +157,8 @@ cd /Users/cwong/ai/mlx-swift-lm && swift build --product qmvbench -c release
 ./.build/arm64-apple-macosx/release/qmvbench --ffn-prefill --ffn-pair \
     --ffn-ms 512,1024 --ffn-wall 40 --blocks 2
 pmset -g therm   # before/after; expect "no thermal warning"
+
+# Correctness (bit-exact vs dequantize->bf16 reference) + M=512 anomaly
+# localization (quantizedMM vs bf16 GEMM):
+./.build/arm64-apple-macosx/release/qmvbench --ffn-prefill --ffn-check --ffn-ms 512
 ```

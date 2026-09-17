@@ -1904,7 +1904,7 @@ TTFT_warm 0.137 s, TTFT_disk 0.144 s, TTFT_cold 5.535 s → G1 0.03×, G2
 the `disk/warm ≤ 2×` criterion and (b) the unstable `--kv-ssd-*` CLI-flag
 launch.
 
-## 2026-09-17: FFN prefill GEMM kernel optimization — FFP1 kill-switch (GO)
+## 2026-09-17: FFN prefill GEMM kernel optimization — FFP1 kill-switch (NO-GO)
 
 **Objective:** Reduce long-context prefill wall time by optimizing the FFN-phase
 4-bit GEMMs at prefill width M=512 (the default 512-chunk prefill). FFP1 is the
@@ -1929,14 +1929,30 @@ at M=512 (QMV is gated to widths 1–9).
 
 **Incumbent `quantizedMM` is ~10× off-peak on down_proj at M=512** (20 TF vs
 220 TF gateup, same DVFS window; downproj = 84.7% of per-layer FFN time). The
-anomaly is width-specific: the same down_proj shape runs at 89.4 TF at M=1024,
-so this is a `quantizedMM` tiling/occupancy anomaly at small-N (5120) /
-large-K (17408) / M=512, not an intrinsic slowness. Not DVFS: `pmset -g therm`
-reports no thermal/perf warning.
+anomaly is width-specific: the same down_proj shape runs at 89.4 TF at M=1024.
+Not DVFS: `pmset -g therm` reports no thermal/perf warning.
 
-**Decision: GO.** Large stable headroom → proceed to FFP2 (design + implement
-an FFN-phase kernel, env-gated `QWEN_FFN_KERNEL=off|on` default off, per-phase
-gateup/downproj counter). Full report: `benchmarks/results/ffp1/ffp1-report.md`.
+**Correctness + localization (decisive):** the M=512 down_proj output is
+**bit-exact** with a dequantize→bf16-GEMM reference (`max|diff|=0.0`,
+`--ffn-check`) — so the headroom is real work, not a Metal JIT zero-result bug.
+Timing the same-shape bf16 GEMM at M=512 gives **14.2 TF, slower than
+quantizedMM's 21.6 TF** → the anomaly is in the MLX GEMM *tiling engine* for
+the small-N/large-K shape at M=512 (both 4-bit and bf16), not a
+`quantizedMM`-specific defect.
+
+**Decision: NO-GO (for a bit-exact kernel) — stop at FFP1.** The FFP2
+hard requirement is element-wise equality with `quantizedMM` at every M, which
+forces the *same tiling / accumulation order* (FP addition is non-associative).
+The M=512 headroom sits precisely in the tiling, so preserving it for
+bit-exactness preserves the slowness. The only bit-exact FFN wins are fusions,
+and down_proj is a bare GEMM (no fusion changes its tiling). Precedent
+confirms: the existing specialized kernels are bit-identical to their eager
+counterpart and QMV is documented ~5% *slower* than `quantizedMM` even at M=1.
+No bit-exact FFN kernel can reach the ≥10% sustained win at M=512.
+
+Full report: `benchmarks/results/ffp1/ffp1-report.md` (negative result,
+headroom quantified; a future relaxation of the bit-exact requirement — e.g. a
+non-strict-tolerance prefill-only path — would reopen it).
 
 **Caveats:** M=8192 pair-mode numbers are invalid (back-to-128 of a
 [8192,34816] output = 73 GB > 48 GB unified memory); large-M needs back-to-back
