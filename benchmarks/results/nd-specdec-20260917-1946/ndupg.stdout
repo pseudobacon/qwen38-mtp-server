@@ -1,0 +1,15 @@
+[ INFO ] Server configuration: host=127.0.0.1 port=18086 model=./weights mtpHead=./mtp-head ctxSize=262144 nPredict=262144 temp=0.0 topP=0.95 topK=20 minP=0.05 repeatPenalty=1.0 presencePenalty=0.0 frequencyPenalty=0.0 specDraftNMax=3 cacheTypeK=kvarn8 cacheTypeV=kvarn4 memoryLimitGB=44 tokenizationCache=entries:1024 bytes:268435456 ttl:300s
+[ INFO ] Draft depth resolution: forced k=2 (offer cap 3, stored calibrated none, calibration file spec-draft-calibration.json)
+MLXLM: MTP head selected: /Users/cwong/ai/qwen-mtp-server/mtp-head/q4 — 4-bit quantized (default ON)
+MLXLM: MTP draft depth: k=2 (forced k=2; offer cap 3)
+MLXLM: fusion prepare summary: backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head swiGLU 1 qkv 1
+MLXLM: fused GDN prework off (default; MLX_QWEN_FUSED_GDN=1 to enable): conv1d + SiLU + split + Q/K rmsNorm + g/beta in one Metal launch for verify widths 3...9 (B=1, geometry-matched, bf16)
+MLXLM: QMV verify routing ON (default since the W1 rerun, or MLX_QWEN_QMV_VERIFY=1): 3-D verify inputs with B·L in 2...9 reshape to 2-D and route through the candidate QMV kernel; M=1 (2-D decode and B·L==1) falls back to incumbent quantizedMM; non-contiguous inputs materialize (copies counted); dispatch counters in the step summary and at shutdown
+[ INFO ] Model runtime is ready.
+[ NOTICE ] Server started on http://127.0.0.1:18086
+[ INFO ] GET /readyz [request-id: B10CE588-09D8-49AA-9F41-BAD4665AA9E4]
+[ INFO ] POST /v1/chat/completions [request-id: 5485C3E7-A40B-4C31-BAF0-2714DD7B2394]
+[ INFO ] POST /v1/chat/completions [request-id: 5B31B94A-88DF-4879-A4FD-EC5195E1521B]
+
+[ INFO ] QMV verify dispatch (Item D): routed [2:663 3:84438 4:96] fallback [1:99 62:198 512:195] materialized 0
+[ INFO ] Model runtime draining; waiting for active generation.

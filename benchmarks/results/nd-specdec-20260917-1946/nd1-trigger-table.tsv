@@ -1,0 +1,7 @@
+idx	stream_hash	hit	delta	rounds	acceptedPerStep	decodeS
+1	591a0ace6985	miss	0	427	1.3981	36.1940
+2	32cb68e3d2c3	miss	0	438	1.3379	37.1233
+3	aeff2504a253	miss	0	440	1.3295	38.7492
+4	33f1c8cf175b	miss	0	444	1.3108	39.9958
+5	3eac85fc39e3	miss	0	415	1.4675	39.4663
+6	ff900bf6ba41	miss	0	435	1.3586	43.8996
