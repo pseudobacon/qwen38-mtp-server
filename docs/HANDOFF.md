@@ -33,6 +33,10 @@ improvement. Memory-safe (peak RSS 14.6 GB @64K, per-chunk buffer 6.29 GB << 48 
 - **Next step:** none for this task. Future work: consider whether the pc=2048 default
   should be adaptive to context length (larger pc is strictly better here, but a
   per-request pc from the request body is not implemented).
+- **Fresh checkpoint:** completed 2026-09-17 14:48 BST via
+  `scripts/agent-checkpoint.sh` (server repo `main` @ `e239c09`, tracked tree clean;
+  only untracked raw benchmark artifacts remain in
+  `benchmarks/results/mcp-20260917/`).
 
 ---
 
