@@ -1,7 +1,46 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Cross-lineage port of Tasks 1–6 from `qwen-mtp-server` (2026-09-16).**
+**COMPLETE: FFP1 FFN prefill GEMM kill-switch — NO-GO for a bit-exact kernel (2026-09-17).**
+
+Objective: reduce long-context prefill wall time by optimizing the FFN-phase
+4-bit GEMMs at the default 512-chunk prefill width (M=512). FFP1 is the cheap
+kill-switch: measure incumbent `quantizedMM` headroom before touching the
+engine.
+
+**Finding (stable, 68 batches, 2.8% std, `qmvbench --ffn-prefill --ffn-pair`):**
+incumbent `quantizedMM` is ~10× off-peak on **down_proj at M=512** (20 TF vs
+220 TF gateup_wide, same DVFS window; down_proj = 84.7% of per-layer FFN time).
+The anomaly is width-specific (same shape = 89.4 TF at M=1024), **not** a Metal
+JIT bug (M=512 output is bit-exact vs a dequantize→bf16 reference,
+`max|diff|=0.0`), and is in the **GEMM tiling engine** generally (bf16 `x@W^T`
+= 14.2 TF at M=512, slower than quantizedMM's 21.6 TF).
+
+**Decision: NO-GO (for a bit-exact kernel) — stop at FFP1.** The FFP2
+requirement is element-wise equality with `quantizedMM` at every M, which forces
+the same tiling/accumulation order (FP addition is non-associative). The M=512
+headroom sits precisely in the tiling, so a bit-exact kernel preserves the
+slowness. The only bit-exact FFN wins are fusions, and down_proj is a bare GEMM
+(no fusion changes its tiling). Precedent: the existing specialized kernels are
+bit-identical to their eager counterpart and QMV is ~5% *slower* than
+`quantizedMM` even at M=1. No bit-exact FFN kernel reaches the ≥10% sustained
+win at M=512.
+
+- **Engine (`mlx-swift-lm`) `main` @ `774a4d3`:** `qmvbench` gains
+  `--ffn-prefill` (sustained no-sync FFN throughput), `--ffn-pair` (interleaved
+  gateup/downproj, same DVFS window), `--ffn-check` (bit-exact vs reference +
+  M=512 anomaly localization). QMV/decode/attention untouched.
+- **Server `main` @ `8049539`:** report
+  `benchmarks/results/ffp1/ffp1-report.md` + `progress.md` entry.
+- **Verification:** engine `swift test --filter Qwen38MTPDiagnosticTests` 3/3;
+  server `swift test --filter HTTPServerTests` 237/237; `git diff --check` clean.
+- **Next step:** none for this task (valid negative result). A future
+  relaxation of the bit-exact requirement (e.g. a non-strict-tolerance
+  prefill-only path) would reopen the 10× down_proj headroom.
+
+---
+
+**Prior: COMPLETE: Cross-lineage port of Tasks 1–6 from `qwen-mtp-server` (2026-09-16).**
 
 The recovered Task 1–6 work (sibling `qwen-mtp-server`, branch
 `recovered/tasks-1-6` @ `efcf595`) is ported into canonical `main` by
