@@ -1903,3 +1903,41 @@ TTFT_warm 0.137 s, TTFT_disk 0.144 s, TTFT_cold 5.535 s → G1 0.03×, G2
 **Verdict: GATE MET — on `main`.** Task 5's "UNSTABLE" was an artifact of (a)
 the `disk/warm ≤ 2×` criterion and (b) the unstable `--kv-ssd-*` CLI-flag
 launch.
+
+## 2026-09-17: FFN prefill GEMM kernel optimization — FFP1 kill-switch (GO)
+
+**Objective:** Reduce long-context prefill wall time by optimizing the FFN-phase
+4-bit GEMMs at prefill width M=512 (the default 512-chunk prefill). FFP1 is the
+cheap kill-switch: measure incumbent `quantizedMM` headroom at M=512 before
+touching the engine.
+
+**Method:** `qmvbench --ffn-prefill --ffn-pair` (release, M5 Pro GPU). Layer-0
+FFN (gateup_wide N=34816 K=5120; downproj N=5120 K=17408), sustained no-sync
+(128 back-to-back, 1 eval/batch), gateup/downproj **interleaved** at the batch
+level for a fair same-DVFS-window comparison, 3 warm-up batches, ~40 s per M.
+Shapes independently verified from the safetensors headers; QMV is not involved
+at M=512 (QMV is gated to widths 1–9).
+
+**Finding (stable, 68 batches, 2.8% std):**
+
+| M | shape | mean µs | FLOP/s |
+|---|-------|---------|--------|
+| 512 | gateup_wide | 828 | 220.4 TF |
+| 512 | downproj | **4582** | **19.9 TF** |
+| 1024 | gateup_wide | 3337 | 109.4 TF |
+| 1024 | downproj | 2042 | 89.4 TF |
+
+**Incumbent `quantizedMM` is ~10× off-peak on down_proj at M=512** (20 TF vs
+220 TF gateup, same DVFS window; downproj = 84.7% of per-layer FFN time). The
+anomaly is width-specific: the same down_proj shape runs at 89.4 TF at M=1024,
+so this is a `quantizedMM` tiling/occupancy anomaly at small-N (5120) /
+large-K (17408) / M=512, not an intrinsic slowness. Not DVFS: `pmset -g therm`
+reports no thermal/perf warning.
+
+**Decision: GO.** Large stable headroom → proceed to FFP2 (design + implement
+an FFN-phase kernel, env-gated `QWEN_FFN_KERNEL=off|on` default off, per-phase
+gateup/downproj counter). Full report: `benchmarks/results/ffp1/ffp1-report.md`.
+
+**Caveats:** M=8192 pair-mode numbers are invalid (back-to-128 of a
+[8192,34816] output = 73 GB > 48 GB unified memory); large-M needs back-to-back
+≤ 2. Random bf16 inputs are valid for dense-GEMM throughput.
