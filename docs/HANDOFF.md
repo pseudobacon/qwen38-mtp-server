@@ -310,11 +310,17 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
-Cross-lineage port checkpoint: server on `feature/port-radix-ssd` (Phases 0–5
-complete), engine `mlx-swift-lm` @ `6fa481d` (restored, `restoreKVCacheState`).
-`swift test --filter HTTPServerTests` = 237 Swift Testing, all green; E2E
-restart benchmark PASS. (Prior LCP checkpoint: `2026-09-15T19:21:15+00:00`,
-server `b4374be`, engine `62c4ac7`.)
+**FFP4 fresh-checkpoint procedure COMPLETED 2026-09-17 09:46 BST** (exit 0).
+Server `main` @ `8a055a3` (tree clean, `git diff --check` clean); engine
+`main` @ `c575e19` (tree clean). `qmvbench` `--ffn-cand` NO-GO (2 reps);
+engine `Qwen38MTPDiagnosticTests` 3/3. FFP4 NO-GO recorded; FFP5/FFP6/FFP7 not
+pursued.
+
+Prior — Cross-lineage port checkpoint: server on `feature/port-radix-ssd`
+(Phases 0–5 complete), engine `mlx-swift-lm` @ `6fa481d` (restored,
+`restoreKVCacheState`). `swift test --filter HTTPServerTests` = 237 Swift
+Testing, all green; E2E restart benchmark PASS. (Prior LCP checkpoint:
+`2026-09-15T19:21:15+00:00`, server `b4374be`, engine `62c4ac7`.)
 
 ## Next step (exact)
 None outstanding for the port. Commit `feature/port-radix-ssd` to `main` (server
