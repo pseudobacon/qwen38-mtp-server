@@ -33,6 +33,10 @@ per-step sync = 176.6 GB/s vs FFN sustained no-sync = 310–355 GB/s), NOT inter
 + state amortization across MTP steps (engagement map lever #1), targeting the per-dispatch
 sync + state setup, NOT the kernel mix. → `benchmarks/results/pro-bw-20260917-2306/pro-findings.md`.
 
+- **Fresh checkpoint:** completed 2026-09-18 00:24 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-18T00:24:28+01:00`); fresh-checkpoint procedure
+  completed. Server `299f87f`, engine `cfd6df5` (qmvbench `--layer-seq` probe).
+
 **MER1 (suites green under policy v3) — COMPLETE.** Policy v3 (bit-exactness relaxed,
 determinism = hard gate) recorded in contract §0c. Continuation (53) + Fused (18, tolerance
 0.02, measured max|diff|=0.015625) + metallib SHA gate (1) + decode canary (1) = **78/78
