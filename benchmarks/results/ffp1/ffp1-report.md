@@ -1,10 +1,20 @@
 # FFP1 — M=512 FFN prefill GEMM micro-benchmark (kill-switch)
 
+> **SUPERSEDED-BY-DECISION (2026-09-17).** The FFP1 **NO-GO** below is *not* invalidated —
+> it is superseded by an explicit, scoped relaxation of the bit-exactness requirement that
+> the NO-GO rested on. The M=512 down_proj headroom is real and was un-reachable *only*
+> because a bit-exact kernel had to preserve the incumbent tiling. Under **bit-exactness
+> policy v2** (see `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0) the FFN GEMMs at prefill
+> widths M ≥ 256 are relaxed to a numeric tolerance (default-OFF gate
+> `MLX_QWEN_FFN_PREFILL_FAST`), so a fast down_proj GEMM is now permissible there. FFP4
+> re-runs the kill switch under that relaxation. The measurements and reasoning below remain
+> valid and are the basis for the reopened work.
+
 **Date:** 2026-09-17
 **Target:** Qwen3.8-27B 4-bit, layer 0 FFN (gate/up/down), M5 Pro GPU
 **Model:** `/Users/cwong/ai/qwen38-mtp-server/weights` (MLX-4bit, 4-bit affine, group=64)
 **Bench:** `qmvbench --ffn-prefill --ffn-pair` (release build)
-**Decision: GO** — there is large, stable, shape-specific incumbent headroom at M=512.
+**Decision: NO-GO** (for a bit-exact kernel; superseded-by-decision — see banner). There is large, stable, shape-specific incumbent headroom at M=512, unreachable by a bit-exact kernel.
 
 ## Objective
 

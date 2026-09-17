@@ -1957,3 +1957,39 @@ non-strict-tolerance prefill-only path — would reopen it).
 **Caveats:** M=8192 pair-mode numbers are invalid (back-to-128 of a
 [8192,34816] output = 73 GB > 48 GB unified memory); large-M needs back-to-back
 ≤ 2. Random bf16 inputs are valid for dense-GEMM throughput.
+
+## 2026-09-17: Bit-exactness policy v2 — reopen FFP1 under a scoped relaxation (Step 0, decision before code)
+
+**Decision (explicit, recorded before any code).** Bit-exactness is **relaxed
+to a numeric tolerance for FFN GEMMs dispatched at prefill chunk widths only**,
+and held **byte-for-byte everywhere else**. This **supersedes** (does not
+invalidate) the FFP1 NO-GO, which rested entirely on the bit-exactness
+constraint the relaxation now removes for the prefill FFN GEMMs.
+
+**Scope (policy v2):**
+- **RELAXED (numeric tolerance, a few ulp of bf16 output; fp32-accumulate
+differences only):** FFN GEMMs at prefill widths **M ≥ 256**. The threshold
+exceeds every verify width (M 1..9) and decode (M=1), and excludes the
+short-prompt fixtures `essay-1024` / `specdec-800` (prefill M < 256).
+- **UNCHANGED (byte-for-byte):** decode M=1, MTP verify M 2..9, all short-prefill
+M < 256, and every other kernel / code path (attention, GDN, norms, …). The
+relaxation is FFN-only and does not broaden.
+- **Gate:** `MLX_QWEN_FFN_PREFILL_FAST`, **default OFF**, with an M ≥ 256
+dispatch geometry gate. The OFF build is byte-identical to current `main`.
+- **Accepted consequence:** long-context (8K+) committed streams through the
+relaxed path differ from the incumbent registry (knife-edge family: fp
+accumulation order, ≤ a few ulp flipping near-tie argmaxes), **not corruption**.
+ON runs register **new** per-fixture stream hashes; OFF runs reproduce the
+incumbent registry exactly. A divergence at a top-2 logit gap > 8 ulp is a STOP
+condition (outside the accepted family → numeric bound too loose).
+
+**Recorded in:** `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0 (policy v2),
+`docs/PREFILL-FFN-KERNEL.md` (central doc + flag reference),
+`benchmarks/results/ffp1/ffp1-report.md` (NO-GO marked superseded-by-decision).
+
+**Next: FFP4** — design ≥2 candidate down_proj kernels (split-K, tile/geometry,
+simdgroup-matrix, in-register dequant K-restructure) and micro-bench them
+(`--ffn-check` tolerance mode + `--ffn-pair` DVFS-fair). Kill switch: best
+candidate must show ≥2× sustained throughput on down_proj at M=512 within the
+accepted numeric bound, else stop and record the negative result (no engine
+touch).

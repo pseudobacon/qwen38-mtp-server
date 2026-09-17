@@ -9,6 +9,42 @@ are backed by unit tests and a distributional harness, not by assertion.
 
 ---
 
+## 0. Bit-exactness policy v2 (2026-09-17) — scoped relaxation for prefill-width FFN GEMMs
+
+**Decision (explicit, recorded before any code).** Bit-exactness is **relaxed to a numeric
+tolerance for FFN GEMMs dispatched at prefill chunk widths only**, and held **byte-for-byte
+elsewhere**. This supersedes the FFP1 NO-GO rationale (the FFP1 headroom was precisely the
+GEMM tiling that bit-exactness forbade changing); it does **not** invalidate FFP1 — it
+reopens it under a scoped, gated, default-OFF relaxation.
+
+**Scope of the relaxation.**
+
+| Path | M | Exactness | Notes |
+|------|---|-----------|-------|
+| FFN down_proj / gateup GEMM at prefill chunk width | **M ≥ 256** | **numeric tolerance** (a few ulp of bf16 output; fp32-accumulate differences only) | The relaxed path. `M ≥ 256` must exceed every verify width (M 1..9) and decode (M=1), and exclude the short-prompt fixtures `essay-1024` / `specdec-800` (prefill M < 256). |
+| Decode | M = 1 | **byte-for-byte** | Unchanged. |
+| MTP verify rows | M 2..9 | **byte-for-byte** | Unchanged. |
+| Short-prefill (essay-1024, specdec-800) | M < 256 | **byte-for-byte** | Unchanged; must reproduce the existing registry in both gate states. |
+| Every other kernel / code path (attention, GDN, norms, …) | — | **byte-for-byte** | Unchanged; relaxation is FFN-only and does not broaden. |
+
+**Gate.** `MLX_QWEN_FFN_PREFILL_FAST`, **default OFF**, with an M ≥ 256 dispatch geometry
+gate. The OFF build is byte-identical to current `main` (every incumbent path taken). The
+relaxed path engages only when the gate is ON **and** M ≥ 256.
+
+**Accepted consequence.** Long-context (8K+) committed streams computed through the relaxed
+path will **differ from the incumbent registry**. The divergence is the Phase-1 knife-edge
+family (fp accumulation order; ≤ a few ulp drift flipping near-tie argmaxes), **not
+corruption**. Per FFP6, ON runs register **new** per-fixture stream hashes; OFF runs must
+reproduce the incumbent registry exactly. A divergence at a top-2 logit gap > 8 ulp is a STOP
+condition (outside the accepted family → the numeric bound is too loose). Decode/verify and
+short-prefill streams are unaffected (byte-for-byte), so the relaxation is invisible to them.
+
+**Bound.** The accepted numeric bound is established in FFP4 (tolerance mode of
+`--ffn-check`): expected fp32-accumulate differences only, bounded by a few ulp of bf16 output
+magnitude, with a max|diff| and ulp-histogram contract recorded for the unit tests.
+
+---
+
 ## 1. The two exactness regimes
 
 The speculative path is only ever used with one of two sampling configurations, and the
