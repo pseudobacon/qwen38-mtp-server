@@ -45,6 +45,38 @@ magnitude, with a max|diff| and ulp-histogram contract recorded for the unit tes
 
 ---
 
+## 0c. Bit-exactness policy v3 (2026-09-17) — global relaxation; DETERMINISM is the hard gate
+
+**Decision (explicit, recorded before any code).** Bit-exactness is **no longer a project
+invariant**. The original requirement was inherited from the challenge repo; it is superseded
+by policy v3 and is **not** a project invariant going forward. What remains a **hard gate** is
+**determinism**, not byte-identity across configs.
+
+**Determinism (hard gate, non-negotiable).** Same config (binary + env + fixture) **must
+reproduce an identical committed stream hash across reps**. A run that fails this is
+**discarded**, never reported as a perf delta.
+
+**Cross-config / cross-version bit-exactness: NOT required.** New configs and framework
+versions register their own per-fixture stream hashes in the registry. They are not compared
+byte-for-byte against the incumbent.
+
+**Acceptance for kernel-affecting changes.**
+(a) Characterize divergence vs the incumbent stream as the **knife-edge family**: report the
+first-divergence position, the divergence rate, and the top-2 logit gaps. A rate **far above
+~9/1024**, or **any** flip at a top-2 logit gap **> 8 ulp**, is a **STOP** condition (outside
+the accepted family → not a pass).
+(b) MTP acceptance rate within noise of the registered band (**~93.5–94.7%**).
+
+**Unaffected wins.** The existing default-ON wins (fusions, QMV routing, q4 head, pc=2048)
+are **unaffected** by this relaxation; only *future* work is unconstrained.
+
+**Reopened (separate future tasks, NOT this task).** This relaxation also reopens:
+- a prebuilt flash/SDPA **prefill** kernel if upstream ships one (see the upstream survey);
+and
+- the model-level levers (2-token head, draft-vocab lm_head, denser quantization).
+
+---
+
 ## 1. The two exactness regimes
 
 The speculative path is only ever used with one of two sampling configurations, and the

@@ -1,7 +1,53 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: MCP2 prefill-chunk-size sweep — KEEP pc=2048, default flipped 512→2048 (2026-09-17).**
+**COMPLETE: Upstream MLX decode-bandwidth probe — U1 survey (GO), U2 framework upgrade REVERTED (metallib build barrier) (2026-09-17).**
+
+Objective: close the last quantified decode headroom (in-pipeline 200–275 GB/s vs qmvbench
+310–355 GB/s sustained on the 14.4 GB 4-bit weight stream) by determining whether a newer
+upstream MLX/MLXSwift closes it; upgrade the pin only if the end-to-end gate passes.
+
+**Policy v3 (recorded FIRST).** Bit-exactness is **no longer a project invariant**.
+Determinism (same config → identical stream hash across reps) remains the hard gate;
+cross-config/cross-version bit-exactness is NOT required (new configs/versions register their
+own hashes). Kernel-affecting changes are accepted on knife-edge-family divergence
+(first-divergence position, rate, top-2 gaps; rate far above ~9/1024 or any flip > 8 ulp =
+STOP) + MTP acceptance within ~93.5–94.7%. Recorded in
+`benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0c + `progress.md`.
+
+**U1 (survey, `docs/UPSTREAM-MLX-SURVEY.md`) — GO to U2.** Pinned: mlx-swift **0.31.6**
+(= the latest *released* tag) wrapping **C++ MLX v0.31.1**. The kernel-relevant range is
+**C++ MLX v0.31.1 → v0.32.2** (reached only via *unreleased* mlx-swift main). v0.32.2 has
+direct decode-path kernel improvements (qmv_wide small-batch quantized matvec, NVFP4 QMV M5
+Max, M5-class qmv batch limit, split-K quantized matmul, gqa-8 decode attention) → GO.
+
+**U2 (framework upgrade A/B) — REVERTED (build-infrastructure barrier).** Bumping the pin to
+mlx-swift main (C++ MLX v0.32.2) builds **green** (engine MLXLLM + server HTTPServer, zero
+compat fixes) and our path `Qwen38MTPDiagnosticTests` PASSes — **but** the full engine suite
+crashes on `testQwen35MoECompiledDecodeTracksWeightUpdates` (`Unable to load kernel
+dot_product_float32_it32_tg512_sg16`). Root cause: Cmlx builds C++ MLX **NO-JIT**, bundling
+a **prebuilt** `default.metallib` that is a **stale v0.31.1** artifact from a separate
+**PrepareMetalShaders** step that **SwiftPM does not regenerate on a pin bump** (warm build =
+no-op). So the "upgraded" build runs **v0.32.2 C++ against v0.31.1 kernels** — the improved
+kernels are not active and a v0.32.2 dot_product kernel is missing. A clean A/B is
+**impossible via the pure pin-bump path**; the build gate (engine suite green) is not met.
+**Not** a "no fix exists" closure — the kernels DO exist in v0.32.2. **Pin reverted to
+0.31.6** (engine + server); verified green (`CompiledDecodeWeightUpdateTests` 6/0).
+
+**Follow-up task (separate, NOT this one):** regenerate `default.metallib` for v0.32.2 via
+the PrepareMetalShaders CMake step → confirm engine suite green → run the decode A/B matrix
+(§5 of the survey).
+
+- **Deliverables:** `docs/UPSTREAM-MLX-SURVEY.md` (U1 + U2), `progress.md` (policy v3 + U1 +
+  U2), `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0c (policy v3).
+- **Git:** pin reverted; engine tree clean; server tree = docs only. Feature branches
+  `feature/upstream-mlx-probe` in both repos (to be merged to main + deleted).
+- **Next step:** none for this task. See the follow-up task above for the A/B.
+- **Fresh checkpoint:** <PENDING>
+
+---
+
+**Prior: COMPLETE: MCP2 prefill-chunk-size sweep — KEEP pc=2048, default flipped 512→2048 (2026-09-17).**
 
 Objective: determine (config-only, zero kernel/source change) whether a larger
 `--prefill-chunk-size` (pc) cuts prefill wall, following MCP1's GO (the M=512 FFN
