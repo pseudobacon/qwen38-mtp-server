@@ -30,6 +30,10 @@ origin = the cached-prefill replay (hypothesis a), not the decode path. Gate ame
 branches deleted. All tests green (engine Qwen38MTPDiagnosticTests 3/3; server HTTPServerTests
 237/237).
 
+- **Fresh checkpoint:** completed 2026-09-17 21:18 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-17T21:18:43+01:00`); fresh-checkpoint procedure
+  completed.
+
 **Next: MER4 (post-merge kernel re-baseline).** See `progress.md` MER3 + the ND findings in
 `benchmarks/results/nd-specdec-20260917-1946/nd-findings.md`.
 
