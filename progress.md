@@ -2038,3 +2038,87 @@ relaxation does not open a viable kernel fix.
 - **Reproduce:** `cd ../mlx-swift-lm && swift build --product qmvbench -c release &&
   ./.build/arm64-apple-macosx/release/qmvbench --ffn-prefill --ffn-cand --ffn-ms 512
   --ffn-batch 4 --ffn-wall 15`
+
+## 2026-09-17: FFN M-curve probe → prefill-chunk-size sweep (MCP) — MCP1 **GO**, MCP2 **KEEP pc=2048** (default flipped 512→2048)
+
+New task: determine whether the M=512 down_proj inefficiency (FFP1/FFP4, closed as
+fundamental to the shape class) is a *fixed* property at prefill-relevant M, or an
+M-dependent penalty a larger `--prefill-chunk-size` amortizes. If per-token FFN cost
+rises steeply with M, a larger chunk may cut total prefill wall with **zero
+kernel/source change** — the only untested config axis. No kernel, engine, model,
+quantization, or invariant changes; the only permissible source change is a server
+default-pc flip *after* the MCP2 gate passes.
+
+### MCP1 — FFN M-curve (micro, existing `qmvbench --ffn-pair` tooling): **GO**
+
+Sustained no-sync, DVFS-fair interleaved (`--ffn-pair`), per-token cost
+(`µs/GEMM ÷ M`) — the metric the sweep trades on. 2 reps at the decision region
+(M=512/1024), 1 rep each at the far end. Binary SHA
+`a4b56e2b…7aa` (release `qmvbench`), no thermal warning before/after.
+
+| M | gateup µs/tok | down µs/tok | **FFN µs/tok** |
+|---|---------------|-------------|----------------|
+| 512  | 2.108 | **9.153** | 11.261 |
+| 1024 | 4.019 | **2.407** | **6.426** ← min |
+| 2048 | 4.920 | 2.608 | 7.528 |
+| 4096 | 5.298 | 2.892 | 8.190 |
+| 8192 | 5.105 | 2.861 | 7.966 |
+
+The down_proj per-token cost drops **73.7%** from M=512 (the tiling anomaly, ~19.5 TF)
+to M=1024 (~74 TF), then the gateup per-token cost rises and the **FFN total bottoms
+at M=1024** (−42.9% vs M=512). The M=512 inefficiency is **M-dependent, not fixed**.
+
+**Decision: GO.** down_proj per-token at M=1024 (2.407) is 73.7% below M=512 (9.153),
+far beyond the 25% threshold. **Predicted optimal pc = 1024** (the FFN per-token
+minimum), stated before MCP2. Predicted 32K prefill savings ≈ 45% (FFN share) × 42.9%
+≈ **19%** — well above the 5% MCP2 gate. SDPA/GDN/norms are pc-invariant to first order
+(total causal attention is O(L²), independent of pc), so FFN dominates the optimum.
+
+- **Caveat (measurement):** an early M=2048 run at back-to-back=128 hit 14 GB memory
+  compression (18.3 GB resident gateup buffer) and was noise-corrupted (std≈mean); the
+  reported M=2048 is the memory-safe re-run at back-to-back=64. Back-to-back is scaled
+  down with M to cap the resident gateup buffer ~9 GB.
+- **Report:** `benchmarks/results/mcp-20260917/mcp1-curve.md`.
+
+### MCP2 — pc sweep end-to-end (config-only): **KEEP pc=2048**, default flipped 512→2048
+
+Protocol: single release binary (SHA `606ed2cf…eb08` per cell), fresh server per cell
+(port 18099, `MLX_CHUNKED_PREFILL=1`, greedy), cells pc ∈ {512, 1024, 2048}, 6 reps
+(rotating start cell, rep 1 discarded, 5 measured), per-phase breakdown + RSS + tile
+buffer + stream hash + admission per rep. Hash gates: 8K/16K/32K bit-exact vs incumbent
+registry in every pc cell.
+
+**Phase A (hash gates): all bit-exact.** Every pc ∈ {512,1024,2048} produces *identical*
+committed content at 8K (`660dd120`), 16K (`2e583ad2`), 32K (`97bc0d74`). No
+knife-edge divergence — no STOP.
+
+**Phase B (32K eval-sync prefill wall, measured reps 2–6):**
+
+| pc | mean wall | vs pc=512 | paired | gate |
+|----|----------:|----------:|:------:|------|
+| 512 | 149.49 s | — | — | base |
+| 1024 | 139.44 s | **−6.7%** | 4/5 | PASS |
+| 2048 | 130.58 s | **−12.7%** | 5/5 | **PASS (winner)** |
+
+Per-phase (mean, ms): FFN 72408→65259, GDN 35737→30998, attn 37176→32416, norm
+2128→978 (pc 512→2048). The win is not just FFN — every phase improves with pc (fewer,
+larger chunks cut per-chunk overhead across the board). MCP1 predicted the optimum at
+pc=1024 (the FFN per-token min); the end-to-end shows pc=2048 beats it because the SDPA
+per-chunk tiling efficiency at larger Q tiles adds a residual gain on top of the FFN
+improvement.
+
+**Phase C (generalization):** 64K pc=2048 = 279.0 s vs pc=512 = 305.2 s (**−8.6%**, 2/2
+paired, bit-exact `14b26f9f`) — not regressed. Peak RSS at 64K pc=2048 = 14.6 GB
+(per-chunk buffer 6.29 GB) << 48 GB. Essay (short) at pc=2048 works (consistent hash,
+`length` finish).
+
+**Decision: KEEP pc=2048.** Bit-exact at every length, −12.7% at 32K / −8.6% at 64K,
+memory-safe. Default `prefillChunkSize` flipped **512 → 2048** in
+`Sources/HTTPServer/ServerConfig.swift`. `ServerConfigArgumentTests` (8/8) and the full
+`HTTPServerTests` suite pass with the new default.
+
+- **Report:** `benchmarks/results/mcp-20260917/mcp2-report.md`.
+- **Raw data:** `mcp2-reps.jsonl`, `mcp2-hashgates.jsonl`, `mcp2-phasec.jsonl`, per-cell
+  `srv-*.log` / `resp-*.json` / `rss-*.csv` / `wall-*.txt` in the same directory.
+- **Scripts:** `benchmarks/run_mcp2.sh` (Phase A+B), `benchmarks/run_mcp2_phasec.sh`
+  (Phase C), `benchmarks/results/mcp-20260917/analyze_mcp2.py` (gate).

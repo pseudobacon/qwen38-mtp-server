@@ -1,7 +1,42 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: FFP4 FFN prefill GEMM kill-switch (relaxed bit-exactness) — NO-GO (2026-09-17).**
+**COMPLETE: MCP2 prefill-chunk-size sweep — KEEP pc=2048, default flipped 512→2048 (2026-09-17).**
+
+Objective: determine (config-only, zero kernel/source change) whether a larger
+`--prefill-chunk-size` (pc) cuts prefill wall, following MCP1's GO (the M=512 FFN
+down_proj inefficiency is M-dependent). Gate: mean 32K eval-sync prefill wall ≥ 5%
+better than pc=512 AND ≥ 4/5 paired reps favor the new pc, 64K not regressed, all
+bit-exact hash gates pass.
+
+**Result (stable, 5 measured reps @32K, 2 @64K, fresh server per cell, greedy):**
+
+| pc | 32K wall | vs 512 | paired | 64K wall | vs 512 |
+|----|---------:|-------:|:------:|---------:|-------:|
+| 512 | 149.49 s | — | — | 305.17 s | — |
+| 1024 | 139.44 s | −6.7% | 4/5 | — | — |
+| **2048** | **130.58 s** | **−12.7%** | **5/5** | **279.03 s** | **−8.6%** |
+
+All pc values **bit-exact** (identical committed content at 8K/16K/32K/64K) — no
+knife-edge. The end-to-end winner is pc=2048, not the MCP1-predicted 1024: the SDPA
+per-chunk tiling efficiency at larger Q tiles adds a residual gain on top of the FFN
+improvement. Memory-safe (peak RSS 14.6 GB @64K, per-chunk buffer 6.29 GB << 48 GB).
+
+**Decision: KEEP pc=2048.** Default `prefillChunkSize` flipped **512 → 2048** in
+`Sources/HTTPServer/ServerConfig.swift`. `ServerConfigArgumentTests` (8/8) + full
+`HTTPServerTests` suite pass.
+
+- **Server:** `benchmarks/results/mcp-20260917/mcp2-report.md` (full tables + per-phase
+  breakdown), `docs/PREFILL-FFN-KERNEL.md` (MCP2 section + flag row), `progress.md` entry.
+- **Scripts/data:** `benchmarks/run_mcp2.sh` (Phase A+B), `benchmarks/run_mcp2_phasec.sh`
+  (Phase C), `benchmarks/results/mcp-20260917/analyze_mcp2.py` (gate), `mcp2-*.jsonl`.
+- **Next step:** none for this task. Future work: consider whether the pc=2048 default
+  should be adaptive to context length (larger pc is strictly better here, but a
+  per-request pc from the request body is not implemented).
+
+---
+
+**Prior: COMPLETE: FFP4 FFN prefill GEMM kill-switch (relaxed bit-exactness) — NO-GO (2026-09-17).**
 
 Objective: reopen the FFP1 NO-GO under a scoped bit-exactness relaxation (policy
 v2, contract §0): FFN GEMMs at prefill widths (M ≥ 256) may differ from

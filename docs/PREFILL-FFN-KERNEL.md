@@ -9,6 +9,12 @@ requires ≥ 2×; all candidates *slower* than the incumbent). FFP1 NO-GO stands
 confirmed under the relaxed policy. FFP5/FFP6/FFP7 not pursued. See
 `benchmarks/results/ffp4/ffp4-report.md`.
 
+**MCP probe (2026-09-17):** the M=512 down_proj inefficiency is **M-dependent, not a
+fixed shape property** — the per-token FFN cost has an interior minimum at **M=1024**
+(6.43 µs/tok, −42.9% vs M=512; down_proj alone −73.7%). This reopens prefill wall via
+the **config-only** axis `--prefill-chunk-size` (zero kernel/source change). MCP1 GO;
+predicted optimal pc=1024. See `benchmarks/results/mcp-20260917/mcp1-curve.md`.
+
 ## Background (established)
 
 - **FFP1 finding** (`benchmarks/results/ffp1/ffp1-report.md`): incumbent
@@ -57,8 +63,48 @@ The full policy is in `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0.
 | FFP6 | Model-level audit: 8K/16K/32K/64K ON/OFF, new registry entries, divergence audit | pending FFP5 |
 | FFP7 | End-to-end AB matrix + decision (KEEP → merge + default ON, else REJECT) | pending FFP6 |
 
+## MCP probe — FFN M-curve (2026-09-17)
+
+The FFP1/FFP4 kernel axis is closed (incumbent is the best-known kernel at M=512 for this
+shape class). The orthogonal **config-only** axis is the prefill chunk size `pc`, which
+sets the FFN GEMM width M. MCP1 measured the FFN per-token cost vs M (sustained, DVFS-
+interleaved, `qmvbench --ffn-pair`, 2 reps at the decision region):
+
+| M | gateup µs/tok | down µs/tok | **FFN µs/tok** |
+|---|---------------|-------------|----------------|
+| 512  | 2.108 | **9.153** | 11.261 |
+| 1024 | 4.019 | **2.407** | **6.426** ← min |
+| 2048 | 4.920 | 2.608 | 7.528 |
+| 4096 | 5.298 | 2.892 | 8.190 |
+| 8192 | 5.105 | 2.861 | 7.966 |
+
+The down_proj per-token cost drops 73.7% from M=512 (the tiling anomaly) to M=1024, then
+the gateup per-token cost rises and the FFN total bottoms at **M=1024**. Total causal
+attention work is O(L²) and pc-invariant, so FFN is the only pc-dependent prefill cost →
+**predicted optimal pc = 1024**. Full tables + decision: `benchmarks/results/mcp-
+20260917/mcp1-curve.md`.
+
+### MCP2 — end-to-end pc sweep: **KEEP pc=2048**, default flipped 512→2048
+
+The 32K/64K end-to-end sweep (fresh server per cell, greedy, bit-exact hash gates)
+resolved the prediction: **pc=2048 is the winner**, not the MCP1-predicted 1024 — the
+SDPA per-chunk tiling efficiency at larger Q tiles adds a residual gain on top of the FFN
+improvement. All three pc values are **bit-exact** (identical committed content at
+8K/16K/32K/64K), so there is no knife-edge divergence. Eval-sync prefill wall:
+
+| pc | 32K | vs 512 | 64K | vs 512 |
+|----|----:|-------:|----:|-------:|
+| 512 | 149.49 s | — | 305.17 s | — |
+| 1024 | 139.44 s | −6.7% | — | — |
+| 2048 | **130.58 s** | **−12.7%** | **279.03 s** | **−8.6%** |
+
+Memory-safe (peak RSS 14.6 GB @64K, per-chunk buffer 6.29 GB). Default
+`prefillChunkSize` flipped **512 → 2048**. Full tables + per-phase breakdown:
+`benchmarks/results/mcp-20260917/mcp2-report.md`.
+
 ## Flag reference
 
 | Env | Default | Meaning |
 |-----|---------|---------|
 | `MLX_QWEN_FFN_PREFILL_FAST` | `0` (off) | Engage the fast down_proj GEMM at prefill widths M ≥ 256 (relaxed numeric tolerance). OFF = byte-identical incumbent. |
+| `--prefill-chunk-size` | `2048` | Prefill chunk width M. MCP2 (2026-09-17): **2048** is bit-exact and −12.7% (32K) / −8.6% (64K) vs 512 → default raised 512→2048. |

@@ -68,7 +68,11 @@ struct ServerConfig: Sendable {
     /// are split into chunks of this size so the Metal GPU command buffer is
     /// not blocked by one giant prefill, keeping ITL predictable across
     /// concurrent streams. 0 disables chunking (single-pass prefill).
-    var prefillChunkSize: Int = 512    // --prefill-chunk-size
+    // MCP2 (2026-09-17): default raised 512 -> 2048. End-to-end 32K/64K sweep
+    // (benchmarks/results/mcp-20260917/mcp2-report.md) measured pc=2048 bit-exact
+    // and -12.7% (32K, 5/5 paired) / -8.6% (64K) eval-sync prefill wall vs pc=512,
+    // memory-safe (per-chunk buffer 6.3 GB @64K, peak RSS 14.6 GB << 48 GB).
+    var prefillChunkSize: Int = 2048   // --prefill-chunk-size
 
     // Tool calling (server-wide gate; per-request `tools`/`tool_choice`
     // still control individual requests).
