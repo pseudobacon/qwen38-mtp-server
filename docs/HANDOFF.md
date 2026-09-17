@@ -1,7 +1,7 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**COMPLETE: Upstream MLX decode-bandwidth probe — U1 survey (GO), U2 framework upgrade REVERTED (metallib build barrier) (2026-09-17).**
+**COMPLETE: Upstream MLX decode-bandwidth probe — U1 survey (GO), U2 REVERTED (metallib barrier), MET: metallib UNBLOCKED + v0.32.2 decode A/B INCONCLUSIVE (2026-09-17).**
 
 Objective: close the last quantified decode headroom (in-pipeline 200–275 GB/s vs qmvbench
 310–355 GB/s sustained on the 14.4 GB 4-bit weight stream) by determining whether a newer
@@ -38,14 +38,32 @@ kernels are not active and a v0.32.2 dot_product kernel is missing. A clean A/B 
 the PrepareMetalShaders CMake step → confirm engine suite green → run the decode A/B matrix
 (§5 of the survey).
 
-- **Deliverables:** `docs/UPSTREAM-MLX-SURVEY.md` (U1 + U2), `progress.md` (policy v3 + U1 +
-  U2), `benchmarks/MTP-CORRECTNESS-CONTRACT.md` §0c (policy v3).
-- **Git:** pin reverted; engine tree clean; server tree = docs only. Feature branches
-  `feature/upstream-mlx-probe` in both repos (to be merged to main + deleted).
-- **Next step:** none for this task. See the follow-up task above for the A/B.
-- **Fresh checkpoint:** completed 2026-09-17 15:30 BST via `scripts/agent-checkpoint.sh`
-  (`.dsh/last-agent-checkpoint` = `2026-09-17T15:30:56+01:00`); fresh-checkpoint
-  procedure completed.
+- **MET (the U2 follow-up, EXECUTED).** Unblocked the U2 metallib barrier and re-ran the
+  decode A/B. Details in `progress.md` (MET section) + `../mlx-swift-lm/docs/BUILD-MLX-UPGRADE.md`
+  + `../mlx-swift-lm/scripts/build-metallib.sh`.
+  - **Unblock:** `scripts/build-metallib.sh` (engine fork) builds the always-list Metal kernel
+    metallib via the CMake `mlx-metallib` target for the pinned C++ MLX revision (`1f8e74e` =
+    v0.32.2), cached per revision, places it colocated (`<exe-dir>/mlx.metallib`, first runtime
+    search path via `dladdr`), records SHA provenance (`b57de586…`); `check` mode = the
+    stale-metallib detector. v0.32.2 kernels **proven active**: the U2 MoE `dot_product` crash
+    case now **PASSES**; the release server starts clean (`readyz=200`).
+  - **A/B (cross-session, v0.32.2 vs v0.31.6 baselines):** essay 22.22 vs 21.89 (**+1.5%**),
+    specdec 23.56 vs 23.29 (**+1.1%**) — **below the 3% KEEP gate**. All correctness gates
+    pass (determinism/phaseSum/depthDist/acc match incumbents). **INCONCLUSIVE** (marginal +
+    cross-session thermal drift, stepAvg 87→100 ms).
+  - **Deliverables:** engine fork `scripts/build-metallib.sh` + `scripts/metallib-provenance.json`
+    + `docs/BUILD-MLX-UPGRADE.md` + `Package.swift` pin; server `progress.md` (MET) +
+    `docs/UPSTREAM-MLX-SURVEY.md` §7b + `Package.resolved`.
+  - **Git:** engine fork `feature/mlx-v0322-upgrade` @ `f36361c`; server
+    `feature/mlx-v0322-upgrade` @ `180e233`. **NOT merged to main** (KEEP gate not met).
+- **Next step:** a proper **interleaved A/B** (rebuild the v0.31.6 server, interleave
+  incumbent/upgraded reps in the same thermal session, rotating start) for a definitive
+  KEEP/REJECT. If it also shows <3%, the upgrade is a REJECT (keep the v0.31.6 pin; the metallib
+  script + docs are still the durable unblock). Triage the one swift-testing `[read]` crash
+  (model-file read, end of the engine suite — not the decode path).
+- **Fresh checkpoint:** completed 2026-09-17 16:25 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-17T16:25:43+01:00`); fresh-checkpoint procedure
+  completed.
 
 ---
 
