@@ -1,0 +1,17 @@
+pro1: loading gateup+down+o_proj for all 64 layers (weight stream) ...
+pro1: loaded 64 layers. per-layer seq bytes = 168.09984 MB
+
+PRO1 — layer-sequence sustained (M=3, backToBack=64, batches=8)
+  reference single kernel (gateup N=34816): 1 QMV
+  interleave (one layer's gateup+down+oproj): 3 QMVs, SAME weights cycled
+  thrash (64 layers' gateup+down+oproj): 192 QMVs, weights ROTATED
+
+| cell | QMVs/batch | GB/s | us/seq | total bytes |
+|------|------------|------|--------|-------------|
+| 1 single-kernel (gateup) | 1 | 177.4 | 565 | 100.3 MB |
+| 2 interleave (1 layer mix) | 3 | 176.8 | 951 | 168.1 MB |
+| 3 thrash (64-layer mix) | 192 | 173.6 | 61970 | 10.8 GB |
+
+  interleave cost (cell1->cell2): 177.4 -> 176.8 GB/s  (99.6%)
+  thrash cost (cell2->cell3): 176.8 -> 173.6 GB/s  (98.2%)
+qmvbench: PRO1 done

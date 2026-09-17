@@ -2334,3 +2334,31 @@ behavior. No speculative work — only measurements that change a decision. Run 
 - essay decode: ttlt=25.65 (registered 24.99), tEval=81.6 ms (registered 80.7), stream hash
   `949b9423` EXACT. 32K prefill: wall=132.5 s (registered 125.50 s, Δ+5.6%), prompt_tokens=
   32780 EXACT, cache_state=MISS controlled. **All reproduce.** (`mer40-verification.md`.)
+
+## 2026-09-17: PRO — In-pipeline bandwidth gap probe (run `pro-bw-20260917-2306`) — **COMPLETE: GO for scheduling task**
+
+Diagnostic-only task (no production source changes; qmvbench `--layer-seq` probe added;
+FullBench reused). Locate the ~2× in-pipeline BW gap (176.6 GB/s vs 310–355 GB/s
+sustained): (a) hardware interleave? (b) server/round dispatch? (c) measurement artifact?
+
+- **PRO0 (headline refresh, 18 cells, controlled MISS, interleaved):** essay tEvalAvg med
+  83.2 ms, specdec 85.6 ms (confirms 81.6 ms anchor); stream hashes `949b9423`/`139acb9d`
+  match registry exactly (no cold/warm drift on v0.32.2); 32K prefill 118.2 s (matches
+  ~125 s MER2 anchor); TTFT MISS 1.56 s vs RAM-HIT 0.78 s (2×).
+- **PRO1 (QMV interleave + weight-rotation, `--layer-seq`, M=3):** cell 1 single-gateup
+  177.4 GB/s, cell 2 interleave 176.8 GB/s (**99.6%**), cell 3 thrash (64-layer rotation)
+  173.6 GB/s (**98.2%**). **Interleave and weight-rotation are FREE → rules out (a).**
+- **PRO2 (FullBench round replay, M=1/M=3/serial):** M=1 serial 58.82 ms (**250 GB/s**),
+  M=3 verify 79.52 ms (181 GB/s), in-pipeline (M=3) 83.2 ms (176.6 GB/s). In-pipeline ≈
+  M=3 verify + **3.7 ms** (draft + accept/rollback + prime-depth). The round dispatch is
+  **not** the gap.
+
+**Mechanism verdict:** (a) NO (interleave/thrash free), (b) **YES (dominant)** — the gap is
+the per-dispatch sync + M effect (M=3 verify with per-step sync = 176.6 GB/s vs FFN
+sustained no-sync = 310–355 GB/s; M=3 less memory-bound than M=1 at 250 GB/s), (c) NO
+(consistent across PRO0/PRO2, hashes match). **GO for a scheduling task:** the lever is
+batched/fused dispatch + state amortization across MTP steps (engagement map lever #1),
+targeting the per-dispatch sync + state setup, NOT the kernel mix (PRO1: free).
+
+**Files:** `benchmarks/results/pro-bw-20260917-2306/pro-findings.md` (+ PRO0/PRO1/PRO2
+raw cells). Engine: qmvbench `--layer-seq` probe (uncommitted diagnostic).

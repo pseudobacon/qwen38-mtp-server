@@ -1,0 +1,9 @@
+PRO0 provenance — pro-bw-20260917-2306
+date: 2026-09-17 23:06:30
+server binary SHA256 (16): 4d08bbca521c1ad7
+server binary bytes: 99330592
+server HEAD: 37bc922 Record MER4 completion + fresh checkpoint 2026-09-17T22:54:37+01:00
+qmvbench SHA256 (16): a4b56e2b0238cf41
+fullbench SHA256 (16): fd798fb3cd91927c
+engine HEAD: 6e8eab2 MER1: green the suites under policy v3 (continuation + Fused + metallib gate)
+metallib SHA256 (16): db49910197d39702

@@ -19,6 +19,20 @@ verification: essay decode + 32K prefill both reproduce the registered values. `
 now takes a `CACHE_STATE` arg (MISS/RAM-HIT) + records `cache_ssd_promoted`. Engagement map +
 ranked next tasks → `docs/V0322-KERNEL-BASELINE.md`. Run `mer4-20260917-2137`.
 
+**PRO (in-pipeline BW gap probe) — COMPLETE: GO for scheduling task.** Run
+`pro-bw-20260917-2306`. Diagnostic-only (no production source changes; qmvbench
+`--layer-seq` probe added). PRO0: headline refresh confirms 81.6 ms in-pipeline anchor
+(essay 83.2 / specdec 85.6 ms), stream hashes match registry exactly (no cold/warm drift
+on v0.32.2). **PRO1 (qmvbench `--layer-seq`):** the QMV kernel-mix interleave (99.6%) AND
+the weight-rotation/thrash (98.2%) are FREE → rules out a hardware interleave property.
+**PRO2 (FullBench M=1/M=3/serial):** M=1 serial 58.82 ms (250 GB/s), M=3 verify 79.52 ms
+(181 GB/s), in-pipeline (M=3) 83.2 ms (176.6 GB/s) = M=3 verify + 3.7 ms draft/accept-
+rollback. **Verdict:** the 2× gap is the **per-dispatch sync + M effect** (M=3 verify with
+per-step sync = 176.6 GB/s vs FFN sustained no-sync = 310–355 GB/s), NOT interleave/thrash
+(free) and NOT a measurement artifact. **GO** for a scheduling task: batched/fused dispatch
++ state amortization across MTP steps (engagement map lever #1), targeting the per-dispatch
+sync + state setup, NOT the kernel mix. → `benchmarks/results/pro-bw-20260917-2306/pro-findings.md`.
+
 **MER1 (suites green under policy v3) — COMPLETE.** Policy v3 (bit-exactness relaxed,
 determinism = hard gate) recorded in contract §0c. Continuation (53) + Fused (18, tolerance
 0.02, measured max|diff|=0.015625) + metallib SHA gate (1) + decode canary (1) = **78/78
