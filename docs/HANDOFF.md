@@ -90,7 +90,7 @@ complete 2026-09-18. Findings `benchmarks/results/quick-wins/`. Suites green
 `853a9d1` → `1daf455` (lazy SSD default ON + startup traces + audit + results);
 both `feature/prompt-3` branches deleted, both trees clean on `main`.
 
-**Fresh checkpoint:** server `2026-09-18T14:26:43+01:00` (HEAD `1daf455`), engine
+**Fresh checkpoint:** server `2026-09-18T14:27:36+01:00` (HEAD `6b2d7cc`), engine
 `2026-09-18T14:26:51+01:00` (HEAD `67873ed`), via `scripts/agent-checkpoint.sh`
 (clean diff, no untracked). No server left running. Fresh-checkpoint procedure
 completed.
