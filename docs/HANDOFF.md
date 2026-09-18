@@ -84,9 +84,16 @@ The lazy SSD restore (Item 4) is implemented + default ON; the `_PREFILL` audit
 closed.
 
 **Quick-wins completion marker:** Phases 0–2 + Phase 3 quick-wins (Items 1–4)
-complete 2026-09-18 (findings `benchmarks/results/quick-wins/`); suites green
-(engine 3/3, server 237/7); both trees on `feature/prompt-3`, `git diff --check`
-clean; to be merged to `main` (engine first, then server) after the checkpoint.
+complete 2026-09-18. Findings `benchmarks/results/quick-wins/`. Suites green
+(engine `Qwen38MTPDiagnosticTests` 3/3, server `HTTPServerTests` 237/7). Merged to
+`main`: engine `9f4ceb9` → `67873ed` (verify flip + top-2 gap trace), server
+`853a9d1` → `1daf455` (lazy SSD default ON + startup traces + audit + results);
+both `feature/prompt-3` branches deleted, both trees clean on `main`.
+
+**Fresh checkpoint:** server `2026-09-18T14:26:43+01:00` (HEAD `1daf455`), engine
+`2026-09-18T14:26:51+01:00` (HEAD `67873ed`), via `scripts/agent-checkpoint.sh`
+(clean diff, no untracked). No server left running. Fresh-checkpoint procedure
+completed.
 
 ---
 
