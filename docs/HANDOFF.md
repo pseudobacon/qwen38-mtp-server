@@ -1,6 +1,63 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
+**ACTIVE: Residual-lever triage campaign (measure-first, kill-switched) — Phase 0 done (2026-09-18).**
+
+Objective: systematically evaluate every remaining performance lever. Discipline:
+measure/model FIRST → pre-stated GO bar → implement only on GO. NO-GOs are
+recorded and closed (kill switches binding). Standing protocol per measurement:
+policy v3 §0d determinism per (binary, config, cache state); MER4.0 cache-state
+control (prefill/TTFT cells forced MISS, decode cells pinned); 6 reps, rep 1
+discarded, interleaved rotating start, `pmset -g therm` per rep, single binary
+per comparison, phase-sum gates, engagement proof from logs, binary + metallib
+provenance. In-session paired deltas only; cross-session absolutes are labels.
+
+**Gate map (lever → gate → verdict → next step):**
+
+| ID | Lever | Phase | Gate / GO bar | Verdict |
+|----|-------|-------|---------------|---------|
+| LEV-A | KV-quant default AB (fp16 vs affine8 @ kvTail 1024), 32K multi-turn: hit-rate/hit-TTFT materially up, acceptance in band, no admission regression | 1 | own AB | open |
+| LEV-B | Fused-GDN prefill re-AB (`MLX_QWEN_FUSED_GDN`), 32K/64K: ≥3% mean prefill wall AND ≥4/5 paired reps, streams per policy v3 | 1 | own AB | open |
+| LEV-C | Startup-time decomposition (instrumentation only): attribute the ~0.34 s SSD-tier delta before LEV-H | 1 | own measurement | open |
+| LEV-D | Flash + large-pc compounding model: solve for c_flash at which pc≥8192 beats the pc=2048 incumbent at 32K/64K; cross-check the 6.29 GB scores-buffer memory model | 2 | arithmetic | open |
+| LEV-E | Draft-select Metal ceiling: bound (iv) 1.451 ms + (iii) share owned by the draft walk (instrument to confirm; may sit inside verify_build); < 2 ms/round → CLOSE the qwen35DraftSelectKernel lever | 2 | SCH1 ledger | open |
+| LEV-F | Tree-drafting + conversation-resume design study (paper, zero code); rank the two; shared blocker = generated state (KV + GDN recurrent) in the radix + rollback composition | 2 | design soundness | open |
+| LEV-G | Flip KV default; admission/budget docs; registry; provenance | 3 | LEV-A GO | gated |
+| LEV-H | Tokenization-cache persistence (shutdown serialize / startup restore; size-capped, TTL-respecting, corruption-safe); AB cold-start delta | 3 | LEV-C attributes the 0.34 s to tokenization | gated |
+| LEV-I | Startup memory-policy tuning | 3 | LEV-C knob sensitivity | **CLOSED at Phase 0 — `RuntimeStartupMemoryPolicy` knobs absent from the checkout (anchor divergence recorded in progress.md)** |
+| LEV-J | Flash-attention Metal kernel: FFP-style micro kill-switch against the LEV-D bar first, then full pipeline (determinism gates, divergence audit, end-to-end AB with the pc sweep re-opened under flash, admission update) | 3 | LEV-D bar credible | gated |
+| LEV-K | Metal draft-select kernel | 3 | LEV-E bound ≥ 2 ms | gated |
+| LEV-L | Stage-3 conversation resume (generated state in radix); tree drafting as follow-on sharing the machinery | 3 | LEV-F design sound | gated |
+| — | pc autotuning calibration mode (optional, lowest priority) | opt | real-workload mixed-length data shows the 2048 optimum moves | closed until data |
+
+**Deliverables per phase (cumulative):** `benchmarks/results/lev-<id>-<run-id>/`
+for every measurement; the remaining-avenues ledger in `progress.md` updated after
+every closure; this campaign section kept current; fresh checkpoint after every
+task; both trees clean; no server left running.
+
+**Anchor divergences recorded (Phase 0):** (1) the plan's stale "Next Steps" /
+"Active Context" sections live in this file + `progress.md` roadmap, not as
+literal sections of progress.md — hygiene applied where they actually live. (2)
+The LEV-C `RuntimeStartupMemoryPolicy` knobs (512 MB / 50 ops per command buffer)
+do not exist in either checkout — LEV-I closed, LEV-C decomposition retained.
+Pre-campaign uncommitted experiments were stashed (`stash@{0}` on server main):
+temp 1.0 + admission cap 32768.
+
+**Not worth pursuing (do not open):** continuous batching, prefix-aware
+scheduling (single-user scope), Swift compact draft vocab (negative result),
+fused GDN decode kernels beyond LEV-B's single re-AB, and everything on the
+Phase-0 closed-with-evidence list in `progress.md` (SCH1 scheduling, FFP1/FFP4
+FFN prefill, decode BW per-dispatch/state-bound, deep drafts, head fusion,
+interleaved layout, KV q4 default — HARD RULE).
+
+**Next step (exact for this campaign):** Phase 2 zero-code levers — LEV-D
+(flash arithmetic from existing pc-sweep + M-curve + 64K SDPA-share data),
+LEV-E (draft-select bound from the SCH1 ledger), LEV-F (design study) — then
+Phase 1 measurements (LEV-C, LEV-B, LEV-A) under the standing protocol.
+
+---
+
+## Prior status
 **COMPLETE: MTP round scheduling task (PRO GO lever #1) — SCH1 kill-switch ledger → STOP (2026-09-18).**
 
 The PRO GO lever #1 (batched/fused dispatch + state amortization across MTP steps) was
@@ -509,7 +566,7 @@ Prior — MER3 merge checkpoint: `2026-09-17T21:18:43+01:00` (server `main` @
 `628c0fc`, engine `main` @ `6e8eab2`, both clean). FFP4 checkpoint `2026-09-17
 09:46 BST` (server `8a055a3`, engine `c575e19`).
 
-## Next step (exact)
+## Next step (exact) — SUPERSEDED (see the campaign "Next step (exact)" block at the top, 2026-09-18)
 **None outstanding for the MLX v0.32.2 platform refresh (MER1–MER4 all COMPLETE).** The
 ranked follow-on (NOT part of this refresh — a separate task) is the in-pipeline scheduling
 lever from `docs/V0322-KERNEL-BASELINE.md`: the decode weight-stream BW is per-

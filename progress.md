@@ -2391,3 +2391,86 @@ not closable by batched/fused dispatch. No source changes (no-code STOP). (iii) 
 
 **Files:** `benchmarks/results/sch1-20260918-0041/sch1-findings.md` (+ `sch1-ledger.csv`,
 `sch1-gpu-intervals.xml`, `sch1-mtp-trace.log`, `sch1_final.py`).
+
+## 2026-09-18: Residual-lever triage campaign — Phase 0 (record hygiene) + campaign ledger
+
+Campaign: "Residual-lever triage — measure-first, kill-switched." Every remaining
+performance lever follows: measure/model FIRST → pre-stated GO bar → implement only
+on GO → NO-GOs recorded and closed (kill switches binding). Standing protocol per
+measurement: policy v3 §0d determinism (per (binary, config, cache state)), MER4.0
+cache-state control (prefill/TTFT cells forced MISS, decode cells pinned), 6 reps /
+rep-1 discarded / interleaved rotating start / pmset -g therm per rep / single binary
+per comparison / phase-sum gates / engagement proof from logs / binary + metallib
+provenance. In-session paired deltas only.
+
+### Phase 0 — record hygiene (this entry)
+
+- **Anchor divergence (recorded, per stop-condition policy):** the plan names stale
+  "Next Steps" and "Active Context" sections *in progress.md*; the live versions of
+  those sections are `docs/HANDOFF.md` ("Status" / "Next step (exact)") and the
+  "Current status and roadmap → Open items" list here. Hygiene applied where the
+  sections actually live:
+  - HANDOFF.md "Status" + "Next step (exact)" rewritten to the campaign gate map
+    (completed items removed: speculative sampling, penalties, TTL caching,
+    KV-quantization call-sites, chunked prefill / Path B; pc default is **2048**,
+    not 512).
+  - This file's "Open items" list below is superseded by the campaign ledger
+    (items 1–8 of the old list are all resolved/closed; nothing is dropped, only
+    re-homed).
+- **Pre-campaign tree state:** server `main` @ `dc5d80e` carried uncommitted local
+  experiments (`temp 0.0→1.0`, admission preflight cap `4096→32768` in
+  `OpenAIRouter.swift`, `.DS_Store`); stashed as `stash@{0} "lev-campaign: pre-
+  campaign local experiments (temp 1.0, admission cap 32768)"` before work began.
+  Engine `main` @ `cfd6df5` clean. Campaign branches:
+  `feature/prompt-lev-campaign` in both repos.
+- **Anchor divergence (recorded):** the plan's LEV-C names `RuntimeStartupMemoryPolicy`
+  knobs (512 MB / 50 ops per command buffer). **No such knobs exist in either
+  checkout** (zero occurrences in server `Sources/` or the engine fork). The LEV-C
+  knob matrix is CLOSED as "anchor absent"; LEV-C's startup-time decomposition
+  (first bullet) remains in scope.
+
+### Remaining-avenues ledger (campaign — supersedes the old "Open items" list)
+
+| ID | Lever | Phase | Gate / GO bar | Status |
+|----|-------|-------|---------------|--------|
+| LEV-A | KV-quant cache default (fp16 vs affine8 @ kvTail 1024): hit-rate/hit-TTFT up materially, acceptance within band, no admission regression | 1 | own AB | open |
+| LEV-B | Fused-GDN prefill re-AB (`MLX_QWEN_FUSED_GDN`, default OFF), 32K/64K: ≥3% mean prefill wall AND ≥4/5 paired reps | 1 | own AB | open |
+| LEV-C | Startup-time decomposition (instrumentation only); attribute the ~0.34 s SSD-tier delta before LEV-H | 1 | own measurement | open |
+| LEV-D | Flash + large-pc compounding model: solve for c_flash where pc≥8192 beats pc=2048 incumbent at 32K/64K | 2 | arithmetic | open |
+| LEV-E | Draft-select Metal ceiling: bound (iv) 1.451 ms + (iii) share owned by the draft walk; < 2 ms/round → CLOSE | 2 | SCH1 ledger | open |
+| LEV-F | Tree-drafting + conversation-resume design study (paper, zero code) | 2 | design soundness | open |
+| LEV-G | Flip KV default (impl) | 3 | LEV-A GO | gated |
+| LEV-H | Tokenization-cache persistence (serialize/restore, size/TTL/corruption-safe) | 3 | LEV-C attributes the 0.34 s to tokenization | gated |
+| LEV-I | Startup memory-policy tuning | 3 | LEV-C knob sensitivity | **CLOSED at Phase 0 — anchor knobs absent from checkout** |
+| LEV-J | Flash-attention Metal kernel (FFP-style micro kill-switch vs the LEV-D bar first) | 3 | LEV-D bar credible | gated |
+| LEV-K | Metal draft-select kernel | 3 | LEV-E bound ≥ 2 ms | gated |
+| LEV-L | Stage-3 conversation resume (generated state in radix); tree drafting as follow-on | 3 | LEV-F design sound | gated |
+| — | pc autotuning calibration mode | opt | real-workload mixed-length data shows the 2048 optimum moves (current curve says it doesn't) | closed until data |
+
+### Closed with evidence (do not reopen without new evidence)
+
+- **MTP round scheduling restructure** (SCH1, `sch1-20260918-0041`): (ii)+(iv) =
+  2.675 ms/round = 3.2% addressable < 8 ms kill switch → STOP. 176.6 GB/s in-
+  pipeline BW is an M=3 verify geometry property, not a scheduling artifact.
+- **FFN prefill GEMM kernels** (FFP1/FFP4, `ffp1/`, `ffp4/`): the M=512 down_proj
+  anomaly is a small-M/large-K GEMM shape-class property of the Metal quantized
+  engine; split-K candidates all < 1.0×. pc=2048 (not a kernel) is the standing
+  mitigation.
+- **Decode bandwidth** (MER4B + PRO `pro-bw-20260917-2306`): per-dispatch/state-
+  bound (interleave/thrash free at 99.6%/98.2%; M=3 verify 181 GB/s vs 250 GB/s
+  M=1 serial). Not closable by kernel choice at this checkout.
+- **Deep drafts k≥5** (Phase 4/5, 2026-09-14): net-negative (14.53/12.85/9.80 vs
+  21.28 tok/s at k2); acc/step plateau ~1.7–1.8.
+- **Head fusion** (K=2 decomposition §8 / PROFILE-K2.md): rearrangement, not work
+  removal; predicted +3.1 ms/round.
+- **Interleaved gate+up layout** (Item C): no gain, +6.5 GB row-gather copies;
+  removed in engine `901d2ca`.
+- **Swift compact draft-vocab walk** (Task 1, 2026-09-16): 2.05% *slower* vs the
+  ≥3% bar; artifacts kept.
+- **Continuous batching / prefix-aware scheduling**: out of scope (single-user
+  scope); not to be opened.
+- **KV q4 as a default**: HARD RULE — documented catastrophic quality failures on
+  Qwen at kv4. q4 may only be proposed as a separate gated experiment with a
+  quality-evidence plan, and only if LEV-A shows affine8 wins.
+- **pc autotuning**: measured pc curve (512/1024/2048 sweep, MCP2) shows 2048 is
+  the monotone winner; no mixed-length data exists that moves the optimum.

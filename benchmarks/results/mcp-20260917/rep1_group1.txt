@@ -1,0 +1,10 @@
+qmvbench: FFP1 PAIR mode (interleaved gateup/downproj, same DVFS window)
+  sustained: 128 back-to-back / batch, 1 eval/batch, alternating a/b
+
+M=512 gateup_wide: mean=1043.65 us  p50=1037.88  std=293.67  (154 batches)  174.9 TFLOP/s
+M=512 downproj: mean=4647.92 us  p50=4642.77  std=150.91  (154 batches)  19.6 TFLOP/s
+M=1024 gateup_wide: mean=3855.57 us  p50=3650.20  std=953.79  (182 batches)  94.7 TFLOP/s
+M=1024 downproj: mean=2336.93 us  p50=2216.90  std=508.72  (182 batches)  78.1 TFLOP/s
+M=2048 gateup_wide: mean=2201.52 us  p50=1556.28  std=2053.85  (74 batches)  331.7 TFLOP/s
+M=2048 downproj: mean=5221.05 us  p50=5589.67  std=1948.18  (74 batches)  69.9 TFLOP/s
+qmvbench: FFP1 PAIR done

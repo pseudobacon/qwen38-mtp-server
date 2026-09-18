@@ -1,0 +1,6 @@
+qmvbench: FFP1 PAIR mode (interleaved gateup/downproj, same DVFS window)
+  sustained: 64 back-to-back / batch, 1 eval/batch, alternating a/b
+
+M=4096 gateup_wide: mean=5552.40 us  p50=5189.13  std=1532.06  (74 batches)  263.0 TFLOP/s
+M=4096 downproj: mean=12167.65 us  p50=12031.62  std=1174.70  (74 batches)  60.0 TFLOP/s
+qmvbench: FFP1 PAIR done
