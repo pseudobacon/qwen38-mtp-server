@@ -1,6 +1,21 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
+**COMPLETE: MTP round scheduling task (PRO GO lever #1) — SCH1 kill-switch ledger → STOP (2026-09-18).**
+
+The PRO GO lever #1 (batched/fused dispatch + state amortization across MTP steps) was
+investigated via a kill-switch ledger (SCH1). Instrumented every ms of a steady-state k2 round
+(xctrace Metal System Trace per-encoder GPU intervals + host mtp-anchor/mtp-trace phase
+stamps, joined on mach-uptime). Ledger: round 84.6 ms = **(i) kernel exec 76.43 ms (90.6%)** +
+**(ii) sync/idle 1.224 ms** + (iii) host build/read 3.920 ms + **(iv) round-struct 1.451 ms**;
+GPU util in eval **97.4%**. **(ii)+(iv) = 2.675 ms < 8 ms → KILL SWITCH TRIGGERS → STOP.** The
+per-round scheduling restructure is **not worth it** (3.2% addressable). The 176.6 GB/s
+in-pipeline bandwidth is an **M=3 verify geometry property** (90.6% kernel exec), NOT a
+scheduling artifact. No source changes. Run `sch1-20260918-0041` →
+`benchmarks/results/sch1-20260918-0041/sch1-findings.md`.
+
+---
+
 **COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) + ND (root-cause) + MER3 (merge to main) + MER4 (post-merge kernel re-baseline) (2026-09-17).**
 
 Objective: finalize the MLX v0.32.2 platform refresh. MER1 greened the suites (policy v3);

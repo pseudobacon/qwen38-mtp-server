@@ -2362,3 +2362,32 @@ targeting the per-dispatch sync + state setup, NOT the kernel mix (PRO1: free).
 
 **Files:** `benchmarks/results/pro-bw-20260917-2306/pro-findings.md` (+ PRO0/PRO1/PRO2
 raw cells). Engine: qmvbench `--layer-seq` probe (uncommitted diagnostic).
+
+## 2026-09-18: SCH1 — MTP round kill-switch ledger (run `sch1-20260918-0041`) — **COMPLETE: STOP**
+
+First phase of the MTP round scheduling task (PRO GO lever #1: batched/fused dispatch +
+state amortization). Kill-switch protocol: instrument every ms of a steady-state k2 round,
+classify into (i) kernel exec, (ii) sync/idle, (iii) host build/read, (iv) round-structure
+overhead; if (ii)+(iv) < 8 ms/round (~10%), STOP (not worth the restructure).
+
+**Instrumentation:** xctrace Metal System Trace (launched mode) per-encoder GPU intervals
+(server pid, 36,644 intervals) + `QWEN_MTP_STEP_TRACE`/`MLX_QWEN_MTP_TRACE` host phase
+stamps (mtp-anchor mach-uptime + mtp-trace µs), joined on mach-uptime (median offset 42 ms,
+total busy stable 0.5% across 0–40 ms). Steady-state k2 decode, essay-1024, MISS, greedy,
+457 rounds (5..461).
+
+**Ledger (median, 429 sane rounds):**
+- round total **84.6 ms**; **(i) kernel exec 76.43 ms (90.6%)**, **(ii) sync/idle 1.224 ms
+  (1.4%)**, **(iii) host build/read 3.920 ms (4.6%)**, **(iv) round-struct 1.451 ms (1.7%)**.
+- GPU util in eval window **97.4%** (matches prior K2 98.4%).
+- **(ii)+(iv) = 2.675 ms < 8 ms → KILL SWITCH TRIGGERS → STOP.**
+
+**Verdict:** The per-round scheduling restructure (lever #1) is **not worth it** — only
+2.68 ms/round (3.2%) is addressable. The 176.6 GB/s in-pipeline bandwidth is an **M=3 verify
+geometry property** (90.6% kernel exec, 97.4% GPU-busy in eval), NOT a scheduling artifact —
+not closable by batched/fused dispatch. No source changes (no-code STOP). (iii) verify_build
+(3.92 ms, 4.6%) is a separate host-side graph-construction lever, out of scope, and below the
+8 ms threshold on its own.
+
+**Files:** `benchmarks/results/sch1-20260918-0041/sch1-findings.md` (+ `sch1-ledger.csv`,
+`sch1-gpu-intervals.xml`, `sch1-mtp-trace.log`, `sch1_final.py`).
