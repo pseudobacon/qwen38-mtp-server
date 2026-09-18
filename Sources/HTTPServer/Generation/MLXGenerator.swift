@@ -392,6 +392,15 @@ actor MLXGenerator {
         budgetGB: 0, ttlSeconds: 0)
     private var weightIdentityCache: (digest: String, hardware: String)?
 
+    /// Deferred weight-identity task (Item 4 + prewarm sharing): the ~8 s /
+    /// 15 GB weight-tree read runs at most once per process, starting only
+    /// after the first request completes (or the 60 s cap). A concurrent
+    /// 15 GB read measured ~4x decode-round slowdown during the first
+    /// request (benchmarks/results/prewarm-ab-*).
+    private var weightIdentityDeferredTask: Task<(digest: String, hardware: String), Never>?
+    private var firstRequestEnd: AsyncStream<Void>?
+    private var firstRequestContinuation: AsyncStream<Void>.Continuation?
+
     private var tokenizationCache: TokenizationCache
     private let cacheNamespace: String
     private let logger: Logger
@@ -433,6 +442,12 @@ actor MLXGenerator {
         self.maxDraftDepth = maxDraftDepth
         self.forcedDraftK = forcedDraftK
         self.logger = logger
+        // First-request-completed signal (drives the deferred weight-identity
+        // digest; see `weightIdentityDeferred`).
+        let (firstRequestEndStream, firstRequestEndCont) =
+            AsyncStream.makeStream(of: Void.self)
+        self.firstRequestEnd = firstRequestEndStream
+        self.firstRequestContinuation = firstRequestEndCont
 
         // Online adaptive draft depth (off by default). Seed the policy at the
         // resolved forced depth (the calibration/env/default baseline) so
@@ -633,10 +648,14 @@ actor MLXGenerator {
             let lazy = ProcessInfo.processInfo.environment["QWEN_KV_SSD_LAZY"] != "0"
             if sTimer.enabled { sTimer.mark("ssd-identity-start") }
             if lazy {
-                Task.detached { [weak self, modelPath, ssdCfg] in
-                    // Pure CPU (file I/O + hashing) off the actor's critical path.
-                    let identity = MLXGenerator.computeWeightIdentity(modelPath: modelPath)
+                Task.detached { [weak self, ssdCfg] in
                     guard let self else { return }
+                    // Item 4 + prewarm: the ~8 s / 15 GB weight-identity hash is
+                    // shared with the prewarm provenance check (one read per
+                    // process) and deferred until after the first request, so
+                    // it never overlaps the first request's decode rounds. Off
+                    // the actor's critical startup path either way.
+                    let identity = await self.weightIdentityDeferred()
                     await self.finishSSDSetup(config: ssdCfg, weightDigest: identity.digest)
                 }
                 print("[startup] SSD restore is LAZY (background); readyz is not gated on it")
@@ -681,6 +700,43 @@ actor MLXGenerator {
         let url = URL(fileURLWithPath: modelPath).resolvingSymlinksInPath()
         let digest = WeightTreeDigests.compute(rootURL: url)?.sha256 ?? ""
         return (digest, WeightTreeDigests.hardwareID())
+    }
+
+    /// The weight identity, computed exactly once per process and DEFERRED
+    /// until after the first request completes (or a 60 s cap). The read is
+    /// ~8 s over 15 GB and a concurrent copy measured ~4x decode-round
+    /// slowdown on the first request (benchmarks/results/prewarm-ab-*).
+    /// Shared by the lazy SSD path and the prewarm provenance check, so the
+    /// process pays for it at most once.
+    func weightIdentityDeferred() async -> (digest: String, hardware: String) {
+        if let task = weightIdentityDeferredTask {
+            return await task.value
+        }
+        let modelPath = self.modelPath
+        let task = Task { () -> (digest: String, hardware: String) in
+            await self.waitForFirstRequestOrTimeout()
+            return Self.computeWeightIdentity(modelPath: modelPath)
+        }
+        weightIdentityDeferredTask = task
+        return await task.value
+    }
+
+    /// Called when the first generation completes (any outcome).
+    private func noteFirstRequestCompleted() {
+        guard let cont = firstRequestContinuation else { return }
+        firstRequestContinuation = nil
+        cont.finish()
+    }
+
+    /// Waits for the first-request-completed signal or the deferral cap.
+    private func waitForFirstRequestOrTimeout() async {
+        guard let stream = firstRequestEnd else { return }
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { for await _ in stream { return true }; return false }
+            group.addTask { try? await Task.sleep(for: .seconds(60)); return true }
+            _ = await group.next()
+            group.cancelAll()
+        }
     }
 
     private func weightIdentity() -> (digest: String, hardware: String) {
@@ -1665,6 +1721,11 @@ actor MLXGenerator {
                 }
 
                 await registry.deregister(id)
+
+                // First completed generation (any outcome): release the
+                // deferred weight-identity digest (see
+                // `weightIdentityDeferred`).
+                await self.noteFirstRequestCompleted()
 
                 // Opt-in memory recovery
                 if generationFailed {

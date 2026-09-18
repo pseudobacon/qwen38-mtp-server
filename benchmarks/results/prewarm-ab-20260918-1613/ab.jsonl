@@ -1,0 +1,2 @@
+{"trial": 1, "cell": "A", "tt_readyz_s": 17.08, "first_request_s": 2.592334, "content_sha256_16": "96b3e57603e12cde", "prewarm_s": null, "metal_cache_growth_kb": 4192, "fixture_hash": "c25c2d79098a6eaa0762b5bda0cf6ccd6795f7f03548e5e0eba59e6b7519e2ad", "binary_sha256": "a1325a8325608fbb5a79f4aea49b3c96cc81285d9f9b238321adf6a128d71cb9", "server_head": "2cc5c01", "engine_head": "67873ed", "server_dirty": "dirty", "engine_dirty": "clean", "os_build": "25F84"}
+{"trial":2,"cell":"B","error":"prewarm failed"}

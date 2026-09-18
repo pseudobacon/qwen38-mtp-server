@@ -100,6 +100,20 @@ struct ServerConfig: Sendable {
     var kvSSDCacheGB: Int = 8              // --kv-ssd-cache-gb
     var kvSSDTTLSeconds: Int = 86400       // --kv-ssd-ttl-seconds
 
+    // Prewarm (quick-wins Item 3 / LEV-C): post-install Metal-JIT cache seed.
+    // See docs/PRE-WARM.md.
+    var prewarmExit: Bool = false          // --prewarm-exit
+    var prewarmCheck: Bool = false         // --prewarm-check
+    /// Provenance manifest location (env `QWEN_PREWARM_MANIFEST`).
+    var prewarmManifestPath: String = Self.defaultPrewarmManifestPath
+
+    static let defaultPrewarmManifestPath: String = {
+        if let env = ProcessInfo.processInfo.environment["QWEN_PREWARM_MANIFEST"] {
+            return env
+        }
+        return ("~/.qwen38-mtp/prewarm-manifest.json" as NSString).expandingTildeInPath
+    }()
+
     // Tokenization cache (Stage 0 of the prefix-cache RFC). Bounded, actor-
     // isolated cache of prompt tokenization results. Stores only encoded token
     // IDs — no MLX/KV state. Safe KV reuse is out of scope (no copy-on-write).
@@ -167,6 +181,8 @@ struct ServerConfig: Sendable {
         "--spec-draft-adaptive",
         "--kv-ssd-enabled",
         "--kv-ssd-disabled",
+        "--prewarm-exit",
+        "--prewarm-check",
     ]
 
     /// The subset of `CommandLine.arguments` that Vapor's
@@ -345,6 +361,10 @@ struct ServerConfig: Sendable {
                 config.kvSSDEnabled = true
             case "--kv-ssd-disabled":
                 config.kvSSDEnabled = false
+            case "--prewarm-exit":
+                config.prewarmExit = true
+            case "--prewarm-check":
+                config.prewarmCheck = true
             case "--kv-tail-size", "--cache-type-v-tail":
                 if index + 1 < args.count, let val = Int(args[index + 1]) { config.kvTailSize = val }
             case "--memory-limit":
@@ -560,11 +580,20 @@ struct ServerConfig: Sendable {
              --tools-enabled                 Enable tool calling (default: true)
              --tools-disabled                Disable tool calling server-wide
 
+         PREWARM (post-install Metal-JIT cache; docs/PRE-WARM.md):
+             --prewarm-exit                  Run the full startup (load + warm),
+                                             write the provenance manifest, exit.
+             --prewarm-check                 Validate the current build against
+                                             the manifest (no model load) and
+                                             exit: 0 match / 1 mismatch / 2
+                                             no manifest.
+
 
         ENVIRONMENT VARIABLES:
             QWEN_HOST, QWEN_PORT, QWEN_MODEL, QWEN_MTP_HEAD, QWEN_MODEL_ALIASES,
             QWEN_MEMORY_LIMIT_GB, QWEN_MAX_QUEUE_DEPTH, QWEN_PREFILL_CHUNK_SIZE,
             QWEN_KV_SCHEME, QWEN_KV_GROUP_SIZE, QWEN_KV_BITS, QWEN_KV_TAIL_SIZE,
+            QWEN_PREWARM_MANIFEST  (prewarm provenance manifest path)
             LLAMA_ARG_CACHE_TYPE_K, LLAMA_ARG_CACHE_TYPE_V,
             QWEN_MTP_DRAFT_K          (pin the per-round draft depth to min(offer, k);
                                         overrides the pinned k = 2 default;

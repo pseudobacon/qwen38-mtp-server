@@ -59,6 +59,8 @@ final class ServerConfigArgumentTests: XCTestCase {
         "--spec-draft-adaptive",
         "--kv-ssd-enabled",
         "--kv-ssd-disabled",
+        "--prewarm-exit",
+        "--prewarm-check",
     ]
 
     private func fullFlagCommandLine(exe: String = "/usr/local/bin/HTTPServer") -> [String] {

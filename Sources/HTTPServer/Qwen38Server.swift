@@ -6,6 +6,9 @@ import MLXLLM
 @main
 struct QwenServer {
     static func main() async throws {
+        // Prewarm wall clock: process start (used only by --prewarm-exit to
+        // record how long the install-time warm took).
+        let processStart = DispatchTime.now()
         let config = ServerConfig.fromCommandLine()
 
         // Set MLX cache limit
@@ -79,6 +82,28 @@ struct QwenServer {
             + "calibration file \(config.specDraftCalibrationFile))"
         app.logger.info("\(resolutionLog)")
 
+        // 4b3. `--prewarm-check`: validate the current build against the
+        //      prewarm provenance manifest and exit (no model load).
+        //      Exit codes: 0 match / 1 mismatch / 2 no manifest (docs/PRE-WARM.md).
+        if config.prewarmCheck {
+            let verdict = await PrewarmProvenance.runStartupCheck(
+                logger: app.logger,
+                manifestPath: config.prewarmManifestPath,
+                modelPath: config.model,
+                mtpHeadPath: config.mtpHead,
+                specDraftNMax: config.specDraftNMax,
+                forcedDraftK: resolvedForcedK,
+                // CLI one-shot: no requests exist, so the ~8 s weight read is
+                // computed directly (nothing it can overlap).
+                weightIdentity: { MLXGenerator.computeWeightIdentity(modelPath: config.model) })
+            try? await app.asyncShutdown()
+            switch verdict {
+            case .match: exit(0)
+            case .mismatch: exit(1)
+            case .noManifest: exit(2)
+            }
+        }
+
         // 4c. Instantiate the MLX generator actor with config. All blocking
         //     MLX work is confined to this actor; the HTTP layer only consumes
         //     the `AsyncStream` it yields. The generator transitions the state
@@ -86,7 +111,7 @@ struct QwenServer {
         //     On any load/warmup failure the state is marked `.failed` and the
         //     server keeps serving `/healthz` + `/readyz` (503) but rejects
         //     chat-completion requests.
-        let generator: MLXGenerator?
+        var generator: MLXGenerator?
         do {
             generator = try await MLXGenerator(
                 modelPath: config.model,
@@ -111,10 +136,56 @@ struct QwenServer {
             )
             _ = await runtimeState.transition(to: .ready)
             app.logger.info("Model runtime is ready.")
+
+            // Prewarm (quick-wins Item 3 / LEV-C): `--prewarm-exit` writes the
+            // provenance manifest and exits — the post-install run that seeds
+            // Metal's built-in JIT cache on this machine (docs/PRE-WARM.md).
+            if config.prewarmExit {
+                do {
+                    try await PrewarmProvenance.writeManifest(
+                        logger: app.logger,
+                        manifestPath: config.prewarmManifestPath,
+                        modelPath: config.model,
+                        mtpHeadPath: config.mtpHead,
+                        specDraftNMax: config.specDraftNMax,
+                        forcedDraftK: resolvedForcedK,
+                        processStart: processStart)
+                    try? await app.asyncShutdown()
+                    return
+                } catch {
+                    app.logger.error("Prewarm manifest write failed: \(error)")
+                    try? await app.asyncShutdown()
+                    throw error
+                }
+            }
+
+            // Normal mode: background provenance check (never blocks readyz
+            // or requests; the weight digest is shared with the lazy SSD
+            // path and deferred until after the first request — one 15 GB
+            // read per process, never overlapping decode rounds).
+            if let generator {
+                let modelPath = config.model
+                Task {
+                    await PrewarmProvenance.runStartupCheck(
+                        logger: app.logger,
+                        manifestPath: config.prewarmManifestPath,
+                        modelPath: modelPath,
+                        mtpHeadPath: config.mtpHead,
+                        specDraftNMax: config.specDraftNMax,
+                        forcedDraftK: resolvedForcedK,
+                        weightIdentity: { await generator.weightIdentityDeferred() })
+                }
+            }
         } catch {
             _ = await runtimeState.transition(to: .failed(error.localizedDescription))
             app.logger.error("Model startup failed: \(error)")
             generator = nil
+            if config.prewarmExit {
+                // The install-time run must fail loudly: no manifest is written
+                // on a failed startup, and the prewarm script gates on exit 0.
+                try? await app.asyncShutdown()
+                throw error
+            }
         }
 
         // 4d. Draft-depth calibration (off by default). Runs at startup, before

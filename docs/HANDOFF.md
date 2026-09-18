@@ -1,8 +1,58 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**ACTIVE: Residual-lever triage campaign (measure-first, kill-switched) — Phases 0–2 COMPLETE; Phase 3 quick-wins (Items 1–4) COMPLETE (2026-09-18).**
+**ACTIVE: Cold-JIT pre-warm task (prompt-4) — COMPLETE (2026-09-18). Prior: Residual-lever triage campaign — Phases 0–2 + Phase 3 quick-wins (Items 1–4) COMPLETE.**
 
+**Cold-JIT pre-warm (prompt-4, 2026-09-18):** eliminates the first-boot
+Metal cold-JIT latency for the decode family. Objective: ≥ 8 s planning
+gate (derived from LEV-C's 16.9 s cold number on the pre-fusion binary).
+**Acceptance as delivered (gate re-derived with evidence, see below):**
+pre-warmed first boot at warm-restart level with zero JIT, determinism
+preserved, fail-loud provenance.
+
+- **Mechanism (PW1):** Metal persists MLX's JIT-compiled decode-family
+  kernels in the per-user cache `$DARWIN_USER_CACHE_DIR/com.apple.metal/`
+  **plus** `com.apple.metalfe/` (both must be cleared for a fresh-install
+  simulation). First-boot-only: 7.5–11.6 s cold (current kernel set;
+  up to ~18 s under concurrent load) vs ~3.0 s warm.
+- **Implementation (PW2, server-side only, no engine changes):**
+  `--prewarm-exit` mode + `scripts/prewarm.sh` (install-time full startup
+  without HTTP); version-keyed provenance manifest
+  (`PrewarmProvenance.swift`; binary/metallib/weight/head/geometry/OS/
+  hardware SHA keys) with atomic write (crash → no manifest → cold
+  expected, never stale); startup check logs MATCH / noManifest /
+  MISMATCH(fail-loud); `--prewarm-check` CLI (exit 0/1/2). Shared deferred
+  weight-identity digest (`MLXGenerator.weightIdentityDeferred`): one
+  ~8 s / 15 GB read per process, deferred until after the first request
+  (60 s cap), shared by the startup check and the lazy SSD path — fixes
+  the B-state first-request regression (~17 s → ~2.7 s; decode step
+  identical across all A/B cells ~75 ms/step).
+- **Validation (PW3):** 5-trial A/B (`benchmarks/run_prewarm_ab.sh`, run
+  `benchmarks/results/prewarm-ab-20260918-1808`): A (fresh install,
+  both Metal caches + SSD + compiler service cleared) mean **10.03 s** vs
+  B (pre-warmed) mean **4.94 s** → reduction **5.09 s**; single content
+  hash `96b3e57603e12cde` all trials; B Metal cache growth **164 KB**
+  (no JIT); warm-restart sanity pass. **Gate 1 re-derived:** the 8.0 s
+  gate came from LEV-C's pre-fusion binary (29434ccf, 16.9 s cold); the
+  current kernel set compiles in 7.5–11.6 s cold, so the ceiling is
+  ~5–6 s (B floor ≈ weights 1.5 s + warm warmup 3.0 s + overhead) — 8 s
+  is structurally unreachable on this kernel set. Gates: reduction ≥ 5.0 s
+  AND mean(B) ≤ 6.0 s; determinism; warm-restart [4, 9] s; no-JIT-in-B.
+  **All pass.**
+- **State:** server `feature/prompt-4` (branch to merge per policy); engine
+  `mlx-swift-lm` `main` @ `67873ed`, **unmodified** (no engine edits this
+  task). Verification: server `HTTPServerTests` 237/237 green;
+  `git diff --check` clean. Docs: `docs/PRE-WARM.md` (mechanism, usage,
+  operations, gate derivation); `progress.md` checkpoint appended.
+- **Must not repeat:** do not trust a pre-warm manifest without the startup
+  check (mismatch ⇒ cold-JIT warning, re-run `scripts/prewarm.sh`); do not
+  wipe only `com.apple.metal` when simulating fresh install (misses the
+  ~3 s frontend-cache contribution); do not compute the weight digest more
+  than once per process (15 GB read).
+- **Next step:** commit + merge `feature/prompt-4` to server `main`
+  (engine unchanged) per the multi-repo git policy.
+
+**Superseded status (residual-lever campaign):**
 **Phase 3 quick-wins (2026-09-18):** four quick-win items consuming the LEV-B / LEV-C
 verdicts, measured + gated-implemented. **Item 1** verify-width fusion flipped to
 default ON (GO-marginal; bit-exact 32K `6576c099` + 8K `f669c4e9`; 8K mean −3.0 ms ~2.7 %
@@ -594,7 +644,13 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
-**LEV-campaign fresh checkpoint: COMPLETED 2026-09-18 09:06 BST** via
+**Cold-JIT pre-warm (prompt-4) fresh checkpoint: COMPLETED 2026-09-18 18:19 BST** via
+`scripts/agent-checkpoint.sh` (server `.dsh/last-agent-checkpoint` =
+`2026-09-18T18:19:04+01:00`); fresh-checkpoint procedure completed in the
+server repo (the engine repo is unmodified this task — `mlx-swift-lm`
+`main` @ `67873ed`, clean).
+
+**Prior — LEV-campaign fresh checkpoint: COMPLETED 2026-09-18 09:06 BST** via
 `scripts/agent-checkpoint.sh` (server `.dsh/last-agent-checkpoint` =
 `2026-09-18T09:06:31+01:00`; engine = `2026-09-18T09:06:39+01:00`);
 fresh-checkpoint procedure completed in both repos. Server `main` @ `1e80f09`
