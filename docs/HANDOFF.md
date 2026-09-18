@@ -14,6 +14,11 @@ in-pipeline bandwidth is an **M=3 verify geometry property** (90.6% kernel exec)
 scheduling artifact. No source changes. Run `sch1-20260918-0041` →
 `benchmarks/results/sch1-20260918-0041/sch1-findings.md`.
 
+- **Fresh checkpoint:** completed 2026-09-18 01:13 BST via `scripts/agent-checkpoint.sh`
+  (`.dsh/last-agent-checkpoint` = `2026-09-18T01:13:28+01:00`); HEAD `88ded32`;
+  fresh-checkpoint procedure completed. No server/engine source changes (no-code STOP);
+  both trees clean; no server left running.
+
 ---
 
 **COMPLETE: MLX v0.32.2 platform refresh — MER1 (suites green) + MER2 (interleaved A/B) + ND (root-cause) + MER3 (merge to main) + MER4 (post-merge kernel re-baseline) (2026-09-17).**
