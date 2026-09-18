@@ -2429,22 +2429,79 @@ provenance. In-session paired deltas only.
   knob matrix is CLOSED as "anchor absent"; LEV-C's startup-time decomposition
   (first bullet) remains in scope.
 
+### Phase 1–2 — measurements + zero-code verdicts (2026-09-18, this entry)
+
+All Phase 1 (measurements) and Phase 2 (zero-code) levers are complete. No source
+behavior changed except **gated, trace-only instrumentation** (LEV-C
+`QWEN_STARTUP_TRACE` startup stage timer in `MLXGenerator`; LEV-E `snap_us`/
+`tape_us` on the existing `traceRounds` trace line in the engine fork). Both
+trees tested green (engine `Qwen38MTPDiagnosticTests` 3/3 incl. wide-verify
+serial-family 1.0000; server `HTTPServerTests` 237 tests / 7 suites) and merged
+to `main` (engine `9f4ceb9`, server `e86a342`). Full verdict ledger:
+`benchmarks/results/lev-campaign-verdict-ledger.md`.
+
+- **LEV-D (zero-code, GO):** flash + large-pc compounding model. Flash removes
+  the 6.3 GB (64K pc=2048) / ~25 GB (pc=8192) scores buffer; solved `c_flash`
+  bar ≈ 630 µs/tok @32K, ≈1205 µs/tok @64K. A credible Metal flash kernel
+  (20–204 µs/tok) is 3–35× below the bar → **credible; hand to LEV-J** (do not
+  close flash). `benchmarks/results/lev-d-arithmetic/`.
+- **LEV-E (zero-code, CLOSE):** draft-select/accept-walk bound. (iv)
+  commit+upkeep + snap + tape + readout = **0.81 ms (fresh run2) to 1.60 ms
+  (SCH1, conservative) per round < 2 ms kill-switch**. `commit` is bimodal
+  (cheap ~0.15 ms when both drafts accepted; ~1.1–2.1 ms on the rollback path);
+  the walk's `verify_build` share (snap+tape) is ~0.06–0.09 ms, the rest is the
+  64-layer verify graph encode + async-ladder GPU wait (not walk-owned). Corro-
+  borates the Swift-walk negative (2.05 % slower). **CLOSE `qwen35DraftSelect-`
+  Kernel (LEV-K).** `benchmarks/results/lev-e-draftselect/`.
+- **LEV-F (zero-code, ranked):** tree-drafting + conversation-resume design
+  study. Shared blocker = a **composable generated-state checkpoint** (KV + GDN
+  `h` + MTP head) with **forward-only rollback** (GDN `h` is not invertible). Tree
+  headroom is marginal (<5 %, acceptance ceiling ~1.7–1.8 acc/step, superlinear
+  verify cost, SDPA ≤9-row fused-verify limit) → **Stage-3 conversation resume
+  first (lower risk, reuses the radix state-store), tree-drafting as a gated
+  follow-on.** `benchmarks/results/lev-f-design-study/`.
+- **LEV-A (measurement, NO-GO as default):** fp16 vs affine8 KV @32K, 6 reps.
+  affine8 is **+16 %/step slower** (+36 ms/step host graph-build = quantize/
+  dequant) and **changes the stream** (coherent but divergent; first divergence
+  char 165, "utilities"→"helpers"). Only upside is KV memory headroom. **Keep
+  fp16 default; affine8 = explicit memory-recovery option.** Consistent with the
+  q4 hard rule. `benchmarks/results/lev-a-kvquant/`.
+- **LEV-B (measurement, split verdict):** 32K requires `MLX_CHUNKED_PREFILL=1`
+  (dense 32K prefill overflows the buffer — a standing constraint). (1)
+  `MLX_QWEN_FUSED_GDN` (verify, widths 3–9): **bit-exact, −1 %/step (within
+  noise)** → safe to default-ON, marginal. (2) `MLX_QWEN_FUSED_GDN_PREFILL`: the
+  startup banner only reflects `MLX_QWEN_FUSED_GDN`, so it reads "off" even when
+  `_PREFILL` is set; measured, `_PREFILL=1` **deterministically changes the 32K
+  stream** (both configs self-consistent) → **not bit-exact at prefill widths →
+  FLAG: verify prefill-width bit-exactness before it can be a default.**
+  `benchmarks/results/lev-b-fusedgdn/`.
+- **LEV-C (measurement, decomposition):** cold start = **25.4 s to warmup,
+  ~27 s to readyz** (default config, SSD on). Warmup/kernel-JIT **66.5 %**,
+  SSD restore **27.7 %** (1 prefix, operator-toggleable via `--kv-ssd-disabled`),
+  weight load **5.7 %** (15.13 GB / 3 shards, warm-disk). `RuntimeStartupMemory`
+  Policy knobs **absent** (confirmed); actual admission values reported (limit
+  47.24 GB, reserve 4.29 GB, modelBaseline 15.37 GB, kvBudget 27.58 GB, 16/16
+  bits, tail 1024). LEV-H gate **not met** (the SSD-tier delta is SSD restore,
+  not tokenization). Two startup levers flagged for Phase 3: persistent runtime-
+  kernel compile cache (cuts the 16.9 s warmup); lazy/async SSD restore (moves
+  the 7.0 s off the critical path). `benchmarks/results/lev-c-startup/`.
+
 ### Remaining-avenues ledger (campaign — supersedes the old "Open items" list)
 
 | ID | Lever | Phase | Gate / GO bar | Status |
 |----|-------|-------|---------------|--------|
-| LEV-A | KV-quant cache default (fp16 vs affine8 @ kvTail 1024): hit-rate/hit-TTFT up materially, acceptance within band, no admission regression | 1 | own AB | open |
-| LEV-B | Fused-GDN prefill re-AB (`MLX_QWEN_FUSED_GDN`, default OFF), 32K/64K: ≥3% mean prefill wall AND ≥4/5 paired reps | 1 | own AB | open |
-| LEV-C | Startup-time decomposition (instrumentation only); attribute the ~0.34 s SSD-tier delta before LEV-H | 1 | own measurement | open |
-| LEV-D | Flash + large-pc compounding model: solve for c_flash where pc≥8192 beats pc=2048 incumbent at 32K/64K | 2 | arithmetic | open |
-| LEV-E | Draft-select Metal ceiling: bound (iv) 1.451 ms + (iii) share owned by the draft walk; < 2 ms/round → CLOSE | 2 | SCH1 ledger | open |
-| LEV-F | Tree-drafting + conversation-resume design study (paper, zero code) | 2 | design soundness | open |
-| LEV-G | Flip KV default (impl) | 3 | LEV-A GO | gated |
-| LEV-H | Tokenization-cache persistence (serialize/restore, size/TTL/corruption-safe) | 3 | LEV-C attributes the 0.34 s to tokenization | gated |
-| LEV-I | Startup memory-policy tuning | 3 | LEV-C knob sensitivity | **CLOSED at Phase 0 — anchor knobs absent from checkout** |
-| LEV-J | Flash-attention Metal kernel (FFP-style micro kill-switch vs the LEV-D bar first) | 3 | LEV-D bar credible | gated |
-| LEV-K | Metal draft-select kernel | 3 | LEV-E bound ≥ 2 ms | gated |
-| LEV-L | Stage-3 conversation resume (generated state in radix); tree drafting as follow-on | 3 | LEV-F design sound | gated |
+| LEV-A | KV-quant cache default (fp16 vs affine8 @ kvTail 1024) | 1 | own AB | **NO-GO (measured)** — affine8 +16 %/step slower + stream-divergent; fp16 stays default, affine8 = explicit memory option |
+| LEV-B | Fused-GDN re-AB (`MLX_QWEN_FUSED_GDN` / `_PREFILL`), 32K | 1 | own AB | **verify: GO-as-default (bit-exact, −1 %/step, marginal); prefill: FLAG** (`_PREFILL` not bit-exact @32K — verify prefill-width exactness first) |
+| LEV-C | Startup-time decomposition (instrumentation only) | 1 | own measurement | **measured** — 25.4 s: warmup 66.5 %, SSD 27.7 %, weights 5.7 %; knobs absent (reported); 2 levers flagged |
+| LEV-D | Flash + large-pc compounding model (c_flash bar) | 2 | arithmetic | **GO** — credible (bar 630/1205 µs/tok; a flash kernel is 3–35× below); hand to LEV-J |
+| LEV-E | Draft-select Metal ceiling (walk host bound) | 2 | SCH1 ledger | **CLOSE** — walk bound 0.81–1.60 ms/round < 2 ms |
+| LEV-F | Tree-drafting + conversation-resume design study | 2 | design soundness | **ranked** — Stage-3 resume first; shared composable generated-state checkpoint |
+| LEV-G | Flip KV default (impl) | 3 | LEV-A GO | **blocked** — LEV-A NO-GO |
+| LEV-H | Tokenization-cache persistence (serialize/restore) | 3 | LEV-C attributes the SSD-tier delta to tokenization | **blocked** — LEV-C attributes it to SSD restore, not tokenization |
+| LEV-I | Startup memory-policy tuning | 3 | LEV-C knob sensitivity | **CLOSED** — anchor knobs absent (confirmed by LEV-C) |
+| LEV-J | Flash-attention Metal kernel (FFP-style micro kill-switch vs the LEV-D bar) | 3 | LEV-D bar credible | **unblocked** — LEV-D GO |
+| LEV-K | Metal draft-select kernel | 3 | LEV-E bound ≥ 2 ms | **CLOSED** — LEV-E bound < 2 ms |
+| LEV-L | Stage-3 conversation resume (generated state in radix); tree drafting follow-on | 3 | LEV-F design sound | **design done** — implement Stage-3 resume in Phase 3 |
 | — | pc autotuning calibration mode | opt | real-workload mixed-length data shows the 2048 optimum moves (current curve says it doesn't) | closed until data |
 
 ### Closed with evidence (do not reopen without new evidence)
@@ -2467,6 +2524,13 @@ provenance. In-session paired deltas only.
   removed in engine `901d2ca`.
 - **Swift compact draft-vocab walk** (Task 1, 2026-09-16): 2.05% *slower* vs the
   ≥3% bar; artifacts kept.
+- **Metal draft-select kernel / `qwen35DraftSelectKernel` (LEV-E/LEV-K,
+  2026-09-18):** the addressable draft-select/accept-walk host cost is
+  **0.81–1.60 ms/round < 2 ms** (commit+upkeep + snap + tape + readout; commit
+  is the bimodal rollback path). A perfect Metal draft-select kernel saves at
+  most ~1–2 % of an 84.6 ms round; the dominant cost is (i) kernel exec = 90.6 %.
+  Corroborates the Task 1 Swift-walk negative. `benchmarks/results/lev-e-`
+  `draftselect/`.
 - **Continuous batching / prefix-aware scheduling**: out of scope (single-user
   scope); not to be opened.
 - **KV q4 as a default**: HARD RULE — documented catastrophic quality failures on
