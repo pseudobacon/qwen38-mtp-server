@@ -1,0 +1,10 @@
+binary sha256 3d5bc1187fe2c48a77be57c791946299b2d7249cf634e20ee16c4834ace4b38d
+engine head cfd6df5
+server head 306fece
+{
+  "cmlx_revision": "1f8e74e3f12f31365464a6867c6579f0e9b29d85",
+  "metallib_sha256": "b57de58638e4591e0aa557be0e93c7be3c5ba1f0cf03ffc4783e61d61620b10f",
+  "toolchain": "Xcode 26.6",
+  "macos_sdk": "26.5",
+  "generated_by": "scripts/build-metallib.sh"
+}

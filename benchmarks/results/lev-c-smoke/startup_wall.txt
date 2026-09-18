@@ -1,0 +1,3 @@
+readyz=200 ready=1 startup_wall=38.215
+essay64 wall=3.032793
+DONE

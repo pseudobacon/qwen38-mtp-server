@@ -1,0 +1,6 @@
+bin_sha256 29434ccf01d3098423575e9aa8ed21c09e9af9e6d490975cdbb5fda85df2f671
+bin_mtime 2026-09-18T05:54:20
+server_head 306fece
+engine_head cfd6df5
+metallib {"cmlx_revision":"1f8e74e3f12f31365464a6867c6579f0e9b29d85","metallib_sha256":"b57de58638e4591e0aa557be0e93c7be3c5ba1f0cf03ffc4783e61d61620b10f","toolchain":"Xcode26.6","macos_sdk":"26.5","generated_by":"scripts/build-metallib.sh"}
+weights 3 shards 15.13 GB (from startup trace)

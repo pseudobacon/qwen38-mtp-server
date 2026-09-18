@@ -6,6 +6,32 @@ import MLXLMCommon
 import MLXHuggingFace
 import Tokenizers
 
+/// LEV-C startup-timing helper (gated by `QWEN_STARTUP_TRACE`; startup-only,
+/// no behavior change). A value type so its `mark` calls never require the
+/// enclosing `self` to be fully initialized.
+private struct StartupTimer {
+    let enabled: Bool
+    private var t0: DispatchTime
+    private var prev: DispatchTime
+
+    init() {
+        let now = DispatchTime.now()
+        t0 = now
+        prev = now
+        enabled = ProcessInfo.processInfo.environment["QWEN_STARTUP_TRACE"] != nil
+    }
+
+    mutating func mark(_ label: String) {
+        guard enabled else { return }
+        let now = DispatchTime.now()
+        let cum = Double(now.uptimeNanoseconds - t0.uptimeNanoseconds) / 1e6
+        let d = Double(now.uptimeNanoseconds - prev.uptimeNanoseconds) / 1e6
+        prev = now
+        print("[startup] \(label): +\(String(format: "%.1f", d)) ms "
+            + "(cum \(String(format: "%.1f", cum)) ms)")
+    }
+}
+
 /// Typed bridge between model generation and OpenAI SSE serialization.
 enum GenerationFragment: Sendable {
     case content(String)
@@ -397,6 +423,11 @@ actor MLXGenerator {
         if let seed = ProcessInfo.processInfo.environment["QWEN_MLX_SEED"].flatMap(UInt64.init) {
             MLXRandom.seed(seed)
         }
+        // LEV-C startup-timing instrumentation (gated, startup-only, no
+        // behavior change). Emits per-stage + cumulative ms when the env var
+        // is set; otherwise a no-op.
+        var sTimer = StartupTimer()
+        sTimer.mark("init-start")
         self.modelPath = modelPath
         self.mtpHeadPath = mtpHeadPath
         self.maxDraftDepth = maxDraftDepth
@@ -496,6 +527,7 @@ actor MLXGenerator {
                ?? " (default \(Qwen38MTPBlockSession.defaultDraftDepth); offer cap "
                   + "\(maxDraftDepth))"))
 
+        sTimer.mark("before-model-load")
         let (loadedModel, loadedTokenizer) = try Qwen38MTPHeadAttachment.withHeadAttached(
             backboneDirectory: targetURL,
             headDirectory: headURL
@@ -516,6 +548,25 @@ actor MLXGenerator {
         guard model.hasMTPHead else {
             throw MLXFastError.invalidInput("MTP head failed to attach to backbone")
         }
+
+        // LEV-C: weight-shard census for the load stage (count + bytes) so the
+        // per-shard mean can be derived. Read-only directory walk.
+        if sTimer.enabled {
+            var shardCount = 0
+            var shardBytes: Int64 = 0
+            let fm = FileManager.default
+            if let files = try? fm.contentsOfDirectory(at: targetURL, includingPropertiesForKeys: nil) {
+                for fileURL in files where fileURL.pathExtension == "safetensors" {
+                    shardCount += 1
+                    let keys: Set<URLResourceKey> = [.fileSizeKey]
+                    let size = (try? fileURL.resourceValues(forKeys: keys))?.fileSize ?? 0
+                    shardBytes += Int64(size)
+                }
+            }
+            print("[startup] weights: \(shardCount) shard(s), "
+                + String(format: "%.2f GB", Double(shardBytes) / 1e9))
+        }
+        sTimer.mark("model+head+tokenizer load")
 
         eval(model)
 
@@ -540,6 +591,25 @@ actor MLXGenerator {
         self.model = model
         self.tokenizer = loadedTokenizer
         self.stopTokens = resolveStopTokens(directory: targetURL, tokenizer: loadedTokenizer, logger: logger)
+
+        // LEV-C: log the effective admission-policy knobs (the current memory
+        // policy values) — gated, startup-only.
+        if sTimer.enabled {
+            print("[startup] admission: limit="
+                + String(format: "%.2f GB", Double(memoryAdmissionPolicy.memoryLimitBytes) / 1e9)
+                + " reserve="
+                + String(format: "%.2f GB", Double(memoryAdmissionPolicy.systemSafetyReserveBytes) / 1e9)
+                + " modelBaseline="
+                + String(format: "%.2f GB", Double(memoryAdmissionPolicy.modelBaselineBytes) / 1e9)
+                + " kvBits k/v=\(memoryAdmissionPolicy.keyBits)/\(memoryAdmissionPolicy.valueBits)"
+                + " tailSize=\(memoryAdmissionPolicy.tailSize)"
+                + " kvBudget="
+                + String(format: "%.2f GB", Double(memoryAdmissionPolicy.kvBudgetBytes) / 1e9)
+                + " chunkedPrefill=\(memoryAdmissionPolicy.chunkedPrefillEnabled)")
+            print("[startup] MLX.Memory.cacheLimit="
+                + String(format: "%.2f GB", Double(MLX.Memory.cacheLimit) / 1e9))
+        }
+        sTimer.mark("host-setup")
 
         // Set up the cold-disk tier (Radix SSD persistence). When enabled, wire
         // the LRU-eviction callback to persist evicted nodes, and restore the
@@ -566,10 +636,12 @@ actor MLXGenerator {
         }
 
         _ = await runtimeState?.transition(to: .warming)
+        sTimer.mark("pre-warmup")
 
         let warmup = try Qwen38MTPBlockSession(model: model, stopTokens: stopTokens)
         let warmDepth = min(max(1, maxDraftDepth), MLXFastConstants.qwenMTPMaxDepth)
         try warmup.warmAllDepths(maxDepth: warmDepth)
+        sTimer.mark("warmup-done")
     }
 
     func cancelGeneration(id: GenerationID, reason: GenerationCancellationReason) async {
