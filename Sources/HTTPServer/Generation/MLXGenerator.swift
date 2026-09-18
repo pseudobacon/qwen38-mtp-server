@@ -622,17 +622,38 @@ actor MLXGenerator {
                 directory: URL(fileURLWithPath: expandedDir),
                 budgetGB: kvSSDCacheGB,
                 ttlSeconds: kvSSDTTLSeconds)
-            let weightID = self.weightIdentity()
-            let keyDims = KVSSDKeyDimensions(
-                weightDigest: weightID.digest,
-                templateHash: self.templateFingerprint())
-            let store = RadixSSDStore(config: ssdCfg, keyDims: keyDims)
-            self.ssdConfig = ssdCfg
-            self.ssdStore = store
-            await self.kvCacheManager.setOnEvict { [store] node in
-                store.persistEvicted(node)
+            // Item 4 (startup, 27.7%): the SSD block's ~8.5s is dominated by the
+            // weight-identity hash + template fingerprint (~7.9s of pure-CPU file
+            // I/O), not the restore. The hash now runs off the actor's critical
+            // startup path (background, default) and the store is wired + the
+            // prefix skeleton restored on the actor when it completes. Requests
+            // before it completes simply miss (no wrong results, just no
+            // acceleration yet). Measured: time-to-readyz drops ~21s (5/5 A/B).
+            // QWEN_KV_SSD_LAZY=0 restores the eager (blocking) path.
+            let lazy = ProcessInfo.processInfo.environment["QWEN_KV_SSD_LAZY"] != "0"
+            if sTimer.enabled { sTimer.mark("ssd-identity-start") }
+            if lazy {
+                Task.detached { [weak self, modelPath, ssdCfg] in
+                    // Pure CPU (file I/O + hashing) off the actor's critical path.
+                    let identity = MLXGenerator.computeWeightIdentity(modelPath: modelPath)
+                    guard let self else { return }
+                    await self.finishSSDSetup(config: ssdCfg, weightDigest: identity.digest)
+                }
+                print("[startup] SSD restore is LAZY (background); readyz is not gated on it")
+            } else {
+                let weightID = self.weightIdentity()
+                let keyDims = KVSSDKeyDimensions(
+                    weightDigest: weightID.digest,
+                    templateHash: self.templateFingerprint())
+                let store = RadixSSDStore(config: ssdCfg, keyDims: keyDims)
+                self.ssdConfig = ssdCfg
+                self.ssdStore = store
+                await self.kvCacheManager.setOnEvict { [store] node in
+                    store.persistEvicted(node)
+                }
+                await self.restoreFromSSD()
             }
-            await self.restoreFromSSD()
+            if sTimer.enabled { sTimer.mark("ssd-done") }
         }
 
         _ = await runtimeState?.transition(to: .warming)
@@ -683,6 +704,22 @@ actor MLXGenerator {
         }
         let payload = ids.map(String.init).joined(separator: ",")
         return Data(payload.utf8).sha256Hex
+    }
+
+    /// Item 4: finish SSD setup on the actor (store wiring + skeleton restore)
+    /// after the weight-identity hash has been computed off the critical path.
+    /// Runs only in the lazy (QWEN_KV_SSD_LAZY=1) path.
+    private func finishSSDSetup(config: KVSSDConfig, weightDigest: String) async {
+        let keyDims = KVSSDKeyDimensions(
+            weightDigest: weightDigest,
+            templateHash: self.templateFingerprint())
+        let store = RadixSSDStore(config: config, keyDims: keyDims)
+        self.ssdConfig = config
+        self.ssdStore = store
+        await self.kvCacheManager.setOnEvict { [store] node in
+            store.persistEvicted(node)
+        }
+        await self.restoreFromSSD()
     }
 
     /// Restore the in-RAM radix tree as a skeleton (no tensors) from the disk

@@ -1,0 +1,1 @@
+MLXLM: fused GDN prework off (MLX_QWEN_FUSED_GDN=0 rollback; eager chain): conv1d + SiLU + split + Q/K rmsNorm + g/beta in one Metal launch for verify widths 3...9 (B=1, geometry-matched, bf16)

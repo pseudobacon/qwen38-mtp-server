@@ -1,0 +1,148 @@
+mtp-top2gap idx=3 token=3766 gap=1.375
+STEP-TRACE round=1 d=2 acc=2 tGraphBuildMs=546.203 tEvalMs=372.987 tHostReadMs=0.040 tCacheStateMs=0.333 stepMs=919.563
+MTP-STEP round=1 depth=3 offered=2 accepted=2 committed=3 stepMs=919.6177
+mtp-top2gap idx=5 token=66320 gap=0.25
+STEP-TRACE round=2 d=2 acc=1 tGraphBuildMs=3.263 tEvalMs=89.526 tHostReadMs=0.021 tCacheStateMs=4.080 stepMs=96.891
+MTP-STEP round=2 depth=3 offered=2 accepted=1 committed=2 stepMs=96.9616
+mtp-top2gap idx=8 token=369 gap=3.75
+STEP-TRACE round=3 d=2 acc=2 tGraphBuildMs=4.110 tEvalMs=88.878 tHostReadMs=0.018 tCacheStateMs=0.203 stepMs=93.209
+MTP-STEP round=3 depth=3 offered=2 accepted=2 committed=3 stepMs=93.2363
+mtp-top2gap idx=11 token=321 gap=1.125
+STEP-TRACE round=4 d=2 acc=2 tGraphBuildMs=3.523 tEvalMs=88.057 tHostReadMs=0.017 tCacheStateMs=0.165 stepMs=91.762
+MTP-STEP round=4 depth=3 offered=2 accepted=2 committed=3 stepMs=91.7839
+mtp-top2gap idx=14 token=279 gap=5.5
+STEP-TRACE round=5 d=2 acc=2 tGraphBuildMs=2.884 tEvalMs=88.358 tHostReadMs=0.020 tCacheStateMs=0.167 stepMs=91.429
+MTP-STEP round=5 depth=3 offered=2 accepted=2 committed=3 stepMs=91.4502
+mtp-top2gap idx=16 token=9153 gap=0.75
+STEP-TRACE round=6 d=2 acc=1 tGraphBuildMs=2.897 tEvalMs=87.976 tHostReadMs=0.014 tCacheStateMs=1.311 stepMs=92.198
+MTP-STEP round=6 depth=3 offered=2 accepted=1 committed=2 stepMs=92.2301
+mtp-top2gap idx=19 token=63 gap=2.25
+STEP-TRACE round=7 d=2 acc=2 tGraphBuildMs=2.924 tEvalMs=95.769 tHostReadMs=0.024 tCacheStateMs=0.208 stepMs=98.926
+MTP-STEP round=7 depth=3 offered=2 accepted=2 committed=3 stepMs=98.9480
+mtp-top2gap idx=21 token=709 gap=1.75
+STEP-TRACE round=8 d=2 acc=1 tGraphBuildMs=2.922 tEvalMs=87.875 tHostReadMs=0.021 tCacheStateMs=1.254 stepMs=92.073
+MTP-STEP round=8 depth=3 offered=2 accepted=1 committed=2 stepMs=92.1110
+mtp-top2gap idx=24 token=13962 gap=0.125
+STEP-TRACE round=9 d=2 acc=2 tGraphBuildMs=3.215 tEvalMs=88.585 tHostReadMs=0.021 tCacheStateMs=0.205 stepMs=92.025
+MTP-STEP round=9 depth=3 offered=2 accepted=2 committed=3 stepMs=92.0551
+mtp-top2gap idx=25 token=17775 gap=2.25
+STEP-TRACE round=10 d=2 acc=0 tGraphBuildMs=3.508 tEvalMs=89.034 tHostReadMs=0.018 tCacheStateMs=1.521 stepMs=94.081
+MTP-STEP round=10 depth=3 offered=2 accepted=0 committed=1 stepMs=94.1270
+mtp-top2gap idx=28 token=9321 gap=0.125
+STEP-TRACE round=11 d=2 acc=2 tGraphBuildMs=3.354 tEvalMs=87.585 tHostReadMs=0.021 tCacheStateMs=0.201 stepMs=91.161
+MTP-STEP round=11 depth=3 offered=2 accepted=2 committed=3 stepMs=91.1849
+mtp-top2gap idx=31 token=13 gap=11.6875
+STEP-TRACE round=12 d=2 acc=2 tGraphBuildMs=3.068 tEvalMs=90.440 tHostReadMs=0.015 tCacheStateMs=0.204 stepMs=93.727
+MTP-STEP round=12 depth=3 offered=2 accepted=2 committed=3 stepMs=93.7535
+mtp-top2gap idx=34 token=38663 gap=1.625
+STEP-TRACE round=13 d=2 acc=2 tGraphBuildMs=3.166 tEvalMs=89.456 tHostReadMs=0.024 tCacheStateMs=0.203 stepMs=92.849
+MTP-STEP round=13 depth=3 offered=2 accepted=2 committed=3 stepMs=92.8745
+mtp-top2gap idx=37 token=1510 gap=4.375
+STEP-TRACE round=14 d=2 acc=2 tGraphBuildMs=3.024 tEvalMs=90.295 tHostReadMs=0.020 tCacheStateMs=0.193 stepMs=93.533
+MTP-STEP round=14 depth=3 offered=2 accepted=2 committed=3 stepMs=93.5527
+mtp-top2gap idx=40 token=63 gap=7.6875
+STEP-TRACE round=15 d=2 acc=2 tGraphBuildMs=2.908 tEvalMs=91.215 tHostReadMs=0.022 tCacheStateMs=0.185 stepMs=94.330
+MTP-STEP round=15 depth=3 offered=2 accepted=2 committed=3 stepMs=94.3532
+mtp-top2gap idx=43 token=279 gap=4.875
+STEP-TRACE round=16 d=2 acc=2 tGraphBuildMs=2.958 tEvalMs=91.555 tHostReadMs=0.018 tCacheStateMs=0.188 stepMs=94.719
+MTP-STEP round=16 depth=3 offered=2 accepted=2 committed=3 stepMs=94.7463
+mtp-top2gap idx=46 token=279 gap=3
+STEP-TRACE round=17 d=2 acc=2 tGraphBuildMs=2.992 tEvalMs=92.367 tHostReadMs=0.015 tCacheStateMs=0.200 stepMs=95.574
+MTP-STEP round=17 depth=3 offered=2 accepted=2 committed=3 stepMs=95.5984
+mtp-top2gap idx=49 token=4487 gap=6.5
+STEP-TRACE round=18 d=2 acc=2 tGraphBuildMs=3.014 tEvalMs=91.772 tHostReadMs=0.020 tCacheStateMs=0.189 stepMs=94.995
+MTP-STEP round=18 depth=3 offered=2 accepted=2 committed=3 stepMs=95.0173
+mtp-top2gap idx=51 token=318 gap=0.25
+STEP-TRACE round=19 d=2 acc=1 tGraphBuildMs=3.048 tEvalMs=93.172 tHostReadMs=0.015 tCacheStateMs=1.395 stepMs=97.630
+MTP-STEP round=19 depth=3 offered=2 accepted=1 committed=2 stepMs=97.6865
+mtp-top2gap idx=54 token=279 gap=4.125
+STEP-TRACE round=20 d=2 acc=2 tGraphBuildMs=3.276 tEvalMs=94.100 tHostReadMs=0.020 tCacheStateMs=0.192 stepMs=97.588
+MTP-STEP round=20 depth=3 offered=2 accepted=2 committed=3 stepMs=97.6105
+mtp-top2gap idx=57 token=16451 gap=10.75
+STEP-TRACE round=21 d=2 acc=2 tGraphBuildMs=2.911 tEvalMs=94.980 tHostReadMs=0.019 tCacheStateMs=0.180 stepMs=98.091
+MTP-STEP round=21 depth=3 offered=2 accepted=2 committed=3 stepMs=98.1123
+mtp-top2gap idx=60 token=8245 gap=1.25
+STEP-TRACE round=22 d=2 acc=2 tGraphBuildMs=2.961 tEvalMs=94.684 tHostReadMs=0.018 tCacheStateMs=0.221 stepMs=97.885
+MTP-STEP round=22 depth=3 offered=2 accepted=2 committed=3 stepMs=97.9125
+mtp-top2gap idx=63 token=63 gap=0.375
+STEP-TRACE round=23 d=2 acc=2 tGraphBuildMs=3.070 tEvalMs=94.887 tHostReadMs=0.030 tCacheStateMs=0.211 stepMs=98.197
+MTP-STEP round=23 depth=3 offered=2 accepted=2 committed=3 stepMs=98.2239
+mtp-top2gap idx=64 token=2424 gap=0.125
+STEP-TRACE round=24 d=2 acc=0 tGraphBuildMs=3.243 tEvalMs=95.533 tHostReadMs=0.019 tCacheStateMs=1.479 stepMs=100.273
+MTP-STEP round=24 depth=3 offered=2 accepted=0 committed=1 stepMs=100.3268
+mtp-top2gap idx=67 token=2086 gap=4.25
+STEP-TRACE round=25 d=2 acc=2 tGraphBuildMs=3.273 tEvalMs=96.074 tHostReadMs=0.025 tCacheStateMs=0.200 stepMs=99.572
+MTP-STEP round=25 depth=3 offered=2 accepted=2 committed=3 stepMs=99.5955
+mtp-top2gap idx=70 token=1651 gap=2.125
+STEP-TRACE round=26 d=2 acc=2 tGraphBuildMs=3.028 tEvalMs=97.325 tHostReadMs=0.016 tCacheStateMs=0.193 stepMs=100.561
+MTP-STEP round=26 depth=3 offered=2 accepted=2 committed=3 stepMs=100.5896
+mtp-top2gap idx=73 token=553 gap=1.25
+STEP-TRACE round=27 d=2 acc=2 tGraphBuildMs=3.049 tEvalMs=98.169 tHostReadMs=0.022 tCacheStateMs=0.189 stepMs=101.430
+MTP-STEP round=27 depth=3 offered=2 accepted=2 committed=3 stepMs=101.4540
+mtp-top2gap idx=76 token=13 gap=11.75
+STEP-TRACE round=28 d=2 acc=2 tGraphBuildMs=2.974 tEvalMs=97.964 tHostReadMs=0.024 tCacheStateMs=0.196 stepMs=101.158
+MTP-STEP round=28 depth=3 offered=2 accepted=2 committed=3 stepMs=101.1805
+mtp-top2gap idx=79 token=5237 gap=1.5
+STEP-TRACE round=29 d=2 acc=2 tGraphBuildMs=2.992 tEvalMs=97.680 tHostReadMs=0.018 tCacheStateMs=0.194 stepMs=100.883
+MTP-STEP round=29 depth=3 offered=2 accepted=2 committed=3 stepMs=100.9073
+mtp-top2gap idx=82 token=198 gap=0.625
+STEP-TRACE round=30 d=2 acc=2 tGraphBuildMs=3.074 tEvalMs=98.850 tHostReadMs=0.015 tCacheStateMs=0.184 stepMs=102.123
+MTP-STEP round=30 depth=3 offered=2 accepted=2 committed=3 stepMs=102.1484
+mtp-top2gap idx=85 token=256 gap=10.25
+STEP-TRACE round=31 d=2 acc=2 tGraphBuildMs=2.882 tEvalMs=99.710 tHostReadMs=0.017 tCacheStateMs=0.187 stepMs=102.796
+MTP-STEP round=31 depth=3 offered=2 accepted=2 committed=3 stepMs=102.8236
+mtp-top2gap idx=88 token=682 gap=0.25
+STEP-TRACE round=32 d=2 acc=2 tGraphBuildMs=2.950 tEvalMs=98.802 tHostReadMs=0.024 tCacheStateMs=0.157 stepMs=101.932
+MTP-STEP round=32 depth=3 offered=2 accepted=2 committed=3 stepMs=101.9542
+mtp-top2gap idx=91 token=1558 gap=4.875
+STEP-TRACE round=33 d=2 acc=2 tGraphBuildMs=2.813 tEvalMs=98.754 tHostReadMs=0.022 tCacheStateMs=0.183 stepMs=101.772
+MTP-STEP round=33 depth=3 offered=2 accepted=2 committed=3 stepMs=101.7961
+mtp-top2gap idx=93 token=3354 gap=0.875
+STEP-TRACE round=34 d=2 acc=1 tGraphBuildMs=2.885 tEvalMs=99.983 tHostReadMs=0.022 tCacheStateMs=1.189 stepMs=104.079
+MTP-STEP round=34 depth=3 offered=2 accepted=1 committed=2 stepMs=104.1101
+mtp-top2gap idx=95 token=6297 gap=0.875
+STEP-TRACE round=35 d=2 acc=1 tGraphBuildMs=3.191 tEvalMs=99.699 tHostReadMs=0.022 tCacheStateMs=1.181 stepMs=104.093
+MTP-STEP round=35 depth=3 offered=2 accepted=1 committed=2 stepMs=104.1236
+mtp-top2gap idx=98 token=262 gap=10.25
+STEP-TRACE round=36 d=2 acc=2 tGraphBuildMs=3.154 tEvalMs=99.431 tHostReadMs=0.016 tCacheStateMs=0.197 stepMs=102.798
+MTP-STEP round=36 depth=3 offered=2 accepted=2 committed=3 stepMs=102.8304
+mtp-top2gap idx=101 token=1049 gap=6.625
+STEP-TRACE round=37 d=2 acc=2 tGraphBuildMs=2.967 tEvalMs=99.299 tHostReadMs=0.023 tCacheStateMs=0.183 stepMs=102.471
+MTP-STEP round=37 depth=3 offered=2 accepted=2 committed=3 stepMs=102.4925
+mtp-top2gap idx=104 token=264 gap=2.125
+STEP-TRACE round=38 d=2 acc=2 tGraphBuildMs=2.917 tEvalMs=99.179 tHostReadMs=0.016 tCacheStateMs=0.193 stepMs=102.305
+MTP-STEP round=38 depth=3 offered=2 accepted=2 committed=3 stepMs=102.3275
+mtp-top2gap idx=107 token=5072 gap=0.5
+STEP-TRACE round=39 d=2 acc=2 tGraphBuildMs=2.905 tEvalMs=99.297 tHostReadMs=0.019 tCacheStateMs=0.161 stepMs=102.382
+MTP-STEP round=39 depth=3 offered=2 accepted=2 committed=3 stepMs=102.4044
+mtp-top2gap idx=109 token=1440 gap=0.625
+STEP-TRACE round=40 d=2 acc=1 tGraphBuildMs=2.844 tEvalMs=99.026 tHostReadMs=0.015 tCacheStateMs=1.247 stepMs=103.132
+MTP-STEP round=40 depth=3 offered=2 accepted=1 committed=2 stepMs=103.1671
+mtp-top2gap idx=110 token=440 gap=0.625
+STEP-TRACE round=41 d=2 acc=0 tGraphBuildMs=3.350 tEvalMs=98.929 tHostReadMs=0.016 tCacheStateMs=1.409 stepMs=103.704
+MTP-STEP round=41 depth=3 offered=2 accepted=0 committed=1 stepMs=103.7482
+mtp-top2gap idx=113 token=63 gap=7.875
+STEP-TRACE round=42 d=2 acc=2 tGraphBuildMs=3.231 tEvalMs=98.386 tHostReadMs=0.019 tCacheStateMs=0.181 stepMs=101.817
+MTP-STEP round=42 depth=3 offered=2 accepted=2 committed=3 stepMs=101.8392
+mtp-top2gap idx=115 token=310 gap=1.875
+STEP-TRACE round=43 d=2 acc=1 tGraphBuildMs=2.895 tEvalMs=99.240 tHostReadMs=0.022 tCacheStateMs=1.243 stepMs=103.400
+MTP-STEP round=43 depth=3 offered=2 accepted=1 committed=2 stepMs=103.4417
+mtp-top2gap idx=116 token=4990 gap=0.125
+STEP-TRACE round=44 d=2 acc=0 tGraphBuildMs=3.263 tEvalMs=99.268 tHostReadMs=0.013 tCacheStateMs=1.314 stepMs=103.859
+MTP-STEP round=44 depth=3 offered=2 accepted=0 committed=1 stepMs=103.9048
+mtp-top2gap idx=119 token=6297 gap=2.875
+STEP-TRACE round=45 d=2 acc=2 tGraphBuildMs=3.379 tEvalMs=98.337 tHostReadMs=0.024 tCacheStateMs=0.184 stepMs=101.924
+MTP-STEP round=45 depth=3 offered=2 accepted=2 committed=3 stepMs=101.9473
+mtp-top2gap idx=122 token=262 gap=7.875
+STEP-TRACE round=46 d=2 acc=2 tGraphBuildMs=2.895 tEvalMs=98.558 tHostReadMs=0.022 tCacheStateMs=0.212 stepMs=101.687
+MTP-STEP round=46 depth=3 offered=2 accepted=2 committed=3 stepMs=101.7147
+mtp-top2gap idx=125 token=1049 gap=2.375
+STEP-TRACE round=47 d=2 acc=2 tGraphBuildMs=3.150 tEvalMs=99.357 tHostReadMs=0.025 tCacheStateMs=0.185 stepMs=102.718
+MTP-STEP round=47 depth=3 offered=2 accepted=2 committed=3 stepMs=102.7405
+mtp-top2gap idx=127 token=4862 gap=1.25
+STEP-TRACE round=48 d=2 acc=1 tGraphBuildMs=2.909 tEvalMs=98.552 tHostReadMs=0.016 tCacheStateMs=1.302 stepMs=102.779
+MTP-STEP round=48 depth=3 offered=2 accepted=1 committed=2 stepMs=102.8120
+mtp-top2gap idx=128 token=4613 gap=1.375
+STEP-TRACE round=49 d=2 acc=0 tGraphBuildMs=3.211 tEvalMs=98.348 tHostReadMs=0.024 tCacheStateMs=1.298 stepMs=102.880
+MTP-STEP round=49 depth=3 offered=2 accepted=0 committed=1 stepMs=102.9346
+MTP-STEP-SUMMARY rounds=49 proposed=98 accepted=79 acceptedPerStep=1.6122 avgStepMs=115.5604 decodeSeconds=5.6652 committed=128 qmvVerifyRouted=2:126,3:5001,4:96 qmvVerifyFallback=1:102,11:96,512:195,2048:384,8203:3 qmvVerifyMaterialized=0

@@ -301,6 +301,14 @@ try:
     ids = tok.encode(content).ids
     out["completion_tokens"] = len(ids)
     out["stream_hash"] = hashlib.sha256(",".join(str(i) for i in ids).encode()).hexdigest()
+    # Item 2 audit: expose the raw completion token IDs so paired cells can be
+    # compared for first-divergence position / flip count / flip context.
+    out["completion_ids"] = ids
+    # Also persist the ids to a side file for cheap diffing.
+    try:
+        open(REQUEST + ".ids", "w").write(",".join(str(i) for i in ids))
+    except Exception:
+        pass
 except Exception as e:
     out["response_error"] = str(e)
 

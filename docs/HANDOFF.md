@@ -1,7 +1,26 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**ACTIVE: Residual-lever triage campaign (measure-first, kill-switched) — Phases 0–2 COMPLETE (2026-09-18).**
+**ACTIVE: Residual-lever triage campaign (measure-first, kill-switched) — Phases 0–2 COMPLETE; Phase 3 quick-wins (Items 1–4) COMPLETE (2026-09-18).**
+
+**Phase 3 quick-wins (2026-09-18):** four quick-win items consuming the LEV-B / LEV-C
+verdicts, measured + gated-implemented. **Item 1** verify-width fusion flipped to
+default ON (GO-marginal; bit-exact 32K `6576c099` + 8K `f669c4e9`; 8K mean −3.0 ms ~2.7 %
+ON-faster 3/5, 32K tGraph 4/4; rollback `MLX_QWEN_FUSED_GDN=0`). **Item 2** `_PREFILL`
+divergence audit → NO-GO (keep default OFF): correction — the MTP session chunks the
+prefill into 2048-token GDN forwards at **all** lengths, so the fused prefill engages
+at 8K/16K/32K alike (the 8K/16K "bit-exact" premise does not hold); divergence is
+gross, not a knife-edge (flip 80.5/15.6/25.8 % ≫ 0.9 % supply; 32K first-flip gap ~2.0
+logit; 32K text near-synonym rewording); 32K prefill win −0.7 % (< 3 %). New gated
+`MLX_QWEN_TOP2_GAP_TRACE` engine trace. **Item 3** startup warmup investigated (16.9 s =
+Metal cold-JIT for the decode family; Metal disk cache persists it 16.9→3.0 s; ~14 s
+addressable cold-JIT) — implementation hand-off (needs a deployment pre-warm **or** an
+MLX-side `MTLBinaryArchive` capture hook; version-keyed cmlx `1f8e74e` + metallib
+`b57de586` + model config, fail-loud). **Item 4** lazy SSD restore → GO (default ON,
+`QWEN_KV_SSD_LAZY`; the 8.5 s SSD block is 93 % the 7.94 s weight-identity hash — now off
+the critical startup path → time-to-readyz −21 s 5/5). Findings:
+`benchmarks/results/quick-wins/quick-wins-findings.md`. Engine 3/3 + server 237/7 suites
+green; both trees clean.
 
 **Phases 1 (measurements: LEV-C/B/A) and 2 (zero-code: LEV-D/E/F) are all measured and closed with verdicts** (full ledger: `benchmarks/results/lev-campaign-verdict-ledger.md`). **Verdicts:** LEV-D **GO** (flash credible; `c_flash` bar 630/1205 µs/tok → LEV-J); LEV-E **CLOSE** (walk 0.81–1.60 ms < 2 ms → LEV-K closed); LEV-A **NO-GO** (affine8 +16 %/step + stream-divergent → keep fp16; LEV-G blocked); LEV-B **verify GO-as-default (marginal) / prefill FLAG** (`_PREFILL` not bit-exact @32K); LEV-C **measured** (25.4 s: warmup 66.5 % / SSD 27.7 % / weights 5.7 %; named knobs absent); LEV-F **ranked** (Stage-3 conversation resume first). Gated instrumentation only (no default flips); both suites green; both trees merged to `main` (engine `9f4ceb9`, server `e86a342`), clean.
 
@@ -52,16 +71,22 @@ Phase-0 closed-with-evidence list in `progress.md` (SCH1 scheduling, FFP1/FFP4
 FFN prefill, decode BW per-dispatch/state-bound, deep drafts, head fusion,
 interleaved layout, KV q4 default — HARD RULE).
 
-**Next step (exact for this campaign):** Phases 0–2 are **complete** — all six
-measurement/zero-code levers (LEV-C/B/A + LEV-D/E/F) are measured and closed
-with verdicts; the campaign ledger (`benchmarks/results/lev-campaign-verdict-`
-`ledger.md`) and the gate map above are current. **Phase 3 (implementation, on
-the GO gates):** LEV-J (flash SDPA Metal kernel) is the top candidate (unblocked
-by LEV-D GO); LEV-L (Stage-3 conversation resume) is gated on its composable
-generated-state checkpoint design (LEVF §4); the two flagged startup levers
-(persistent runtime-kernel compile cache; lazy/async SSD restore) and the
-`_PREFILL` prefill bit-exactness verification are queued. LEV-G/LEV-H are
-blocked; LEV-E/LEV-K/LEV-I are closed.
+**Next step (exact for this campaign):** Phases 0–2 and the Phase 3 quick-wins
+(Items 1–4) are **complete**. **Remaining Phase 3 (implementation, on the GO
+gates):** LEV-J (flash SDPA Metal kernel) is the top candidate (unblocked by
+LEV-D GO); LEV-L (Stage-3 conversation resume) is gated on its composable
+generated-state checkpoint design (LEVF §4); **Item 3** (persistent
+runtime-kernel compile cache for the ~14 s cold Metal JIT) is the flagged
+startup lever — implementation hand-off (deployment pre-warm **or** an MLX-side
+`MTLBinaryArchive` capture hook, version-keyed + fail-loud; see Item 3 section).
+The lazy SSD restore (Item 4) is implemented + default ON; the `_PREFILL` audit
+(Item 2) is logged (keep OFF). LEV-G/LEV-H are blocked; LEV-E/LEV-K/LEV-I are
+closed.
+
+**Quick-wins completion marker:** Phases 0–2 + Phase 3 quick-wins (Items 1–4)
+complete 2026-09-18 (findings `benchmarks/results/quick-wins/`); suites green
+(engine 3/3, server 237/7); both trees on `feature/prompt-3`, `git diff --check`
+clean; to be merged to `main` (engine first, then server) after the checkpoint.
 
 ---
 

@@ -1,0 +1,105 @@
+STEP-TRACE round=1 d=2 acc=2 tGraphBuildMs=534.540 tEvalMs=374.810 tHostReadMs=0.035 tCacheStateMs=0.174 stepMs=909.558
+MTP-STEP round=1 depth=3 offered=2 accepted=2 committed=3 stepMs=909.7364
+STEP-TRACE round=2 d=2 acc=1 tGraphBuildMs=3.313 tEvalMs=88.938 tHostReadMs=0.023 tCacheStateMs=4.043 stepMs=96.317
+MTP-STEP round=2 depth=3 offered=2 accepted=1 committed=2 stepMs=96.6125
+STEP-TRACE round=3 d=2 acc=2 tGraphBuildMs=4.054 tEvalMs=87.582 tHostReadMs=0.024 tCacheStateMs=0.150 stepMs=91.810
+MTP-STEP round=3 depth=3 offered=2 accepted=2 committed=3 stepMs=91.9084
+STEP-TRACE round=4 d=2 acc=2 tGraphBuildMs=4.415 tEvalMs=86.232 tHostReadMs=0.017 tCacheStateMs=0.109 stepMs=90.772
+MTP-STEP round=4 depth=3 offered=2 accepted=2 committed=3 stepMs=90.8375
+STEP-TRACE round=5 d=2 acc=2 tGraphBuildMs=3.035 tEvalMs=86.828 tHostReadMs=0.014 tCacheStateMs=0.114 stepMs=89.990
+MTP-STEP round=5 depth=3 offered=2 accepted=2 committed=3 stepMs=90.0510
+STEP-TRACE round=6 d=2 acc=1 tGraphBuildMs=3.071 tEvalMs=87.145 tHostReadMs=0.013 tCacheStateMs=1.224 stepMs=91.454
+MTP-STEP round=6 depth=3 offered=2 accepted=1 committed=2 stepMs=91.5846
+STEP-TRACE round=7 d=2 acc=2 tGraphBuildMs=3.245 tEvalMs=88.087 tHostReadMs=0.015 tCacheStateMs=0.102 stepMs=91.448
+MTP-STEP round=7 depth=3 offered=2 accepted=2 committed=3 stepMs=91.5117
+STEP-TRACE round=8 d=2 acc=1 tGraphBuildMs=2.999 tEvalMs=87.299 tHostReadMs=0.016 tCacheStateMs=1.146 stepMs=91.461
+MTP-STEP round=8 depth=3 offered=2 accepted=1 committed=2 stepMs=91.5725
+STEP-TRACE round=9 d=2 acc=2 tGraphBuildMs=3.068 tEvalMs=87.996 tHostReadMs=0.022 tCacheStateMs=0.095 stepMs=91.182
+MTP-STEP round=9 depth=3 offered=2 accepted=2 committed=3 stepMs=91.2439
+STEP-TRACE round=10 d=2 acc=2 tGraphBuildMs=2.987 tEvalMs=87.563 tHostReadMs=0.015 tCacheStateMs=0.130 stepMs=90.695
+MTP-STEP round=10 depth=3 offered=2 accepted=2 committed=3 stepMs=90.7591
+STEP-TRACE round=11 d=2 acc=2 tGraphBuildMs=3.057 tEvalMs=88.073 tHostReadMs=0.016 tCacheStateMs=0.107 stepMs=91.253
+MTP-STEP round=11 depth=3 offered=2 accepted=2 committed=3 stepMs=91.3150
+STEP-TRACE round=12 d=2 acc=2 tGraphBuildMs=2.935 tEvalMs=87.893 tHostReadMs=0.019 tCacheStateMs=0.109 stepMs=90.957
+MTP-STEP round=12 depth=3 offered=2 accepted=2 committed=3 stepMs=91.0179
+STEP-TRACE round=13 d=2 acc=2 tGraphBuildMs=2.947 tEvalMs=88.210 tHostReadMs=0.011 tCacheStateMs=0.128 stepMs=91.296
+MTP-STEP round=13 depth=3 offered=2 accepted=2 committed=3 stepMs=91.3573
+STEP-TRACE round=14 d=2 acc=2 tGraphBuildMs=3.040 tEvalMs=88.830 tHostReadMs=0.010 tCacheStateMs=0.106 stepMs=91.985
+MTP-STEP round=14 depth=3 offered=2 accepted=2 committed=3 stepMs=92.0371
+STEP-TRACE round=15 d=2 acc=0 tGraphBuildMs=2.928 tEvalMs=89.461 tHostReadMs=0.011 tCacheStateMs=1.338 stepMs=93.738
+MTP-STEP round=15 depth=3 offered=2 accepted=0 committed=1 stepMs=93.8958
+STEP-TRACE round=16 d=2 acc=1 tGraphBuildMs=5.620 tEvalMs=87.863 tHostReadMs=0.013 tCacheStateMs=1.264 stepMs=94.760
+MTP-STEP round=16 depth=3 offered=2 accepted=1 committed=2 stepMs=94.8664
+STEP-TRACE round=17 d=2 acc=1 tGraphBuildMs=3.401 tEvalMs=90.786 tHostReadMs=0.016 tCacheStateMs=1.275 stepMs=95.478
+MTP-STEP round=17 depth=3 offered=2 accepted=1 committed=2 stepMs=95.5898
+STEP-TRACE round=18 d=2 acc=2 tGraphBuildMs=3.287 tEvalMs=91.140 tHostReadMs=0.013 tCacheStateMs=0.117 stepMs=94.557
+MTP-STEP round=18 depth=3 offered=2 accepted=2 committed=3 stepMs=94.6196
+STEP-TRACE round=19 d=2 acc=1 tGraphBuildMs=2.986 tEvalMs=91.180 tHostReadMs=0.015 tCacheStateMs=1.207 stepMs=95.387
+MTP-STEP round=19 depth=3 offered=2 accepted=1 committed=2 stepMs=95.5182
+STEP-TRACE round=20 d=2 acc=2 tGraphBuildMs=3.230 tEvalMs=91.834 tHostReadMs=0.014 tCacheStateMs=0.122 stepMs=95.200
+MTP-STEP round=20 depth=3 offered=2 accepted=2 committed=3 stepMs=95.2615
+STEP-TRACE round=21 d=2 acc=1 tGraphBuildMs=3.018 tEvalMs=92.312 tHostReadMs=0.012 tCacheStateMs=1.216 stepMs=96.558
+MTP-STEP round=21 depth=3 offered=2 accepted=1 committed=2 stepMs=96.6694
+STEP-TRACE round=22 d=2 acc=1 tGraphBuildMs=3.223 tEvalMs=93.400 tHostReadMs=0.013 tCacheStateMs=1.226 stepMs=97.862
+MTP-STEP round=22 depth=3 offered=2 accepted=1 committed=2 stepMs=97.9993
+STEP-TRACE round=23 d=2 acc=2 tGraphBuildMs=3.184 tEvalMs=94.055 tHostReadMs=0.016 tCacheStateMs=0.128 stepMs=97.383
+MTP-STEP round=23 depth=3 offered=2 accepted=2 committed=3 stepMs=97.4402
+STEP-TRACE round=24 d=2 acc=2 tGraphBuildMs=3.007 tEvalMs=93.631 tHostReadMs=0.011 tCacheStateMs=0.122 stepMs=96.770
+MTP-STEP round=24 depth=3 offered=2 accepted=2 committed=3 stepMs=96.8318
+STEP-TRACE round=25 d=2 acc=2 tGraphBuildMs=3.036 tEvalMs=94.315 tHostReadMs=0.012 tCacheStateMs=0.106 stepMs=97.470
+MTP-STEP round=25 depth=3 offered=2 accepted=2 committed=3 stepMs=97.5217
+STEP-TRACE round=26 d=2 acc=2 tGraphBuildMs=2.898 tEvalMs=95.005 tHostReadMs=0.016 tCacheStateMs=0.117 stepMs=98.036
+MTP-STEP round=26 depth=3 offered=2 accepted=2 committed=3 stepMs=98.1081
+STEP-TRACE round=27 d=2 acc=2 tGraphBuildMs=3.038 tEvalMs=95.427 tHostReadMs=0.013 tCacheStateMs=0.097 stepMs=98.575
+MTP-STEP round=27 depth=3 offered=2 accepted=2 committed=3 stepMs=98.6278
+STEP-TRACE round=28 d=2 acc=2 tGraphBuildMs=2.908 tEvalMs=95.675 tHostReadMs=0.012 tCacheStateMs=0.123 stepMs=98.718
+MTP-STEP round=28 depth=3 offered=2 accepted=2 committed=3 stepMs=98.7714
+STEP-TRACE round=29 d=2 acc=2 tGraphBuildMs=2.997 tEvalMs=96.713 tHostReadMs=0.011 tCacheStateMs=0.098 stepMs=99.820
+MTP-STEP round=29 depth=3 offered=2 accepted=2 committed=3 stepMs=99.8706
+STEP-TRACE round=30 d=2 acc=0 tGraphBuildMs=2.882 tEvalMs=96.612 tHostReadMs=0.013 tCacheStateMs=1.265 stepMs=100.772
+MTP-STEP round=30 depth=3 offered=2 accepted=0 committed=1 stepMs=100.9147
+STEP-TRACE round=31 d=2 acc=2 tGraphBuildMs=3.140 tEvalMs=95.713 tHostReadMs=0.011 tCacheStateMs=0.092 stepMs=98.957
+MTP-STEP round=31 depth=3 offered=2 accepted=2 committed=3 stepMs=99.0069
+STEP-TRACE round=32 d=2 acc=2 tGraphBuildMs=2.860 tEvalMs=97.569 tHostReadMs=0.013 tCacheStateMs=0.137 stepMs=100.579
+MTP-STEP round=32 depth=3 offered=2 accepted=2 committed=3 stepMs=100.6378
+STEP-TRACE round=33 d=2 acc=0 tGraphBuildMs=2.947 tEvalMs=97.779 tHostReadMs=0.014 tCacheStateMs=1.233 stepMs=101.974
+MTP-STEP round=33 depth=3 offered=2 accepted=0 committed=1 stepMs=102.1475
+STEP-TRACE round=34 d=2 acc=0 tGraphBuildMs=3.263 tEvalMs=96.863 tHostReadMs=0.011 tCacheStateMs=1.140 stepMs=101.277
+MTP-STEP round=34 depth=3 offered=2 accepted=0 committed=1 stepMs=101.4300
+STEP-TRACE round=35 d=2 acc=2 tGraphBuildMs=3.269 tEvalMs=97.150 tHostReadMs=0.019 tCacheStateMs=0.116 stepMs=100.554
+MTP-STEP round=35 depth=3 offered=2 accepted=2 committed=3 stepMs=100.6119
+STEP-TRACE round=36 d=2 acc=2 tGraphBuildMs=2.915 tEvalMs=97.706 tHostReadMs=0.012 tCacheStateMs=0.095 stepMs=100.727
+MTP-STEP round=36 depth=3 offered=2 accepted=2 committed=3 stepMs=100.7820
+STEP-TRACE round=37 d=2 acc=2 tGraphBuildMs=3.060 tEvalMs=97.182 tHostReadMs=0.023 tCacheStateMs=0.128 stepMs=100.392
+MTP-STEP round=37 depth=3 offered=2 accepted=2 committed=3 stepMs=100.4540
+STEP-TRACE round=38 d=2 acc=1 tGraphBuildMs=3.015 tEvalMs=97.251 tHostReadMs=0.015 tCacheStateMs=1.206 stepMs=101.487
+MTP-STEP round=38 depth=3 offered=2 accepted=1 committed=2 stepMs=101.6041
+STEP-TRACE round=39 d=2 acc=2 tGraphBuildMs=3.284 tEvalMs=97.955 tHostReadMs=0.012 tCacheStateMs=0.110 stepMs=101.362
+MTP-STEP round=39 depth=3 offered=2 accepted=2 committed=3 stepMs=101.4201
+STEP-TRACE round=40 d=2 acc=2 tGraphBuildMs=3.004 tEvalMs=97.592 tHostReadMs=0.011 tCacheStateMs=0.097 stepMs=100.705
+MTP-STEP round=40 depth=3 offered=2 accepted=2 committed=3 stepMs=100.7582
+STEP-TRACE round=41 d=2 acc=2 tGraphBuildMs=2.849 tEvalMs=97.533 tHostReadMs=0.012 tCacheStateMs=0.118 stepMs=100.512
+MTP-STEP round=41 depth=3 offered=2 accepted=2 committed=3 stepMs=100.5675
+STEP-TRACE round=42 d=2 acc=2 tGraphBuildMs=2.892 tEvalMs=97.268 tHostReadMs=0.022 tCacheStateMs=0.119 stepMs=100.302
+MTP-STEP round=42 depth=3 offered=2 accepted=2 committed=3 stepMs=100.3553
+STEP-TRACE round=43 d=2 acc=1 tGraphBuildMs=2.851 tEvalMs=97.471 tHostReadMs=0.010 tCacheStateMs=1.210 stepMs=101.542
+MTP-STEP round=43 depth=3 offered=2 accepted=1 committed=2 stepMs=101.6495
+STEP-TRACE round=44 d=2 acc=1 tGraphBuildMs=2.928 tEvalMs=97.720 tHostReadMs=0.009 tCacheStateMs=1.150 stepMs=101.806
+MTP-STEP round=44 depth=3 offered=2 accepted=1 committed=2 stepMs=101.9126
+STEP-TRACE round=45 d=2 acc=0 tGraphBuildMs=3.142 tEvalMs=97.915 tHostReadMs=0.016 tCacheStateMs=1.123 stepMs=102.196
+MTP-STEP round=45 depth=3 offered=2 accepted=0 committed=1 stepMs=102.3439
+STEP-TRACE round=46 d=2 acc=0 tGraphBuildMs=3.247 tEvalMs=96.765 tHostReadMs=0.012 tCacheStateMs=1.043 stepMs=101.067
+MTP-STEP round=46 depth=3 offered=2 accepted=0 committed=1 stepMs=101.2081
+STEP-TRACE round=47 d=2 acc=0 tGraphBuildMs=3.166 tEvalMs=96.736 tHostReadMs=0.011 tCacheStateMs=1.108 stepMs=101.021
+MTP-STEP round=47 depth=3 offered=2 accepted=0 committed=1 stepMs=101.1563
+STEP-TRACE round=48 d=2 acc=2 tGraphBuildMs=3.166 tEvalMs=96.388 tHostReadMs=0.011 tCacheStateMs=0.095 stepMs=99.661
+MTP-STEP round=48 depth=3 offered=2 accepted=2 committed=3 stepMs=99.7152
+STEP-TRACE round=49 d=2 acc=0 tGraphBuildMs=2.802 tEvalMs=96.400 tHostReadMs=0.015 tCacheStateMs=1.135 stepMs=100.353
+MTP-STEP round=49 depth=3 offered=2 accepted=0 committed=1 stepMs=100.5104
+STEP-TRACE round=50 d=2 acc=2 tGraphBuildMs=3.215 tEvalMs=96.187 tHostReadMs=0.014 tCacheStateMs=0.142 stepMs=99.558
+MTP-STEP round=50 depth=3 offered=2 accepted=2 committed=3 stepMs=99.6244
+STEP-TRACE round=51 d=2 acc=2 tGraphBuildMs=3.105 tEvalMs=97.176 tHostReadMs=0.019 tCacheStateMs=0.122 stepMs=100.422
+MTP-STEP round=51 depth=3 offered=2 accepted=2 committed=3 stepMs=100.4855
+STEP-TRACE round=52 d=2 acc=2 tGraphBuildMs=2.909 tEvalMs=96.760 tHostReadMs=0.017 tCacheStateMs=0.112 stepMs=99.797
+MTP-STEP round=52 depth=3 offered=2 accepted=2 committed=3 stepMs=99.8763
+MTP-STEP-SUMMARY rounds=52 proposed=104 accepted=77 acceptedPerStep=1.4808 avgStepMs=112.9290 decodeSeconds=5.8955 committed=128 qmvVerifyRouted=2:132,3:5280,4:96 qmvVerifyFallback=1:99,11:96,512:195,2048:384,8203:3 qmvVerifyMaterialized=0

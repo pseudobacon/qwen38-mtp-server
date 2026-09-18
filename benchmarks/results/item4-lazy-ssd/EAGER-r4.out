@@ -1,0 +1,24 @@
+[ INFO ] Server configuration: host=127.0.0.1 port=18097 model=./weights mtpHead=./mtp-head ctxSize=262144 nPredict=262144 temp=0.0 topP=0.95 topK=20 minP=0.05 repeatPenalty=1.0 presencePenalty=0.0 frequencyPenalty=0.0 specDraftNMax=3 cacheTypeK=kvarn8 cacheTypeV=kvarn4 memoryLimitGB=44 tokenizationCache=entries:1024 bytes:268435456 ttl:300s
+[ INFO ] Draft depth resolution: forced k=2 (offer cap 3, stored calibrated 2, calibration file spec-draft-calibration.json)
+[startup] init-start: +0.0 ms (cum 0.0 ms)
+MLXLM: MTP head selected: /Users/cwong/ai/qwen-mtp-server/mtp-head/q4 — 4-bit quantized (default ON)
+MLXLM: MTP draft depth: k=2 (forced k=2; offer cap 3)
+[startup] before-model-load: +0.1 ms (cum 0.1 ms)
+MLXLM: fusion prepare summary: backbone swiGLU 64/64 qkv 16/64 gdn 48/64; head swiGLU 1 qkv 1
+MLXLM: fused GDN prework ON (default; MLX_QWEN_FUSED_GDN=0 to disable): conv1d + SiLU + split + Q/K rmsNorm + g/beta in one Metal launch for verify widths 3...9 (B=1, geometry-matched, bf16)
+MLXLM: QMV verify routing ON (default since the W1 rerun, or MLX_QWEN_QMV_VERIFY=1): 3-D verify inputs with B·L in 2...9 reshape to 2-D and route through the candidate QMV kernel; M=1 (2-D decode and B·L==1) falls back to incumbent quantizedMM; non-contiguous inputs materialize (copies counted); dispatch counters in the step summary and at shutdown
+[startup] weights: 3 shard(s), 15.13 GB
+[startup] model+head+tokenizer load: +1301.1 ms (cum 1301.2 ms)
+[startup] admission: limit=47.24 GB reserve=4.29 GB modelBaseline=15.37 GB kvBits k/v=16/16 tailSize=1024 kvBudget=27.58 GB chunkedPrefill=false
+[startup] MLX.Memory.cacheLimit=47.24 GB
+[startup] host-setup: +3.1 ms (cum 1304.2 ms)
+[startup] ssd-identity-start: +0.0 ms (cum 1304.3 ms)
+[startup] ssd-done: +6787.9 ms (cum 8092.2 ms)
+[startup] pre-warmup: +0.0 ms (cum 8092.2 ms)
+[startup] warmup-done: +16254.4 ms (cum 24346.6 ms)
+[ INFO ] Model runtime is ready.
+[ NOTICE ] Server started on http://127.0.0.1:18097
+[ INFO ] GET /readyz [request-id: 2D6AB72D-0473-4703-A0F2-9049E96F8A9E]
+
+[ INFO ] QMV verify dispatch (Item D): routed [2:99 3:192 4:96] fallback [1:99 512:195] materialized 0
+[ INFO ] Model runtime draining; waiting for active generation.

@@ -2538,3 +2538,52 @@ to `main` (engine `9f4ceb9`, server `e86a342`). Full verdict ledger:
   quality-evidence plan, and only if LEV-A shows affine8 wins.
 - **pc autotuning**: measured pc curve (512/1024/2048 sweep, MCP2) shows 2048 is
   the monotone winner; no mixed-length data exists that moves the optimum.
+
+## 2026-09-18: Phase 3 quick-wins (Items 1–4) — COMPLETE
+
+Consume the LEV-B / LEV-C verdicts (verify GO-marginal, prefill FLAG; startup
+warmup 66.5 % / SSD 27.7 %). Measurement + gated implementation only. Findings:
+`benchmarks/results/quick-wins/quick-wins-findings.md` (+ per-item result dirs).
+
+- **Item 1 — verify-width fusion flipped to default ON → GO (marginal).**
+  `Qwen35FusedGDNPreworkRouting.enabled` OFF → ON (rollback `MLX_QWEN_FUSED_GDN=0`).
+  Bit-exact at 32K (`6576c099`) and 8K (`f669c4e9`), all reps. End-to-end: 8K
+  mean −3.0 ms (~2.7 %) A/ON-faster (3/5 reps), 32K tGraph 4/4 (LEV-B −1.1 %).
+  The strict ≥ 4/5 end-to-end gate is not cleanly met (3/5 at 8K; thermal-swamped
+  at 32K), so it is documented **marginal**, kept ON because it is bit-exact
+  (no downside) + mean-favorable + host graph-build reduction. Rollback verified.
+- **Item 2 — `_PREFILL` divergence audit → NO-GO (keep default OFF), audit
+  logged.** Correction to the task premise: the MTP session chunks the prefill
+  into 2048-token GDN forwards at **all** lengths (S=2048 ≤ 4096 per chunk), so
+  the fused prefill engages at 8K/16K/32K alike — the 8K/16K "bit-exact"
+  expectation does not hold. Divergence is **gross, not a knife-edge**: flip-rate
+  80.5 % (8K) / 15.6 % (16K) / 25.8 % (32K) ≫ the ~0.9 % (9/1024) knife-edge
+  supply; 32K first-flip top-2 gap is a real ~2.0-logit gap; 32K text is a
+  near-synonym rewording (same meaning), not a semantic break. 32K prefill win
+  is −0.7 % (< 3 %, P faster 3/5). Fails both gates → keep `MLX_QWEN_FUSED_GDN_PREFILL`
+  default OFF. New gated `MLX_QWEN_TOP2_GAP_TRACE` engine trace added for the
+  audit. Consistent with LEV-B's prefill FLAG.
+- **Item 3 — startup warmup + persistent kernel-compile cache → investigated,
+  implementation hand-off.** The 16.9 s warmup (`warmAllDepthShapes`) is the Metal
+  cold-JIT for the decode family (512-token seed forward, verify widths, head
+  drafts, `draftTokenID`); Metal's built-in disk cache persists it across
+  restarts (16.9 s cold → 3.0 s warm), so ~14 s is the addressable cold-JIT and
+  ~3 s is allocation/first-touch. A provenance-safe persistent cache would
+  pre-compile these kernels at build/install, version-keyed by (cmlx `1f8e74e`
+  + metallib `b57de586` + model config), fail-loud on mismatch. Hand-off: it
+  needs a deployment pre-warm step **or** an `MTLBinaryArchive` capture of the
+  MLX runtime's kernels (likely an MLX-side hook) — beyond a quick win. See
+  `docs/HANDOFF.md`.
+- **Item 4 — lazy SSD restore → GO (implemented, default ON).** The 8.5 s SSD
+  block is 93 % the weight-identity hash + template fingerprint (7.94 s pure-CPU
+  file I/O), not the restore (~1 ms). `QWEN_KV_SSD_LAZY` (default ON; `=0` eager):
+  the hash runs off the actor's critical startup path (background `Task.detached`),
+  then `finishSSDSetup` wires the store + restores the skeleton on the actor.
+  Time-to-readyz A/B (5 restarts, alternating order): EAGER ~26 s vs LAZY ~5.4 s
+  → **~21 s drop, 5/5**, far above the ≥ 5 s bar. No correctness change (requests
+  serve normally; requests before the background completes simply miss).
+
+**Verification:** engine `Qwen38MTPDiagnosticTests` 3/3; server `HTTPServerTests`
+237 tests / 7 suites green. Both repos on `feature/prompt-3`, `git diff --check`
+clean. Gated traces (`MLX_QWEN_TOP2_GAP_TRACE`, `QWEN_STARTUP_TRACE` SSD
+sub-timers) are startup-only / off-by-default; no hot-path change.
