@@ -562,6 +562,14 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
+**LEV-campaign fresh checkpoint: COMPLETED 2026-09-18 09:06 BST** via
+`scripts/agent-checkpoint.sh` (server `.dsh/last-agent-checkpoint` =
+`2026-09-18T09:06:31+01:00`; engine = `2026-09-18T09:06:39+01:00`);
+fresh-checkpoint procedure completed in both repos. Server `main` @ `1e80f09`
+(clean, 0 tracked changes); engine `main` @ `9f4ceb9` (clean). Both suites green
+(engine `Qwen38MTPDiagnosticTests` 3/3; server `HTTPServerTests` 237 tests / 7
+suites). No server left running.
+
 **MER4 fresh checkpoint: COMPLETED 2026-09-17 22:54 BST** via `scripts/agent-checkpoint.sh`
 (`.dsh/last-agent-checkpoint` = `2026-09-17T22:54:37+01:00`); fresh-checkpoint procedure
 completed.
