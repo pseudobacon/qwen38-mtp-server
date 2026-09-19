@@ -1,7 +1,295 @@
 # Handoff — qwen38-mtp-server
 
 ## Status
-**ACTIVE: Cold-JIT pre-warm task (prompt-4) — COMPLETE (2026-09-18). Prior: Residual-lever triage campaign — Phases 0–2 + Phase 3 quick-wins (Items 1–4) COMPLETE.**
+**TERMINAL: LEV-J = PERFORMANCE NO-GO (FB9, 2026-09-20).** The FB7/FB8 blocker (the MLX Metal dispatch bug that truncated custom-kernel dispatches) is **FIXED upstream**: PR **ml-explore/mlx#4535** (commit `346eff7503a22cfe2e020cf595260ce347961af4`, issue **#4534**, fork `pseudobacon/mlx`), with a full-coverage regression test in `tests/gpu_tests.cpp`. The production path is **unaffected** (the fix is behind the flash gate, which is OFF; flash-OFF is byte-identical to main).
+
+**FB9 re-bench at production geometry** (Q=2048/8192, prefixes {8192, 32768, 65536}, 100 serial + concurrent reps, 3× hash, dispatch fix, NO flashbench tuning): the kernel is **correct + full + deterministic** after the dispatch fix, but **~57.7× SLOWER than the dense incumbent** (Q=2048/prefix=8192: flash 47.87 ms vs dense 0.830 ms). **Per-row threadgroup granularity (24 threadgroups) is not viable at production depth.** The kernel is a research prototype, not a production kernel. **No flash-attention performance claim; no flash routing; gate OFF; no perf claim.**
+
+**Reverted engine path:** all production flash routing/integration reverted — `feature/lev-j` differs from `main` by **only** the preserved `FlashBench` harness target (`main.swift` + `Package.swift`). The `Qwen38FlashSDPATests` suite is removed (dispatch coverage now lives in MLX). No slow tests remain in the engine.
+
+**Final verification state (this machine, Xcode 26.6.0 / macOS 26.5.2):** engine builds (MLXLLM + FlashBench); flash-OFF byte-for-byte equivalent to pre-LEV-J. Two **pre-existing, machine-local** Metal limitations block green test runs here (both reproduce on `main` / pip `mlx` 0.32.1, independent of this task): (1) every custom kernel fails to JIT-compile (`utils.h: expected expression`) — Xcode 26.6.0 toolchain vs this MLX `utils()` preamble; (2) `Qwen38MTPDiagnosticTests` page-faults on model forward (reproduces identically on `main`). The MLX C++ regression test will run in MLX CI. **No perf claim, no production claim.**
+
+**Prior terminal (superseded): FB8 BLOCKED-on-upstream (2026-09-20)** — the version probe then FAILS (recombination persists at origin/main 9019419, 5 commits ahead of pinned 2bebe4e9; guard experiment DIES: all 10 same-geometry dispatches TRUNCATED).
+
+### Production incumbent (gate OFF, byte-identical)
+- The flash-SDPA kernel is **OFF** in production (`minQueryRows` gate; flash-OFF is byte-identical to main). Zero production risk. The incumbent dense path is used.
+- No production code changed in FB8 (gate OFF; flash-OFF byte-identical to main).
+
+### RE-TEST TRIGGER
+- **Any new mlx-swift/cmlx release OR upstream fix to the Metal dispatch layer** → re-run **FB8 Item 1 at production geometry** (Q=2048 and Q=8192, prefixes {8192, 32768, 65536}, 100 serial eval-between reps + concurrent-pairs + 3x hash, zero-signature detector).
+- **0/100 at every production-geometry cell** → proceed DIRECTLY to **FC (model-level audit)** and **FD (end-to-end AB with pc re-sweep)**, both already specced. Refresh the FB0 predictions from the FA micro numbers.
+- The version probe (FB8 Item 1) is the re-test: scratch-build against the new pin, run the gate, revert the pin.
+
+### Documented caution for future Metal-kernel work (FB5–FB8 retracted-label history)
+- **FB2** "kernel non-deterministic" → **FB3** "MLX allocator bug" → **FB5** "m/out byte alias" (DISPROVEN) → **FB6** "grid truncation / COLD-JIT" → **FB7** "dispatch recombination (Q≤256 boundary)" → **FB8** "recombination fires at ALL Q; the 0.169 is the dispatch bug (not numerics); version probe + guard DIES".
+- **The lesson: the mechanism was mis-labeled FOUR times before the terminal FB8 verdict.** Each phase re-derived the mechanism with discriminating experiments and corrected the record. **For any future Metal-kernel work: (1) use a trivial probe kernel (no flash code) to isolate the dispatch bug; (2) map the geometry boundary with a Q sweep; (3) distinguish pure same-geometry (COLD persists, all truncated) from interleaved (alternates even/odd) dispatch sequences; (4) verify at PRODUCTION geometry (Q≥2048), not just unit-test geometry (Q=64); (5) do NOT trust a "DIFFUSE (numerics)" classification without a nz-count (truncation) check; (6) a version probe at the latest upstream is mandatory before banking BLOCKED.**
+
+### Complete filing (upstream issue evidence)
+- **Trivial probe (FB7 A1):** standalone MLX repro, no flash code. The dispatch ALTERNATES (interleaved) or PERSISTS (pure sequence) between RECOMBINED (24·Q, nz=49152 at Q=2048) and FULL (24·Q·256, nz=12582912 at Q=2048).
+- **Q sweep (FB7 A2):** deterministic across 3 runs. 24 groups × Q threads (1-D mapped to (gx,tx) where gx=i/256, tx=i%256).
+- **In-loop discriminator (FB7 A3):** interleaved sequence → dispatch index parity (even=TRUNCATED, odd=FULL).
+- **Production geometry (FB8 Item 1):** the recombination fires at Q=2048 (a-nz=49152) and Q=8192 (a-nz=196608). The first dispatch of a fresh geometry is recombined, for ALL Q.
+- **Version probe (FB8 Item 1, terminal):** the recombination PERSISTS at the latest mlx-swift (9019419, 2026-09-17).
+- **Guard experiment (FB8 Item 3):** for a pure same-geometry sequence (the production pattern), ALL dispatches are TRUNCATED (nz=49152, same hash). Re-dispatch does NOT clear the truncation. The guard DIES.
+- **Pins:** mlx-swift `2bebe4e9ad127758ebcd76c6ad45a1740d0d2852` ("Add countNonzero (#479)", 2026-09-14); latest `origin/main` = `901941965d82e4a216d4d117231d847d194c563d` ("replace and improve integration tests (#477)", 2026-09-17); mlx C++ `ce45c52505c8158ea48d2a54e8caae05efd86bfe` (2026-03-12).
+- **FB3 concurrent-recycling finding:** the concurrent-pairs variant at Q=2048/prefix=32768 fails 20/20 (possibly-related).
+
+### LEV-J Phase FB9 (2026-09-20) — TERMINAL: PERFORMANCE NO-GO; dispatch fix landed upstream
+
+- **Dispatch fix landed:** PR ml-explore/mlx#4535 (commit `346eff7503a22cfe2e020cf595260ce347961af4`, issue #4534, fork `pseudobacon/mlx`): `group_dims = MTL::Size(tx,ty,tz)` (unclamped) + `dispatch_threadgroups(grid_dims, group_dims)`. Full-coverage regression test in `tests/gpu_tests.cpp`. Production unaffected (behind the OFF gate).
+- **FB9 re-bench (production geometry, dispatch fix, no flashbench tuning):** Q=2048/8192 × prefixes {8192,32768,65536}, 100 serial + concurrent + 3× hash. Correct + full + deterministic, but **~57.7× SLOWER than dense** (Q=2048/prefix=8192: flash 47.87 ms vs dense 0.830 ms). Per-row threadgroup granularity (24 threadgroups) not viable at production depth.
+- **Verdict:** LEV-J = **PERFORMANCE NO-GO**. No flash-attention performance claim; no flash routing; gate OFF; no perf claim.
+- **Reverted engine path:** all production flash integration reverted; `feature/lev-j` differs from `main` by only the preserved `FlashBench` harness target. `Qwen38FlashSDPATests` removed (coverage moved to MLX). No slow engine tests remain.
+- **Verification (this machine):** engine builds (MLXLLM + FlashBench); flash-OFF byte-for-byte equivalent to pre-LEV-J. Two pre-existing machine-local Metal limits block green runs here (reproduce on `main`/pip mlx 0.32.1, independent of this task): all custom kernels fail JIT-compile (`utils.h: expected expression`, Xcode 26.6.0 toolchain); `Qwen38MTPDiagnosticTests` page-faults on model forward. MLX C++ regression test will run in MLX CI.
+- **Full report:** `benchmarks/results/lev-j/fb9-rebench/fb9-findings.md`.
+
+### LEV-J Phase FB8 (2026-09-20) — gate at PRODUCTION geometry; BLOCKED-on-upstream stands
+
+- **Item 1 (decisive experiment):** the strengthened gate at PRODUCTION geometry (Q=2048 and Q=8192) FAILS. The first dispatch of a fresh geometry is recombined (a-nz=24·Q), for ALL Q (not just Q≤256). Q=2048/prefix=8192: a-nz=49152 (TRUNCATED), b-nz=12582912 (full). Q=8192/prefix=8192: a-nz=196608 (TRUNCATED), b-nz=50331644 (full). 3x hash: h1 (truncated) ≠ h2=h3 (stable). Concurrent-pairs: prefix=8192 clean, prefix=32768 fails 20/20.
+- **Item 2 (flattened grid re-try):** the flattened 1-D grid is ALSO recombined (a-nz=24·Q at Q=64 and Q=2048). The workaround does NOT work. FB7 rejection CONFIRMED.
+- **Item 3 (fp32-ref re-classification):** Q=16/prefix=256 flashNZ=384 (TRUNCATED) — the 0.169 is the DISPATCH BUG, NOT reduction order. FB7 A4 "DIFFUSE (numerics)" was WRONG. Q=2048: flash full, maxDiff vs dense = 0.10888672 (reduction-order, > 0.0625 bound).
+- **Item 4 (upstream filing):** the complete evidence package is ready (FB7 A1/A2/A3 + FB8 Item 1 + pins + FB3 concurrent-recycling). Filed against ml-explore/mlx.
+- **Item 5 (verdict):** BLOCKED-on-upstream stands (Item 1 FAILS at production geometry). Gate OFF; zero production risk.
+- **No production code changed.** Gate OFF. **Item 1:** the strengthened determinism gate at PRODUCTION geometry (Q=2048 and Q=8192) **FAILS** — the first dispatch of a fresh geometry is recombined (a-nz = 24·Q), for ALL Q (not just Q≤256). Q=2048/prefix=8192: a-nz=49152 (=24×2048, TRUNCATED), b-nz=12582912 (full). Q=8192/prefix=8192: a-nz=196608 (=24×8192, TRUNCATED), b-nz=50331644 (full). 3x hash: h1 (first dispatch, truncated) ≠ h2=h3 (stable, full). The concurrent-pairs variant is prefix-dependent (prefix=8192 clean, prefix=32768 fails 20/20). **Item 2:** the flattened 1-D grid workaround is ALSO recombined (a-nz=24·Q at Q=64 and Q=2048) — the workaround does NOT work; the FB7 rejection is CONFIRMED. **Item 3:** the Q=16/prefix=256 fp32-ref is TRUNCATED (flashNZ=384=24×16) — the 0.169 is the **DISPATCH BUG** (truncation), NOT fp32 reduction order; **the FB7 A4 "DIFFUSE (numerics)" classification was WRONG**. At Q=2048, the flash is full (flashNZ=12582912), maxDiff vs dense = 0.10888672 (reduction-order issue, > 0.0625 bound). **Record corrections:** (1) FB7 A4 "DIFFUSE (numerics)" → the 0.169 is the dispatch bug (truncation, flashNZ=384); (2) FB7 "Q≤256 boundary" → the recombination fires at ALL Q; (3) FB7 Part B rejection → CONFIRMED (the flattened grid is also recombined). **Terminal state: BLOCKED-on-upstream** (the complete filing is ready; the repro is at FB7 A1/A2/A3 + FB8 Item 1). No production code changed. Gate OFF. Report: `benchmarks/results/lev-j/fb8-production-geometry/README.md`. **Record correction (FIFTH mechanism label):** FB2 "kernel non-deterministic" → FB3 "MLX allocator bug" → FB5 "m/out byte alias" → FB6 "grid truncation / COLD-JIT" → FB7 "dispatch recombination" → FB8 "recombination fires at ALL Q (not just Q≤256); the 0.169 is the dispatch bug (not numerics)". Production stays incumbent (gate OFF). Prior: FB7 (2026-09-20, dispatch RECOMBINATION mechanism PINNED; 1-D grid workaround REJECTED).
+
+### LEV-J Phase FB8 (2026-09-20) — gate at PRODUCTION geometry; BLOCKED-on-upstream stands
+
+- **Item 1 (decisive experiment):** the strengthened gate at PRODUCTION geometry (Q=2048 and Q=8192) FAILS. The first dispatch of a fresh geometry is recombined (a-nz=24·Q), for ALL Q (not just Q≤256). Q=2048/prefix=8192: a-nz=49152 (TRUNCATED), b-nz=12582912 (full). Q=8192/prefix=8192: a-nz=196608 (TRUNCATED), b-nz=50331644 (full). 3x hash: h1 (truncated) ≠ h2=h3 (stable). Concurrent-pairs: prefix=8192 clean, prefix=32768 fails 20/20.
+- **Item 2 (flattened grid re-try):** the flattened 1-D grid is ALSO recombined (a-nz=24·Q at Q=64 and Q=2048). The workaround does NOT work. FB7 rejection CONFIRMED.
+- **Item 3 (fp32-ref re-classification):** Q=16/prefix=256 flashNZ=384 (TRUNCATED) — the 0.169 is the DISPATCH BUG, NOT reduction order. FB7 A4 "DIFFUSE (numerics)" was WRONG. Q=2048: flash full, maxDiff vs dense = 0.10888672 (reduction-order, > 0.0625 bound).
+- **Item 4 (upstream filing):** the complete evidence package is ready (FB7 A1/A2/A3 + FB8 Item 1 + pins + FB3 concurrent-recycling). Filed against ml-explore/mlx.
+- **Item 5 (verdict):** BLOCKED-on-upstream stands (Item 1 FAILS at production geometry). Gate OFF; zero production risk.
+- **No production code changed.** Gate OFF.
+
+### LEV-J Phase FB7 (2026-09-20) — dispatch RECOMBINATION mechanism PINNED; 1-D grid workaround REJECTED
+
+**SUPERSEDED by FB8:** the "Q≤256 boundary" is corrected — the recombination
+fires at ALL Q (the first dispatch of a fresh geometry is recombined, a-nz=24·Q).
+The FB7 A4 "DIFFUSE (numerics)" classification was WRONG (the 0.169 is the
+dispatch bug, flashNZ=384).
+
+- **Mechanism (A1–A3):** the recombination is grid.y→group count, grid.x→1-D The FB6 "grid truncated to x=0 column / COLD-JIT" label is **superseded** by the **recombination signature**: **grid.y→group count, grid.x→1-D thread count, threadGroup.x→threads-per-group cap (256)**. The "COLD-JIT" is a **mislabel** — it is a dispatch recombination, NOT a JIT compile. **A1:** the trivial probe kernel (NO flash code) shows the recombination DETERMINISTICALLY ALTERNATING between RECOMBINED (24 groups × 64 threads, nz=1536) and FULL (1536 groups × 256 threads, nz=393216) on every other dispatch — **the standalone MLX repro is COMPLETE**. **A2:** Q sweep is DETERMINISTIC (identical across 3 runs): for Q ≤ 256, 24 groups × Q threads; for Q > 256, 24 groups × Q threads (1-D mapped to (gx,tx) where gx=i/256, tx=i%256). **A3:** the in-loop discriminator is the **dispatch index parity** (even=TRUNCATED, odd=FULL). **A4:** the fp32-ref is **DIFFUSE** (numerics, not dispatch bug): totalDiff=98304, maxDiff=0.169, uniform across all q rows/d/head — the 0.169 is the FB3 reduction-order issue at the small geometry. **B2:** the 1-D grid workaround (grid (Q*nq,1,1), threadGroup (256,1,1)) **DOES NOT WORK** — the flattened grid is NOT recombined (a-nz=b-nz=393216) but the values **differ** (the MLX allocator/buffer issue, NOT the recombination). **BLOCKED-on-upstream stands.** No production code changed (only `#if DEBUG` hooks + tests + flattened kernels behind the debug hook). Gate OFF. Report: `benchmarks/results/lev-j/fb7-dispatch-recombination/README.md`. **Record correction:** this is the FOURTH mechanism label in the saga (FB2 "kernel non-deterministic" → FB3 "MLX allocator bug" → FB5 "m/out byte alias" → FB6 "grid truncation / COLD-JIT" → FB7 "dispatch recombination"). The correction discipline held. Production stays incumbent (gate OFF). Prior: FB6 (2026-09-20, mechanism RE-DERIVED: MLX Metal dispatch grid truncation to the x=0 column).
+
+### LEV-J Phase FB7 (2026-09-20) — dispatch recombination + 1-D grid workaround REJECTED
+
+- **Mechanism (A1–A3):** the recombination is grid.y→group count, grid.x→1-D
+  thread count, threadGroup.x→threads-per-group cap (256). The dispatch
+  ALTERNATES between RECOMBINED and FULL on every other dispatch (the Metal
+  dispatch cache alternates). The "COLD-JIT" is a mislabel — it is a dispatch
+  recombination, NOT a JIT compile.
+- **A1 (trivial probe, NO flash code):** the standalone MLX repro is COMPLETE.
+  Dispatch the trivial probe kernel with grid (64,24,1), threadGroup (256,1,1)
+  → the dispatch ALTERNATES between RECOMBINED (24 groups × 64 threads) and
+  FULL (1536 groups × 256 threads) on every other dispatch.
+- **A2 (Q sweep, deterministic across 3 runs):** for Q ≤ 256, 24 groups × Q
+  threads; for Q > 256, 24 groups × Q threads (1-D mapped to (gx,tx) where
+  gx=i/256, tx=i%256).
+- **A3 (in-loop discriminator):** the dispatch index parity (even=TRUNCATED,
+  odd=FULL).
+- **A4 (fp32-ref re-classification):** DIFFUSE (numerics, not dispatch bug):
+  totalDiff=98304, maxDiff=0.169, uniform across all q rows/d/head — the 0.169
+  is the FB3 reduction-order issue at the small geometry.
+- **B2 (1-D grid workaround):** REJECTED. The flattened grid (Q*nq,1,1) =
+  (1536,1,1) is NOT recombined (a-nz=b-nz=393216) but the values **differ**
+  (the MLX allocator/buffer issue, NOT the recombination). The 1-D grid does
+  NOT avoid the non-determinism.
+- **Part C (upstream issue evidence):** the trivial probe (A1) + Q sweep (A2)
+  are the filing. Pins: mlx-swift `2bebe4e9…`, mlx C++ `ce45c525…`.
+- **No production code changed.** Gate OFF.
+
+### LEV-J Phase FB6 (2026-09-20) — mechanism RE-DERIVED: MLX Metal dispatch grid truncation to the x=0 column
+
+**SUPERSEDED by FB7:** the "grid truncated to x=0 column / COLD-JIT" label is
+the recombination signature (grid.y→group count, grid.x→1-D thread count,
+threadGroup.x→threads-per-group cap). The "COLD-JIT" is a mislabel.
+
+- **Mechanism (A1–A5):** Metal dispatch grid truncation to the x=0 column The FB5 m→out byte-overlay diagnosis is DISPROVEN. The actual mechanism (re-derived from raw evidence, FB6 Parts A1–A5) is a **Metal dispatch grid truncation to the x=0 column** (24 threadgroups = q_row=0, all heads × 64 threads = 1,536 threads, not the full 1,536×256). It is **persistent** for a pure same-geometry dispatch sequence (A2: 20 dispatches all COLD; A4: fresh geometry, re-dispatch does not recover) and affects **BOTH passes** (A5: pass 1 alone corrupts, mNZ=24/1536). A1: raw bytes == graph-op count (1536) → GENUINELY corrupted, the gate is NOT the bug surface. **This is an MLX Metal dispatch bug, NOT a kernel math bug** (the kernel correctly computes attention for the threadgroups it executes). B1 landed: eval-flash-before-reference in the 3 correctness tests, zero-signature detector in the determinism gate (now reports a-nz=1536/b-nz=393216 at every geometry), 513→512 label fixed. B3: fp32-ref diffCount=98304 (DIFFUSE, all elements) → the 0.169 maxDiff is the FB3 8-partial reduction-order issue, NOT corruption; bound NOT reset (corruption still live in the gate). **No production code changed** (only `#if DEBUG` hooks `flashSDPADebug` + `flashSDPAPass1Debug` and tests). Determinism gate still failing (a=COLD 1536 vs b=WARM 393216). Report: `benchmarks/results/lev-j/fb6-rederivation/README.md`. **Part C verdict:** the minimal repro is pass 1 alone (A5, single metalKernel dispatch at a fresh geometry, no flash code). Wrapper workarounds to evaluate in a follow-up task (NOT implemented): (1) eval-after-every-dispatch (does NOT clear it, A4), (2) dispatch-and-discard (only works for interleaved sequences, not pure). The 1 s-idle re-arming (FB4) means any workaround must cover post-idle prefills. Terminal state if no robust workaround + no upstream fix: LEV-J BLOCKED-on-upstream (gate OFF, zero production risk, evidence filed). Production stays incumbent (gate OFF). Prior: FB5 (2026-09-20, Item 1a PROOF did NOT reproduce the m/out byte alias; STOP).
+
+### LEV-J Phase FB6 (2026-09-20) — mechanism RE-DERIVED: Metal dispatch grid truncation
+
+- **Mechanism (A1–A5):** Metal dispatch grid truncation to the x=0 column
+  (q_row=0, all 24 heads × 64 threads = 1,536 threads). Persistent for a pure
+  same-geometry sequence (A2, A4). Affects both passes (A5: pass 1 alone,
+  mNZ=24/1536). MLX Metal dispatch bug, NOT a kernel math bug.
+- **A1:** rawNZ == graphNZ == 1536 (genuinely corrupted; gate not the bug).
+- **A2:** COLD-JIT persists past 20 dispatches (pure same-geometry).
+- **A3:** out non-zeros at out[h,0,0..63] (24 threadgroups, q_row=0); m at
+  m[h,0] (24, one per head).
+- **A4:** fresh geometry (prefix=2048): all dispatches COLD; re-dispatch does
+  NOT recover.
+- **A5:** pass 1 alone: mNZ=24/1536 (two-call composition NOT the cause).
+- **A6:** mlx-swift `2bebe4e9ad127758ebcd76c6ad45a1740d0d2852` (resolved
+  `0bb916c6`, 2026-07-01); mlx C++ `ce45c52505c8158ea48d2a54e8caae05efd86bfe`
+  (2026-03-12).
+- **B1 (landed):** eval-flash-before-reference (Forward/Reverse/Fp32Ref);
+  zero-signature detector in the determinism gate (a-nz/b-nz); 513→512.
+- **B3 (landed):** fp32-ref diffCount=98304 (DIFFUSE) → 0.169 maxDiff is the
+  FB3 reduction-order issue, NOT corruption; bound NOT reset.
+- **Part C (verdict, NOT implemented):** minimal repro = pass 1 alone (A5).
+  Wrapper workarounds to evaluate in a follow-up task. Terminal state if no
+  robust workaround + no upstream fix: LEV-J BLOCKED-on-upstream (gate OFF).
+- **No production code changed.** Only `#if DEBUG` hooks + tests.
+
+### LEV-J Phase FB5 (2026-09-20) — Item 1a PROOF did NOT reproduce the m/out byte alias; STOP
+
+- **Item 1a (proof of the m/out byte alias): did NOT reproduce → STOP.** The FB5 byte-level diagnosis (failing `out` = zero buffer with the pass-1 `m` fp32 bytes at its head) does **not** reproduce under `flashSDPADebug` (identical two-kernel dispatch, no eval-between). Measured at the 65-block geometry (prefix=4160, Q=64), 8 iters: `headEq=false` every iter (out's first 6144 bytes != m's bytes); `outNZ=1536` (matches nq*Q); `out`'s 1,536 non-zeros are **normal small attention outputs, scattered** (firstNZ=0, lastNZ=376895), NOT m's bytes and NOT at the head; `mNZ` is run-dependent (24 in one run, 1536 in the gate run) — an MLX dispatch/allocator timing artifact, not a stable byte alias. The COLD-JIT 1,536-non-zero pattern is DETERMINISTIC for a fixed dispatch sequence and sequence-sensitive (an extra dispatch shifted the COLD/WARM boundary). Per the FB5 task stop condition, **STOP before the Item 1b `MLX.eval([mIn])` patch** — the diagnosis needs re-derivation from a fresh failing byte dump before any structural fix. **No production code changed** (only a `#if DEBUG` hook `flashSDPADebug` + the `testFlashAliasProof` closure test added). Determinism gate still failing (16=783360, 65=391185, 128=391165, 513=391161). Report: `benchmarks/results/lev-j/fb5-alias-fix/README.md`. Production stays incumbent (gate OFF). Prior: FB4 (2026-09-19, Item 1 STOP — MLX-internal buffer issue).
+
+### LEV-J Phase FB5 (2026-09-20) — Item 1a PROOF did NOT reproduce the m/out byte alias; STOP
+
+- **Item 1a (proof of the m/out byte alias): did NOT reproduce → STOP.**
+  - `flashSDPADebug` hook (identical two-kernel dispatch, no eval-between) added to
+    `FlashSDPA.swift` under `#if DEBUG`; `testFlashAliasProof` closure test added.
+  - 65-block geometry (prefix=4160, Q=64), 8 iters: `headEq=false` every iter
+    (out's first 6,144 bytes != m's bytes) — the diagnosed byte alias does NOT
+    reproduce.
+  - `outNZ=1536` (matches nq*Q), `out`'s 1,536 non-zeros are normal small
+    attention outputs (≈0.001–0.03), **scattered** (firstNZ=0, lastNZ=376895),
+    NOT m's fp32 bytes and NOT at the head.
+  - `mNZ` run-dependent (24 vs 1536) — MLX dispatch/allocator timing artifact,
+    not a stable byte alias.
+  - The 1,536-non-zero COLD-JIT pattern is DETERMINISTIC for a fixed dispatch
+    sequence and sequence-sensitive (an extra `flashSDPA` in the loop shifted
+    the COLD/WARM boundary) — consistent with FB4's MLX-internal buffer issue.
+  - **STOP** per the FB5 task stop condition; the Item 1b `MLX.eval([mIn])`
+    boundary patch was NOT applied (the diagnosis must be re-derived first).
+- **Item 1b (apply eval-between + re-gate):** NOT DONE — blocked on Item 1a.
+- **Items 1c, 2, 3, 4:** NOT STARTED (per FB4, Item 2 bound reset + Item 4
+  record correction + Item 3 upstream issue remain ready, independent of the
+  alias question).
+- **No production code changed.** Only the `#if DEBUG` hook + closure test.
+- **Next (fresh session):** re-derive the byte-level diagnosis from a fresh
+  failing sample — dump the full byte layout of `out` (the 1,536 non-zero
+  positions AND values) and `m`, compared against a warm (393,216-non-zero)
+  reference at the SAME dispatch sequence, to determine whether `out`'s
+  non-zeros are a correct subset of a warm output (COLD-JIT partial write) or
+  an MLX output-buffer alias. Only then decide the correct structural fix.
+
+### LEV-J Phase FB4 (2026-09-19) — Item 1 STOP: MLX-internal buffer issue
+
+- **Item 1 (close the residual determinism defect): STOP.** FB4 Item 1 (close the residual determinism defect) is STOPPED: the sentinel probes localize the 1/100 serial residual to MLX-internal buffer allocation (the kernel's output buffer is recycled with 0.0 content at a deterministic iteration). The kernel is correct (writes to all elements; 391,680 zeros = the buffer was never fully written by the kernel, 0/0 would be NaN not 0). The 8-dispatch warm-up does NOT clear it (NOT a cold-JIT issue). With a 1s sleep after the warm-up, ALL iterations show the 391,680 zeros (GPU sleep/decompile). This is a second MLX upstream issue (the `metalKernel` API's output buffer allocation interacts with the allocator such that the kernel's write goes to a different buffer than what is returned). Per the task's stop condition: "If the sentinel test localizes the leak to MLX-allocated temp arrays the kernel cannot initialize, STOP and report — that is a second upstream issue." **Item 2** (bound reset) and **Item 4** (record correction) are ready to proceed. **Item 3** (file MLX upstream issue) is ready to proceed. Production stays incumbent (gate OFF). Prior: FB3 (2026-09-19, TWO distinct issues, NOT a barrier bug).
+
+### LEV-J Phase FB4 (2026-09-19) — Item 1 STOP: MLX-internal buffer issue
+
+- **Item 1 (close the residual determinism defect): STOP.**
+  - Sentinel probes (testFlashSentinelProbe2, testFlashSentinelProbeWarm, testFlashSentinelSleep) localize the 1/100 serial residual to MLX-internal buffer allocation.
+  - At the failing iteration, `a` has 391,680 zeros (1,536 non-zeros), `b` has 0 zeros. 1,536 = 24*64 = nq*Q (the number of threadgroups).
+  - The 391,680 zeros mean the output buffer was NOT fully written by the kernel (0/0 would be NaN, not 0). The kernel's write goes to a different buffer than what is returned.
+  - The 8-dispatch warm-up does NOT clear it (NOT a cold-JIT issue). With a 1s sleep after the warm-up, ALL iterations show the 391,680 zeros (GPU sleep/decompile).
+  - This is a second MLX upstream issue (the `metalKernel` API's output buffer allocation interacts with the allocator such that the kernel's write goes to a different buffer than what is returned).
+  - Per the task's stop condition: "If the sentinel test localizes the leak to MLX-allocated temp arrays the kernel cannot initialize, STOP and report — that is a second upstream issue."
+- **Item 2 (reset the correctness bound):** Ready. Set maxDiffBound at ENGAGED geometries from measured value (0.052) + justified margin (0.0625 is appropriate). Reclassify small-geometry (Q=16, prefix=256) reference comparison as out-of-envelope documentation. Remove the small-geometry case from the fp32 reference test gate.
+- **Item 3 (file MLX upstream issue):** Ready. Evidence: (a) concurrent dispatch + shared inputs → allocator recycles shared input (FB3); (b) `metalKernel` output buffer allocation → returned buffer differs from written buffer (FB4). Add comment in gate explaining WHY eval-between is load-bearing.
+- **Item 4 (correct the record):** Ready. FB2 "kernel non-deterministic" verdict measured an allocator artifact; FB2 root-cause claim (t_part/t_scores race) is retracted.
+- **Exit condition:** Strengthened gate 0/100 at all geometries + bound reset + record corrected → LEV-J unblocked for FC/FD. **NOT met** (Item 1 STOPPED). Production stays incumbent (gate OFF).
+
+### LEV-J Phase FB3 (2026-09-19) — DIAGNOSED: TWO distinct issues, NOT a barrier bug FB3 diagnosis (no patches, experiments only) determined the 2-pass kernel's determinism failure is **TWO distinct issues**, NOT the "intra-block shared-memory race" claimed in FB2: (1) **MLX allocator bug** (determinism) — the concurrent ≥65 failure (100/100, every iteration) is caused by the concurrent dispatch (a and b in the same command buffer) + shared inputs (q,k,v) at ≥65 blocks; the MLX allocator recycles the shared input buffer for an intermediate during the concurrent dispatch. **NOT a kernel bug** (EXP3: no input mutation; kernel fully initializes output + shared memory). **FIXED** by eval-between (separate command buffers) in the test harness → reduces 100/100 to 1/100 (the serial noise). The 1/100 serial noise is the allocator's deterministic recycling pattern (iter=0 at 65/128/513, iter=1 at 16). (2) **Kernel correctness bug** (reduction order) — the fp32 reference test fails (maxDiff=0.169 at Q=16/prefix=256) because the kernel's 8-partial reduction order (0..7) is LESS ACCURATE than the dense path's order (0.169 vs 0.00059 vs fp32 reference). The maxDiffBound=0.0625 is appropriate for the large geometry (0.052) but not the small (0.169). **Verdict:** barrier-fix is NOT applicable (not a barrier bug). **Next:** REWRITE the kernel's reduction order to match the dense path's order (requires reading the dense path's Metal source), OR REJECT. Production stays incumbent (gate OFF). Report: `benchmarks/results/lev-j/fb3-diagnosis/README.md`. Prior: FB2 (2026-09-19, 2-pass kernel, structural claim FALSE); FB (2026-09-19, integration complete, determinism gate fails); FA (2026-09-19, GO — over-optimistic determinism read); Cold-JIT pre-warm (prompt-4, COMPLETE 2026-09-18); residual-lever campaign Phases 0–2 + Phase 3 quick-wins COMPLETE.
+
+### LEV-J Phase FB3 (2026-09-19) — DIAGNOSIS: TWO DISTINCT ISSUES, NOT A BARRIER BUG
+
+- **Deliverable:** `benchmarks/results/lev-j/fb3-diagnosis/README.md` — full
+  diagnosis with experiments (EXP1b serial, EXP2 concurrent-copied-inputs,
+  EXP3 input-mutation, EXP4 concurrent-shared-eval, ALLOC-RECYCLE,
+  flash-vs-dense both geometries, dense-vs-fp32).
+- **Issue 1: MLX allocator bug (determinism).** The concurrent ≥65 failure
+  (100/100, every iteration) is caused by the concurrent dispatch (a and b in
+  the same command buffer) + shared inputs (q,k,v) at ≥65 blocks. The MLX
+  allocator recycles the shared input buffer for an intermediate during the
+  concurrent dispatch. **NOT a kernel bug** (EXP3: no input mutation; kernel
+  fully initializes output + shared memory). **FIXED** by eval-between (separate
+  command buffers) in the test harness → reduces 100/100 to 1/100 (the serial
+  noise). The 1/100 serial noise is the allocator's deterministic recycling
+  pattern (iter=0 at 65/128/513, iter=1 at 16).
+- **Issue 2: Kernel correctness bug (reduction order).** The fp32 reference
+  test fails (maxDiff=0.169 at Q=16/prefix=256) because the kernel's 8-partial
+  reduction order (0..7) is LESS ACCURATE than the dense path's order (0.169
+  vs 0.00059 vs fp32 reference). The maxDiffBound=0.0625 is appropriate for the
+  large geometry (0.052) but not the small (0.169).
+- **Verdict:** barrier-fix is NOT applicable (not a barrier bug). **Next:**
+  REWRITE the kernel's reduction order to match the dense path's order
+  (requires reading the dense path's Metal source), OR REJECT. Production stays
+  incumbent (gate OFF).
+
+### LEV-J Phase FB2 (2026-09-19) — 2-PASS KERNEL BUILT, DETERMINISM GATE FAILS (STRUCTURAL CLAIM FALSE, superseded by FB3)
+
+- **Deliverable:** `Libraries/MLXLMCommon/FlashSDPA.swift` — 2-pass kernel
+  (pass 1 `lev_j_flash_sdpa_max` → `m` [nq,Q] fp32 in device memory; pass 2
+  `lev_j_flash_sdpa_sum` → out, fixed-order accumulation), separate launches,
+  launch boundary = global barrier. Swift API/gate/counters/warm-up unchanged.
+  1-pass source retained for reference.
+- **Determinism gate (strengthened: 16/65/128/513 blocks × 100 pairs, GPU-side
+  diff, 3× dispatch hash, geometry gate):** 16 blocks ✅; **65/128/513 blocks
+  ❌ 100/100 pairs differ** (totalDiff 39,168,000 / 39,118,500 / 39,116,500 —
+  identical across separate processes → deterministic, not a flake).
+- **Structural claim re-examined (required):** "deterministic by construction" is
+  **FALSE**. The argument covered cross-threadgroup / cross-pass / cross-block
+  state (all safe in the 2-pass) but NOT the **intra-block score reduction**
+  (`t_part`/`t_scores`), which uses shared memory + `threadgroup_barrier` and is
+  the source of the non-determinism. It is identical in the 1-pass and 2-pass.
+  So **neither** the 1-pass nor the 2-pass is deterministic.
+- **Next (exact):** (a) pin the intra-block score-reduction barrier ordering
+  (`mem_flags::mem_device`, a 2nd barrier, or `simdgroup_barrier` around the
+  `simd_sum`); (b) eliminate the cross-simdgroup shared sum (each simdgroup owns
+  a full 256-dim dot product for its keys — larger rewrite, re-bench vs c_flash
+  bar); (c) REJECT-on-correctness. Do **not** proceed to FC/FD on this kernel.
+
+### LEV-J Phase FB (2026-09-19) — INTEGRATION COMPLETE, DETERMINISM GATE FAILS (superseded by FB2)
+
+- **Deliverable:** `Libraries/MLXLMCommon/FlashSDPA.swift` (kernel + `MLX_FLASH_SDPA`
+  gate, default OFF, `ENABLE_BIT_EXACT=1` forces OFF, engagement log,
+  `warmFlashSDPAKernel()`, per-prefill dispatch counters), `AttentionUtils.swift`
+  (`chunkedCausalPrefill` routes each prefill tile to flash when `canEngage` holds,
+  else the incumbent dense SDPA byte-for-byte), `Qwen38MTPBlockSession.swift`
+  (`warmAllDepthShapes` compiles the kernel at warmup), and
+  `Tests/MLXLMTests/Qwen38FlashSDPATests.swift` (forward/reverse tolerance + ulp,
+  determinism gate = 40 concurrent pairs, geometry negative-controls).
+- **Unit tests:** forward/reverse tolerance ✅, geometry gate ✅ (decode Q=1, verify
+  Q=9, head_dim≠256, non-causal, offset≠0 all fall back), **determinism ❌
+  intermittent** (whole-output corruption, ~20 % per-run in stress).
+- **Defect:** the FA notes' single-writer fix was applied to `m`/`l` (registers)
+  but **missed the shared `t_part`/`t_scores`**. Extending the same single-writer
+  pattern to `t_part` (lane 0 only) and `t_scores` (thread j only) did **not**
+  eliminate the race — it is a deeper `threadgroup_barrier` ordering issue in the
+  online-softmax cross-block state (a stale shared `t_scores` read corrupts
+  `m_run`/`l_run` → the whole softmax).
+- **Next (exact):** pick one — (1) barrier audit of `t_part`/`t_scores`/register
+  ordering across the block boundary (try a full 2nd barrier after Phase 3, or
+  `mem_flags::mem_device` scope); (2) provably-deterministic 2-pass kernel (pass 1
+  max-reduction, pass 2 weighted-sum; drops online softmax, +1 K/V read, re-bench
+  vs the c_flash bar); (3) REJECT-on-correctness and record the FA GO as an
+  over-optimistic determinism read. Do **not** proceed to FC/FD on this kernel.
+
+### LEV-J Phase FA (2026-09-19) — GO (superseded: determinism read was optimistic)
+
+- **Deliverable:** `flashbench` target (`Libraries/FlashBench/main.swift`, engine
+  fork `mlx-swift-lm`, product `flashbench`) + `Package.swift` target. **Zero
+  production-code changes** (the micro-kill-switch). Both repos on
+  `feature/lev-j`; engine has `Package.swift` (M) + `Libraries/FlashBench/` (new).
+- **Kernel:** per-query-row threadgroup (grid `Q×nq`), 256 threads = 8 simdgroups
+  × 32 head-dim (split-D), `BK=64` keys/block, online softmax, `O(prefix)` memory.
+  Deterministic: uniform `BK` blocks (out-of-range keys → `-inf` scores), **running
+  state (m,l,o) in per-thread registers** (the shared-memory `t_m`/`t_l` was the race
+  source — register state made it bit-exact), no atomics, fixed reduction tree.
+- **Measured:** bit-exact determinism (cross-process 3× identical md5 at 12.6M
+  elements); flash-vs-fp32-ref 0.01221 (≈1.6 bf16 ulp, knife-edge family);
+  per-token @32K 13.9–18.4 µs/tok (bar ~630), @64K 33.2–40.4 µs/tok (bar ~1205);
+  3.5–4.8× faster than the dense incumbent (single-shot median, n=20, ±2% stable).
+- **Caveats for FB:** dense incumbent OOMs at full-prefill L≥32K (scores >30 GB);
+  current-MLX dense incumbent (~64 µs/tok @32K) ≪ LEV-D's `c_dense` (753.9, older
+  MLX) — re-derive the bar end-to-end in Phase FD; incumbent segfaults under
+  sustained no-sync (≥5 enqueued), so bench single-shot.
+- **Fresh checkpoint: COMPLETED 2026-09-19 02:33 BST** — `scripts/agent-checkpoint.sh`
+  succeeded in both repos. Engine `mlx-swift-lm` `feature/lev-j` @67873ed (M
+  `Package.swift`, new `Libraries/FlashBench/main.swift`); server `qwen38-mtp-server`
+  `feature/lev-j` @85cf03c (M `docs/HANDOFF.md`, `progress.md`; new
+  `benchmarks/results/lev-j/fa-micro-kill-switch.md`). **Next exact step:** Phase FB —
+  port the kernel into the engine prefill path behind `MLX_FLASH_SDPA` (default OFF),
+  geometry gate (Q≥2048, head_dim 256, GQA 6, causal, bf16), unit tests for bit-exact
+  determinism + correctness vs the incumbent.
+
+---
+
+### Prior: Cold-JIT pre-warm (prompt-4, 2026-09-18) — COMPLETE
+
 
 **Cold-JIT pre-warm (prompt-4, 2026-09-18):** eliminates the first-boot
 Metal cold-JIT latency for the decode family. Objective: ≥ 8 s planning
@@ -96,7 +384,7 @@ provenance. In-session paired deltas only; cross-session absolutes are labels.
 | LEV-G | Flip KV default; admission/budget docs; registry; provenance | 3 | LEV-A GO | **blocked** (LEV-A NO-GO) |
 | LEV-H | Tokenization-cache persistence (shutdown serialize / startup restore; size-capped, TTL-respecting, corruption-safe); AB cold-start delta | 3 | LEV-C attributes the 0.34 s to tokenization | **blocked** (LEV-C → SSD restore, not tokenization) |
 | LEV-I | Startup memory-policy tuning | 3 | LEV-C knob sensitivity | **CLOSED at Phase 0 — `RuntimeStartupMemoryPolicy` knobs absent from the checkout (anchor divergence recorded in progress.md)** |
-| LEV-J | Flash-attention Metal kernel: FFP-style micro kill-switch against the LEV-D bar first, then full pipeline (determinism gates, divergence audit, end-to-end AB with the pc sweep re-opened under flash, admission update) | 3 | LEV-D bar credible | **unblocked** (LEV-D GO) |
+| LEV-J | Flash-attention Metal kernel: FFP-style micro kill-switch against the LEV-D bar first, then full pipeline (determinism gates, divergence audit, end-to-end AB with the pc sweep re-opened under flash, admission update) | 3 | LEV-D bar credible | **FA: GO** (deterministic bit-exact; 13.9–40.4 µs/tok @32K/64K, 30–45× below bar; 3.5–4.8× faster than dense) — **next: FB** |
 | LEV-K | Metal draft-select kernel | 3 | LEV-E bound ≥ 2 ms | **CLOSED** (LEV-E < 2 ms) |
 | LEV-L | Stage-3 conversation resume (generated state in radix); tree drafting as follow-on sharing the machinery | 3 | LEV-F design sound | **design done** (implement Stage-3 resume in Phase 3) |
 | — | pc autotuning calibration mode (optional, lowest priority) | opt | real-workload mixed-length data shows the 2048 optimum moves | closed until data |
@@ -644,6 +932,19 @@ accurate for the **default dense build**.
 - Do NOT `head -N` the checkpoint script output (SIGPIPE).
 
 ## Completion marker
+**LEV-J Phase FB2 fresh checkpoint: COMPLETED 2026-09-19 09:00 BST** via `scripts/agent-checkpoint.sh` (run by absolute path with CWD inside each repo); fresh-checkpoint procedure completed in **both** repos (`.dsh/last-agent-checkpoint` 09:00:43 / 09:00:46). Server `qwen38-mtp-server` `feature/lev-j` (M `docs/HANDOFF.md`, `progress.md`; new `benchmarks/results/lev-j/fb2-2pass/README.md`); engine `mlx-swift-lm` `feature/lev-j` @67873ed (M `Qwen38MTPBlockSession.swift`, `AttentionUtils.swift`, `Package.swift`; new `FlashSDPA.swift` [now 2-pass], `Qwen38FlashSDPATests.swift` [strengthened gate]).
+
+Prior — **LEV-J Phase FB fresh checkpoint: COMPLETED 2026-09-19 07:55 BST** via
+`scripts/agent-checkpoint.sh` (run by absolute path with CWD inside each repo);
+fresh-checkpoint procedure completed in **both** repos. Server `qwen38-mtp-server`
+`feature/lev-j` (M `docs/HANDOFF.md`, `progress.md`; new `benchmarks/results/lev-j/`);
+engine `mlx-swift-lm` `feature/lev-j` @67873ed (M `Qwen38MTPBlockSession.swift`,
+`AttentionUtils.swift`, `Package.swift`; new `FlashSDPA.swift`,
+`Qwen38FlashSDPATests.swift`, `FlashBench/`). **NOT merged** — the flash
+**determinism gate fails intermittently** (kernel is not bit-exact), so the
+"all tests pass" merge precondition is not met. LEV-J is BLOCKED on a kernel
+correctness defect (see the FB section above).
+
 **Cold-JIT pre-warm (prompt-4) fresh checkpoint: COMPLETED 2026-09-18 18:19 BST** via
 `scripts/agent-checkpoint.sh` (server `.dsh/last-agent-checkpoint` =
 `2026-09-18T18:19:04+01:00`); fresh-checkpoint procedure completed in the

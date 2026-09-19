@@ -1,0 +1,10 @@
+flashbench: geometry nq=24 nkv=4 D=256 scale=0.0625
+flashbench: determinism (Q=2048, prefix=8192) bit-exact = true
+flashbench: correctness (Q=2048, prefix=8192) max|diff| flash-ref=6.104e-05 inc-ref=6.104e-05 flash-inc=6.104e-05 (bf16 ulp ~0.0078)
+  rep=0 flash=1862.016 ms nz=12582912 full=yes
+flashbench: chunk Q=2048 prefix=8192  flash=1862.016 ms (909.188 us/tok)  incumbent=32.268 ms (15.756 us/tok)  speedup=0.02x  (n=1, single-shot)  fullness: allFull=yes minNZ=12582912/12582912
+  rep=0 flash=70561.706 ms nz=201326592 full=yes
+flashbench: full Q=32768 prefix=32768  flash=70561.706 ms (2153.372 us/tok)  incumbent=OOM  (n=1, single-shot, flash-only)  fullness: allFull=yes minNZ=201326592/201326592
+  rep=0 flash=293370.452 ms nz=402653184 full=yes
+  GUARD TRIPPED: rep 0 did not complete in 120 s (elapsed 293370.452 ms); stopping cell
+flashbench: full Q=65536 prefix=65536  flash=293370.452 ms (4476.478 us/tok)  incumbent=OOM  (n=1, single-shot, flash-only)  fullness: allFull=yes minNZ=402653184/402653184 GUARD
