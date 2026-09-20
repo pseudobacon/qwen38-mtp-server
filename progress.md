@@ -2636,4 +2636,49 @@ warm-restart sanity [4, 9] s; no-JIT-in-B (growth ≤ 2000 KB). **All pass.**
 **Verification:** server `HTTPServerTests` 237 tests / 7 suites green;
 engine unchanged (no engine edits this task); `git diff --check` clean.
 Docs: `docs/PRE-WARM.md` (mechanism, components, operations, gate
+
+### Checkpoint — Block-tiled causal attention (candidate A) — NO-GO (run `ta-20260920`, 2026-09-20)
+
+Task: 4-phase micro-kill-switch ending at a standalone benchmark of a
+block-tiled causal-attention kernel (candidate A: BQ=64, 8 query rows per
+simdgroup, `simdgroup_matrix<half,8,8>`, online softmax, O in registers) for
+Qwen3.8-27B full-attention prefill (bf16, D=256, GQA 6). No production
+integration. Goal: prove (1) MLX dispatch fix durable, (2) deterministic &
+numerically bounded, (3) meaningful speed win vs dense incumbent.
+
+- **P0 (durable MLX dispatch fix): PASS.** Fork `pseudobacon/mlx-swift` @
+  `472c262a` bumps submodule `Source/Cmlx/mlx` → `346eff750` (the
+  `custom_kernel.cpp` dispatch fix). `scripts/verify-mlx-dispatch-fix.sh`
+  PASS; `DispatchSmokeProbe` 6/6 exact full coverage (binary SHA
+  `23ef8588…c325c`). Docs: `p0-mlxfixed-provenance.md`,
+  `p0-dispatch-probe.md`.
+- **P1 (perf model + design): DONE.** Dense incumbent 15.756 µs/tok; GO bar
+  ≤ 10.5 µs/tok (1.5×); NO-GO > 15.756. Candidate A (matrix-tile) selected
+  (scalar SIMT ceiling ~88 µs/tok → NO-GO). Docs: `p0-performance-model.md`,
+  `p1-design.md`.
+- **P3 (standalone benchmark): NO-GO — correctness unachievable.** The
+  candidate compiles, loads, and runs (threadgroup memory 14 KB < 32 KB;
+  G0 fullness + G1 determinism pass; G3 mandatory Q=2048,P=8192 max|diff|
+  0.0347 vs fp32), but a **fundamental Metal driver bug on Apple M5 Pro**
+  prevents correct output at every size: `simdgroup_load` from threadgroup
+  memory returns a corrupted matrix (zeroed lanes) whenever the 8
+  simdgroups in a threadgroup perform *different* work — the defining
+  property of any real tiled kernel. Verified: the load is correct in a
+  single-purpose mmtest (all strides 8/16/256, transposed + non-transposed,
+  2-D/3-D sources, 1×/32× mma, full S-tile preceding) **only while all sg do
+  identical work**; the moment the sg diverge (per-sg query rows), odd
+  columns zero. In the kernel, `m_run`/`l_run` (per-lane registers) are
+  correct and raw `pbuf` scratch is non-zero for all rows, but `Pm`/`Vm`
+  (loaded via `simdgroup_load`) and the final `O` are 0 for every `fm != 0`
+  row. Ruled out: stride, transpose, array shape, register pressure, store
+  method, disabling S-tile / rescale. This is a hardware stop, not a design
+  fix. **Candidate A is NO-GO on this GPU; standalone benchmark not
+  achievable; no integration.** Docs: `p3-no-go.md`.
+
+**Verification:** `swift build --target HTTPServer` green; bench binary
+`.build/debug/tiledattentionbench` runs (`--mmtest`, `--scan`, `--probe`).
+`git diff --check` clean. No server/model/sampler/weight changes; no
+`MLX_FLASH_SDPA` routing restored; `archive/lev-j-flash-sdpa-no-go`
+touched-not-modified. Run-id dir:
+`benchmarks/results/tiled-attention/ta-20260920/`.
 derivation).
