@@ -2656,24 +2656,25 @@ numerically bounded, (3) meaningful speed win vs dense incumbent.
   ≤ 10.5 µs/tok (1.5×); NO-GO > 15.756. Candidate A (matrix-tile) selected
   (scalar SIMT ceiling ~88 µs/tok → NO-GO). Docs: `p0-performance-model.md`,
   `p1-design.md`.
-- **P3 (standalone benchmark): NO-GO — kernel contract violation (corrected root cause; platform defect REFUTED).**
+- **P3 (standalone benchmark) — Candidate A v1 NO-GO: invalid `simdgroup_matrix` fragment construction via whole-vector `thread_elements` assignment (corrected root cause).**
   The candidate compiles, loads, and runs (threadgroup memory 14 KB < 32 KB;
-  G0 fullness + G1 determinism pass; G3 mandatory Q=2048,P=8192 max|diff|
-  0.0347 vs fp32), but produces `fm != 0 -> 0` output. **CORRECTION (this
-  session):** the prior "divergent-sg `simdgroup_load` corruption" hypothesis is
-  **REFUTED** by a minimal spec-conforming reproducer (`sml-minimal-repro.metal`,
-  `--smlrepro`): `simdgroup_load`/`_store`/`_multiply_accumulate` all **PASS** for
-  per-simdgroup *distinct* slices (M0–M5). The earlier "corruption" was a
-  **diagnostic artifact** (non-owned `thread_elements()` reads + a debug data race).
-  The **real** root cause is a **kernel contract violation**: step 3 builds the P tile
-  via `Pm.thread_elements() = pe` (a manual full 64-element vector assignment), an
-  **unsupported** `simdgroup_matrix` construction pattern — only lane 0's 2 owned
-  elements survive (reproducer M6: 496/512 bad), so P is zero for all `fm != 0` rows
-  and `O = P*V` is zero there. **The M5 Pro Metal platform is NOT defective.**
-  **Candidate A remains NO-GO** (not reopened this session, per task), now for the
-  correct reason: a kernel matrix-construction contract violation, not a platform bug.
-  To re-open: fix step 3 (set owned elements only / supported constructor) + re-validate
-  G0–G7. Docs: `p2-contract-audit.md`, `p3-no-go.md` (corrected).
+  fullness + determinism pass; G3 mandatory Q=2048,P=8192 max|diff|
+  0.0347 vs fp32), but produces `fm != 0 -> 0` output. **CORRECTION (forward):** the
+  prior "divergent-sg `simdgroup_load` corruption" hypothesis is **refuted by M0–M5**
+  of a minimal spec-conforming reproducer (`sml-minimal-repro.metal`, `--smlrepro`):
+  `simdgroup_load`/`_store`/`_multiply_accumulate` all **PASS** for per-simdgroup
+  *distinct* slices. The earlier "corruption" was a **diagnostic artifact** (non-owned
+  `thread_elements()[i]` reads + a debug data race). The **real** root cause is
+  **invalid fragment construction**: step 3 built the P tile via
+  `Pm.thread_elements() = pe` (a whole 64-element vector), an invalid whole-fragment
+  assignment — only lane 0's 2 owned elements survive (M6: 496/512 bad), so P is zero
+  for all `fm != 0` rows and `O = P*V` is zero there. **The M5 Pro platform is not
+  implicated by this investigation.** **Candidate A v1 is closed as an invalid
+  implementation** (not a Metal/driver/GPU defect, and not a proof tiled attention
+  cannot work on M5 Pro). The conforming **Candidate B** (build P from lane-owned
+  elements only) is being implemented as a standalone prototype; **it receives no
+  performance claim until it passes the complete micro-kill-switch (G0–G7).** Docs:
+  `p2-contract-audit.md`, `p3-no-go.md` (corrected), `p4-candidate-b-brief.md`.
 
 **Verification:** `swift build --target HTTPServer` green; bench binary
 `.build/debug/tiledattentionbench` runs (`--mmtest`, `--scan`, `--probe`).
