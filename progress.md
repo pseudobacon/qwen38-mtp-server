@@ -2656,24 +2656,24 @@ numerically bounded, (3) meaningful speed win vs dense incumbent.
   ≤ 10.5 µs/tok (1.5×); NO-GO > 15.756. Candidate A (matrix-tile) selected
   (scalar SIMT ceiling ~88 µs/tok → NO-GO). Docs: `p0-performance-model.md`,
   `p1-design.md`.
-- **P3 (standalone benchmark): NO-GO — correctness unachievable.** The
-  candidate compiles, loads, and runs (threadgroup memory 14 KB < 32 KB;
+- **P3 (standalone benchmark): NO-GO — kernel contract violation (corrected root cause; platform defect REFUTED).**
+  The candidate compiles, loads, and runs (threadgroup memory 14 KB < 32 KB;
   G0 fullness + G1 determinism pass; G3 mandatory Q=2048,P=8192 max|diff|
-  0.0347 vs fp32), but on this M5 Pro the required divergent
-  multi-simdgroup threadgroup-memory `simdgroup_load` P/V pattern corrupts output at every size (underlying cause not yet proven): `simdgroup_load` from threadgroup
-  memory returns a corrupted matrix (zeroed lanes) whenever the 8
-  simdgroups in a threadgroup perform *different* work — the defining
-  property of any real tiled kernel. Verified: the load is correct in a
-  single-purpose mmtest (all strides 8/16/256, transposed + non-transposed,
-  2-D/3-D sources, 1×/32× mma, full S-tile preceding) **only while all sg do
-  identical work**; the moment the sg diverge (per-sg query rows), odd
-  columns zero. In the kernel, `m_run`/`l_run` (per-lane registers) are
-  correct and raw `pbuf` scratch is non-zero for all rows, but `Pm`/`Vm`
-  (loaded via `simdgroup_load`) and the final `O` are 0 for every `fm != 0`
-  row. Ruled out: stride, transpose, array shape, register pressure, store
-  method, disabling S-tile / rescale. This is a stop on this machine, not a design
-  fix. **Candidate A is NO-GO on this M5 Pro; standalone benchmark not
-  achievable; no integration.** Docs: `p3-no-go.md`.
+  0.0347 vs fp32), but produces `fm != 0 -> 0` output. **CORRECTION (this
+  session):** the prior "divergent-sg `simdgroup_load` corruption" hypothesis is
+  **REFUTED** by a minimal spec-conforming reproducer (`sml-minimal-repro.metal`,
+  `--smlrepro`): `simdgroup_load`/`_store`/`_multiply_accumulate` all **PASS** for
+  per-simdgroup *distinct* slices (M0–M5). The earlier "corruption" was a
+  **diagnostic artifact** (non-owned `thread_elements()` reads + a debug data race).
+  The **real** root cause is a **kernel contract violation**: step 3 builds the P tile
+  via `Pm.thread_elements() = pe` (a manual full 64-element vector assignment), an
+  **unsupported** `simdgroup_matrix` construction pattern — only lane 0's 2 owned
+  elements survive (reproducer M6: 496/512 bad), so P is zero for all `fm != 0` rows
+  and `O = P*V` is zero there. **The M5 Pro Metal platform is NOT defective.**
+  **Candidate A remains NO-GO** (not reopened this session, per task), now for the
+  correct reason: a kernel matrix-construction contract violation, not a platform bug.
+  To re-open: fix step 3 (set owned elements only / supported constructor) + re-validate
+  G0–G7. Docs: `p2-contract-audit.md`, `p3-no-go.md` (corrected).
 
 **Verification:** `swift build --target HTTPServer` green; bench binary
 `.build/debug/tiledattentionbench` runs (`--mmtest`, `--scan`, `--probe`).
