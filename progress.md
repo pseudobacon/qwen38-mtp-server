@@ -2659,8 +2659,8 @@ numerically bounded, (3) meaningful speed win vs dense incumbent.
 - **P3 (standalone benchmark): NO-GO — correctness unachievable.** The
   candidate compiles, loads, and runs (threadgroup memory 14 KB < 32 KB;
   G0 fullness + G1 determinism pass; G3 mandatory Q=2048,P=8192 max|diff|
-  0.0347 vs fp32), but a **fundamental Metal driver bug on Apple M5 Pro**
-  prevents correct output at every size: `simdgroup_load` from threadgroup
+  0.0347 vs fp32), but on this M5 Pro the required divergent
+  multi-simdgroup threadgroup-memory `simdgroup_load` P/V pattern corrupts output at every size (underlying cause not yet proven): `simdgroup_load` from threadgroup
   memory returns a corrupted matrix (zeroed lanes) whenever the 8
   simdgroups in a threadgroup perform *different* work — the defining
   property of any real tiled kernel. Verified: the load is correct in a
@@ -2671,8 +2671,8 @@ numerically bounded, (3) meaningful speed win vs dense incumbent.
   correct and raw `pbuf` scratch is non-zero for all rows, but `Pm`/`Vm`
   (loaded via `simdgroup_load`) and the final `O` are 0 for every `fm != 0`
   row. Ruled out: stride, transpose, array shape, register pressure, store
-  method, disabling S-tile / rescale. This is a hardware stop, not a design
-  fix. **Candidate A is NO-GO on this GPU; standalone benchmark not
+  method, disabling S-tile / rescale. This is a stop on this machine, not a design
+  fix. **Candidate A is NO-GO on this M5 Pro; standalone benchmark not
   achievable; no integration.** Docs: `p3-no-go.md`.
 
 **Verification:** `swift build --target HTTPServer` green; bench binary
