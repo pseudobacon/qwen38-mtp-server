@@ -37,24 +37,16 @@ script (the knob is a local SwiftPM-checkout mod, reverted by `swift package res
 - `benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md`: the spec
 (shapes, bandwidth analysis, sweep grid, protocol, gates, run commands, verdict).
 
-**RESULT (2026-09-24): GO — the tile lever is real.** Full sweep run (synthetic,
-server LLM stopped, M=256/512/1024/2048, 48 batches). Best tile vs the production
-baseline (bm64/wm2/wn2): **bm128/wn4 wins ~1.26–1.38× at the production M=512 chunk**
-(gateup 12452→9869 µs, down 7202→5232 µs; useful GB/s +26 %/+38 %), up to ~1.7–1.8× at
-M=256. **Mechanism corrects the original re-read thesis:** the BM re-read factor is the
-*minor* lever (bm64→bm128 alone = 1.00× at M=512 — the weight tile is L2-resident, so
-re-reads hit L2 not DRAM); the *dominant* lever is **WN/WM (per-simdgroup N/M tiling**
-(+wn4 = 1.26×). Kernel is compute/parallelism-bound. Caveats: absolute GB/s is DVFS-
-floored (sustained no-sync); the *relative* comparison is the valid signal; M=1024/2048
-are noisy (DVFS thermal). **Projected ~7–15 % total-prefill win** at pc=512 (grows with M).
+**RESULT (2026-09-24, REVISED after correctness gate): the tile lever is real but ~8–18%, and the earlier "1.3×" was INVALID.** The `--check` bit-exactness gate (qmm_nax vs dequant→bf16 GEMM) exposed that **WN≥3 tiles produce partially-correct/all-zero output that finishes fast** — a timing-only sweep is fooled by them. Full-grid `--checkall` (real FFN, layer 0): **every WN=2 tile is correct (rel ~0.0007); every WN=4 tile is BROKEN (rel 0.94–1.00)** — WN=4 is a `qmm_nax` kernel bug, not a speedup. The best CORRECT tile is **bm128/wm4/wn2** (WN stays 2): ~8% faster than production bm64/wm2/wn2 at M=512 (18264 vs 19654 µs/layer) and **~18% faster at M=65536** (190453 vs 225083 µs/layer, from the full clean sweep). Methodology fix: `--checkall` now validates every sweep config inline so a broken tile is flagged "** FAIL (broken tile)" and its timing is untrustable. **Projected ~5–15 % total-prefill win** at pc=512 (grows with M) — NOT the 1.3–1.8× previously (wrongly) reported, which leaned on the broken WN=4 tiles. (Earlier "GO 1.3×" note: the BM-re-read-vs-WN-mechanism analysis in it is superseded — WN is not a valid lever.)
 
 **Ship path (standalone candidate, NOT integrated):** (1) durable `MLX_QMM_*` knob in the
-MLX fork pin (push the `add/qmm-tile-env-override` branch + bump the pin); (2) bit-exact
-gate on the winner (`--check --checkconfig "bm=128,bn=64,bk=64,wm=2,wn=4"`); (3) LCP-context
-confirmation (run the real 64K prefill with the knob set). **No production source/routing/
-model behavior changed** in either repo; the knob unset = stock tiles = bit-identical.
-Fork knob commit (`add/qmm-tile-env-override`) in `mlx-upstream/mlx` (not pushed). Full
-results + ship path + follow-up (wm4/wn4 combo, wn8) in the spec
+MLX fork pin (push the `add/qmm-tile-env-override` branch + bump the pin); (2) bit-exact gate
+already PASSED on the **correct** winner (`--check --checkconfig "bm=128,bn=64,bk=64,wm=4,wn=2"`
+→ rel 0.0007, WN=2 mandatory); (3) LCP-context confirmation (real 64K prefill with the knob).
+**No production source/routing/model behavior changed**; knob unset = stock tiles = bit-identical.
+Fork knob commit (`add/qmm-tile-env-override`) in `mlx-upstream/mlx` (not pushed). Open:
+**investigate the WN≥3 `qmm_nax` kernel bug** (partial/zero output) — a real MLX defect worth
+a fix/report, not a workaround. Full results + gates in the spec
 (`../mlx-swift-lm/benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md` §11–13).
 
 ### Checkpoint 1 — compiled activation micro-fusions (DONE)
