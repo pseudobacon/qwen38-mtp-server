@@ -14,6 +14,35 @@ A speculative-decoding server for Qwen 3.8 / 3.5 architectures on Apple Silicon 
 
 ## v1.1-performance progress log
 
+### 2026-09-24: Prefill FFN GEMM profile + tile sweep (harness built; PENDING user run)
+
+Re-opened the "prebuilt MLX 4-bit GEMM (out of scope)" line for a **measurement**
+task on the dense SwiGLU FFN (gate/up `[17408,5120]`, down `[5120,17408]`, 4-bit
+group-64; 64 layers ≈ 8.35 GB). LCP shows FFN = 36.5 % of 64K prefill. Thesis:
+the prefill GEMM is **DRAM-bandwidth-bound** and the lever is the **M-tile BM**
+(the tiled GEMM re-reads its weight stream M/BM times; at the stock BM=64 and a
+pc=512 chunk that is 8× re-read of 8.35 GB). The `qmm_nax` kernel tiles
+(BM/BN/BK/WM/WN, stock 64/64/64/2/2) are the sweep space; BK is capped at
+group_size=64, BN·BK·2 ≤ 32 KB, BM bounded by the nax register budget.
+
+Engine (`../mlx-swift-lm`, branch `feature/prefill-ffn-gemm` @ `792e8cc`, from main):
+- `Libraries/PrefillGemmBench` (product `prefill-gemm-bench`): loads the real
+gate/up (fused wide) + down 4-bit Linears for one layer; sustained no-sync timing;
+reports per-GEMM µs, eff/useful GB/s, TFLOP/s, arithmetic intensity, the M/BM
+weight-re-read factor, ideal BW floor; bit-exactness gate (qmm_nax vs
+dequant→bf16). Smoke-tested: correctness gate PASS, knob takes effect.
+- `scripts/prefill-gemm/`: the `MLX_QMM_*` tile-knob patch (env-gated measurement
+hook, defaults to stock tiles → production bit-identical) + idempotent re-apply
+script (the knob is a local SwiftPM-checkout mod, reverted by `swift package resolve`).
+- `benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md`: the spec
+(shapes, bandwidth analysis, sweep grid, protocol, gates, run commands, verdict).
+
+Status: **harness ready, awaiting the user's M5 Pro run** (see the spec's run
+commands) → then analyze the data (baseline headroom, BM lever, best tile, M
+dependence) and issue a GO/NO-GO verdict. **No production source/routing/model
+behavior changed** in either repo. Fork knob commit (`add/qmm-tile-env-override`)
+exists in `mlx-upstream/mlx` for durable provenance (not pushed — no network).
+
 ### Checkpoint 1 — compiled activation micro-fusions (DONE)
 
 Ported the four `compile(shapeless: true)` fusion blocks into the active fork (eager fallback gated by `MLXHardwareInfo.isCompiledDecodeSupported`, env override `MLX_COMPILED_DECODE`):
