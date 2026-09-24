@@ -37,11 +37,25 @@ script (the knob is a local SwiftPM-checkout mod, reverted by `swift package res
 - `benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md`: the spec
 (shapes, bandwidth analysis, sweep grid, protocol, gates, run commands, verdict).
 
-Status: **harness ready, awaiting the user's M5 Pro run** (see the spec's run
-commands) → then analyze the data (baseline headroom, BM lever, best tile, M
-dependence) and issue a GO/NO-GO verdict. **No production source/routing/model
-behavior changed** in either repo. Fork knob commit (`add/qmm-tile-env-override`)
-exists in `mlx-upstream/mlx` for durable provenance (not pushed — no network).
+**RESULT (2026-09-24): GO — the tile lever is real.** Full sweep run (synthetic,
+server LLM stopped, M=256/512/1024/2048, 48 batches). Best tile vs the production
+baseline (bm64/wm2/wn2): **bm128/wn4 wins ~1.26–1.38× at the production M=512 chunk**
+(gateup 12452→9869 µs, down 7202→5232 µs; useful GB/s +26 %/+38 %), up to ~1.7–1.8× at
+M=256. **Mechanism corrects the original re-read thesis:** the BM re-read factor is the
+*minor* lever (bm64→bm128 alone = 1.00× at M=512 — the weight tile is L2-resident, so
+re-reads hit L2 not DRAM); the *dominant* lever is **WN/WM (per-simdgroup N/M tiling**
+(+wn4 = 1.26×). Kernel is compute/parallelism-bound. Caveats: absolute GB/s is DVFS-
+floored (sustained no-sync); the *relative* comparison is the valid signal; M=1024/2048
+are noisy (DVFS thermal). **Projected ~7–15 % total-prefill win** at pc=512 (grows with M).
+
+**Ship path (standalone candidate, NOT integrated):** (1) durable `MLX_QMM_*` knob in the
+MLX fork pin (push the `add/qmm-tile-env-override` branch + bump the pin); (2) bit-exact
+gate on the winner (`--check --checkconfig "bm=128,bn=64,bk=64,wm=2,wn=4"`); (3) LCP-context
+confirmation (run the real 64K prefill with the knob set). **No production source/routing/
+model behavior changed** in either repo; the knob unset = stock tiles = bit-identical.
+Fork knob commit (`add/qmm-tile-env-override`) in `mlx-upstream/mlx` (not pushed). Full
+results + ship path + follow-up (wm4/wn4 combo, wn8) in the spec
+(`../mlx-swift-lm/benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md` §11–13).
 
 ### Checkpoint 1 — compiled activation micro-fusions (DONE)
 
