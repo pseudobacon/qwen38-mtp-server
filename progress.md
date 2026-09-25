@@ -44,10 +44,15 @@ MLX fork pin (push the `add/qmm-tile-env-override` branch + bump the pin); (2) b
 already PASSED on the **correct** winner (`--check --checkconfig "bm=128,bn=64,bk=64,wm=4,wn=2"`
 → rel 0.0007, WN=2 mandatory); (3) LCP-context confirmation (real 64K prefill with the knob).
 **No production source/routing/model behavior changed**; knob unset = stock tiles = bit-identical.
-Fork knob commit (`add/qmm-tile-env-override`) in `mlx-upstream/mlx` (not pushed). Open:
-**investigate the WN≥3 `qmm_nax` kernel bug** (partial/zero output) — a real MLX defect worth
-a fix/report, not a workaround. Full results + gates in the spec
-(`../mlx-swift-lm/benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md` §11–13).
+Fork knob commit (`add/qmm-tile-env-override`) in `mlx-upstream/mlx` (not pushed).
+**WN≥3 `qmm_nax` kernel bug — INVESTIGATED + FIXED (2026-09-25):** root cause is in
+`steel/gemm/nax.h` `tile_matmad_nax` (only pair branches; WN≥3/BN=64 → TN=1 → all-zero or
+partial output). 3-part fix applied to the checkout `nax.h` (pair-M descriptor 16,32,16→32,16,16;
+new single-frag `mma`; TN==1/TM-odd branch) + proven by a standalone Metal test (stock 3/8 fail
+= the TN=1 set; fixed 8/8 bit-exact). **Not live yet**: small-M qmm_nax tiles are JIT-compiled from
+the prebuilt `swift-impl` dylib, so a **swift-impl rebuild + pin bump** is the next step. **WN stays 2
+in production until then.** Full root cause + fix + proof + next step in spec §14–15
+(`../mlx-swift-lm/benchmarks/results/prefill-gemm/PREFILL-FFN-GEMM-TILE-SWEEP.md`).
 
 ### Checkpoint 1 — compiled activation micro-fusions (DONE)
 
