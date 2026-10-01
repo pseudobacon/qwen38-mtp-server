@@ -2854,3 +2854,18 @@ so fresh *github* resolves of the new pins fail until a four-repo push
 (pseudobacon/{mlx,mlx-swift,mlx-swift-lm,qwen38-mtp-server}). All four remotes
 are writable (`gh` = pseudobacon). Decision preserved: stock tile policy
 global default; bm128/wm4 experimental override only.
+
+## 2026-10-01 — pin chain pushed to github
+
+All four levels pushed as NEW branches (no force, no existing refs touched,
+no merges):
+- `pseudobacon/mlx:feature/qmm-nax-repair` @ `8c4c79aa` (carries `346eff75`)
+- `pseudobacon/mlx-swift:feature/qmm-nax-repair` @ `00f401ca` (carries `472c262`)
+- `pseudobacon/mlx-swift-lm:feature/prefill-ffn-gemm-deliver` @ `a16c7530`
+- `pseudobacon/qwen38-mtp-server:feature/lev-j-deliver` @ `d614609`
+
+Post-push proof: fresh engine worktree @ `a16c7530` resolved purely from the
+github URLs — submodule auto-checked-out at `8c4c79aa` (fetched from
+pseudobacon/mlx), bench built, metallib bit-identical `3a91039f…`, M=512
+4-config `--checkall` 8/8 PASS. The chain is now resolvable from fresh
+machines. Remaining: per-repo feature-branch → main merges (explicit step).

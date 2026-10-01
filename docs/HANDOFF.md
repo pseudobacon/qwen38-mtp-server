@@ -12,16 +12,17 @@ Both working trees are checked out on their deliver branches (clean). The
 `/tmp/qmm-chain/{mlx,mlx-swift}` clones hold levels 1–2; the `bare/` mirrors and
 validation sandboxes under `/tmp/qmm-chain/` are disposable.
 
-## Why the chain is local-only (and what a push would complete)
-`346eff75` (mlx dispatch fix) and `472c262` (mlx-swift submodule bump) were
-already local-only commits — they do not exist on github. New levels
-`8c4c79aa` / `00f401ca` sit on top of them. The declared remotes are all
-writable (`gh` authenticated as `pseudobacon`; forks exist for mlx,
-mlx-swift, mlx-swift-lm, qwen38-mtp-server), so a four-repo push
-(pseudobacon/mlx: 346eff75+8c4c79aa; pseudobacon/mlx-swift: 472c262+00f401ca;
-the two feature branches) would make the chain resolvable from github.
-**No push was performed** (not requested). Until then, fresh-machine resolves
-of the new pins will fail; local validation below is the evidence.
+## Chain is pushed (2026-10-01)
+All four levels are on github as new branches (no force push, no existing ref
+touched):
+- `pseudobacon/mlx:feature/qmm-nax-repair` @ `8c4c79aa` (carries `346eff75`)
+- `pseudobacon/mlx-swift:feature/qmm-nax-repair` @ `00f401ca` (carries `472c262`)
+- `pseudobacon/mlx-swift-lm:feature/prefill-ffn-gemm-deliver` @ `a16c7530`
+- `pseudobacon/qwen38-mtp-server:feature/lev-j-deliver` @ `d614609`
+Post-push proof: a fresh engine worktree at `a16c7530` resolved purely from the
+github URLs — submodule auto-checked-out at `8c4c79aa`; bench built; metallib
+bit-identical (`3a91039f…`); M=512 4-config `--checkall` 8/8 PASS. Fresh
+machines can now resolve the whole chain.
 
 ## Fresh-state validation (from clean worktrees + clean dependency state)
 - Engine worktree @ `a16c7530`, dependency via the level-2 clone (path dep,
@@ -44,10 +45,8 @@ layer mean −2.45% (range −8.1…+2.0), gateup −17.8% (noisy), down a tie �
 default change; the ~18% historical claim is unreproducible and retired.
 
 ## Remaining work
-1. **Push decision** (user): the four-repo push above; after it, a
-   fresh-clone resolve of the new pins works from github and the local
-   `/tmp/qmm-chain` clones can be discarded.
-2. Feature-branch → main merges (separate explicit step).
+1. ~~Push decision~~ — DONE: all four branches pushed (see above).
+2. Feature-branch → main merges (separate explicit step, per-repo).
 3. The engine's patch/apply scripts (`qmm-tile-knob.patch`,
    `apply-qmm-tile-knob.sh`) remain as a manual mechanism for stock
    checkouts; delivery is now the pin chain.
