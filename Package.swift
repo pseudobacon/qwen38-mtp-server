@@ -6,8 +6,11 @@
 //   Layer 2: `MLXFastModel`                  -> Metal runtime glue / model factory
 //   Layer 3: `HTTPServer` (executable)       -> OpenAI-compatible API
 //
-// `mlx-swift` is pinned to the same range the fork uses (0.31.6) so SwiftPM
-// resolves a single shared `MLX` across the fork and this package.
+// `mlx-swift` is pinned to the exact fork revision the engine uses (pseudobacon
+// 472c262, metal custom-kernel dispatch fix) so SwiftPM resolves a single shared
+// `MLX` across the fork and this package. The URL must match the engine's: the
+// same package identity from two URLs makes SwiftPM keep the root's location with
+// the engine's fork-only revision, which fails to check out ("unable to read tree").
 import PackageDescription
 
 let package = Package(
@@ -21,7 +24,12 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../mlx-swift-lm"),
-        .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.31.6")),
+        // Same fork + exact pin as `../mlx-swift-lm` (pseudobacon dispatch-fix,
+        // 472c262) so SwiftPM resolves ONE shared `mlx-swift` (same identity)
+        // across the fork and this package). An ml-explore URL here collides:
+        // identity unification keeps the root's location but the fork's revision,
+        // which does not exist upstream ("unable to read tree").
+        .package(url: "https://github.com/pseudobacon/mlx-swift", .revision("472c262a6b54c2484092f7a1e60446fc75e1a451")),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", "602.0.0" ..< "604.0.0"),
         .package(url: "https://github.com/vapor/vapor", "4.102.1" ..< "5.0.0"),
         // `#huggingFaceTokenizerLoader()` + the chat template (Tokenizers).

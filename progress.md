@@ -2723,3 +2723,106 @@ numerically bounded, (3) meaningful speed win vs dense incumbent.
 touched-not-modified. Run-id dir:
 `benchmarks/results/tiled-attention/ta-20260920/`.
 derivation).
+
+---
+
+## qmm_nax tile-lever — recovery checkpoint (2026-09-27)
+
+- Best measured *correct* qmm_nax prefill tile: BM=128, BN=32, BK=64, WM=4, WN=2 →
+  190453 µs/layer at M=65536 vs 225083 baseline (~18% faster); earlier record also
+  reports a smaller win at M=512.
+- WN=4 apparent speed is INVALID (recorded configs produced all-zero/partial output,
+  rel-err ~1.00 / 0.94). Making WN>=3 correct is a separate task; fixed-WN=4 perf
+  is unmeasured.
+- New default (WM=4, WN=2, BM=(M<32?32:128), BN=32, BK=64 + MLX_QMM_* overrides +
+  WN<=2 guard) verified present in editable MLX submodule, mlx-swift fork, and the
+  SwiftPM checkout; patch script reproduces the diff (`git apply --check` passes).
+- The current MLXLLM binary does NOT contain the new defaults (no MLX_QMM_* strings);
+  the knob is NOT compiled in, NOT shipped. Package resolution re-checkouts the MLX
+  source and reverts the tree change — the patch script is the durable mechanism.
+- Saved outputs: 64K sweep log valid; 128K OOM; M=65536 no-override run exited
+  137/Killed 9 (NOT a success); M=16384 run unconfirmed (NOT a success).
+- Next: rebuild `MLXLLM` with editable source, `strings | grep MLX_QMM`, rerun 64K
+  no-override + control baseline. Details in `docs/HANDOFF.md`.
+
+Verification: docs-only change in this session (`docs/HANDOFF.md` rewritten); no
+source edits, no commits, no builds, no benchmarks launched. `git diff --check` clean.
+
+## 2026-10-01 — qmm_nax overnight validation: final result (engine `mlx-swift-lm`)
+
+Permanent experiment record. This SUPERSEDES the 2026-09-30 entries above where they
+conflict (the "190453 µs / ~18% faster" best-tile claim and the "WN=4 invalid" history
+remain as history, but the 18% number was never reproducible and is no longer cited).
+
+### Decision
+**Stock global tile policy (bm=(M≤32?32:64), bn=64, bk=64, wm=2, wn=2) is retained.**
+The bm128/wm4 candidate remains available as an EXPERIMENTAL override via
+`MLX_QMM_{BM,BN,BK,WM,WN}` only — it is NOT a compiled-in default.
+
+Forced by two independent facts:
+1. **M≤32 breakage (decisive).** The lever's `wm=4` global default + M≤32 →
+   BM=32 → SM=BM/WM=8 → TM=SM/16=0 → zero-length array in `NAXTile::make` → Metal
+   JIT compile failure → total GEMM failure (reproduced: the lever build crashed at
+   M=16). A global default that breaks every decode shape is not integrable, so the
+   64K win magnitude could not rescue it.
+2. **64K in-binary A/B was near-flat on the full layer.** 5 paired invocations
+   (pair-r1, ba1, ba2, ab1, ab2; all in `64k-pair-20261001/`), real
+   Qwen3.8-27B-4bit layer 0, M=65536, 48 back-to-back batches, both
+   projections, `--checkall` (gateup+down) all PASS. Winner (bm128/wm4) vs
+   control (bm64/wm2) across the 5 runs: gateup mean **−17.8%** (range
+   −38.3…−3.2 — thermal drift; pair-r1 alone −13.8%), down mean **+0.3%**
+   (range −3.2…+2.9 — a tie), full layer mean **−2.45%** (range −8.1…+2.0;
+   pair-r1 −0.52%) — slightly in the candidate's favor, within noise of flat.
+   - smaller M: candidate wins by 1–11% (M=512: gateup −7.6%, down −3.6%;
+     M=4096: gateup −7.9%, down −1.1%)
+   Decision rule from the task (flat combined ⇒ restore stock + keep override)
+   applied. The candidate's value (gateup at large M) is real but the down
+   regression cancels it at 64K; revisit with a per-M dispatch (BM=128/WM=4 for
+   M≥32, BM=32/WM=2 below) as a FUTURE, separately-gated change.
+
+### Kernel repair (the durable correctness fix)
+`nax.h::tile_matmad_nax` had three defects (all repaired; branch-verified):
+1. **Pair-M descriptor bug** (pre-existing in upstream, latent): the pair-M mma
+   passed `a` fragments as `(m+1)`/`b` as `(m)` with `a=(0,1)` — for TN==1 tiles
+   this reads/writes the wrong fragment, producing all-zero C. Fixed: `a=(0,2)` +
+   correct 32×16×16 descriptor. (pair-M only — the pair-N path was always correct.)
+2. **TN==1 single-frag mma**: the original single-fragment mma (16×16×16) is
+   rejected by `steel::matmul2d`'s static_assert ("one dimension must be 32" for
+   cooperative tensors). The JIT preamble typedef also breaks `bfloat::size`.
+   Resolution: the TN==1 / odd-TM branch now **zero-pads** the lone M-fragment into
+   the legal 32×16×16 pair-M mma (correct: zero rows contribute nothing; the
+   zeroed second row is never stored).
+3. **WN>2 support remains deliberately guarded** in `qmm_nax` (clamped to 2,
+   stderr note) — the bench protocol now prints the *effective* (post-clamp) config
+   so wn4/wn3 rows are no longer mislabeled.
+
+### Evidence (repo-local, engine `benchmarks/results/prefill-gemm/64k-pair-20261001/`)
+- 64K paired A/B: pair-r1/r2/r3/r4 (+json)
+- M=512 / M=4096 / M=16 pairs: m512-* / m4096-* / m16-*
+- Branch fixtures (real weights, nonzero refs, gateup+down): branch-fixtures-v3.*
+  — pair-N (bm64/bn64): PASS rel 0.0007/0.0000; pair-M (bm64/bn32): PASS;
+  TN==1-odd (bm16/bn16/wm1/wn1): PASS (was all-zero before the fix);
+  wn3-request: clamped-to-wn2 PASS
+- M=16 no-override (compiled-in stock default bm32/wm2): PASS
+- Final spot: final-m512.* / final-64k-spot.* — all PASS on the final binary
+
+### Reconstructed reproducibility (Phase 4)
+- `scripts/prefill-gemm/qmm-tile-knob.patch` (107 lines): stock+patch reproduces
+  the exact nax.h + quantized.cpp; `git apply --check` clean on stock 346eff75.
+- `scripts/prefill-gemm/apply-qmm-tile-knob.sh`: reset→patch→generator→verify,
+  `--skip-build` for isolated validation, read-only-checkout tolerant, idempotent.
+- Isolated worktree at engine commit b1f74b4 + pristine 472c262 checkout + stock
+  submodule clone: apply reproduced **bit-identical** sources, generated tree
+  (zero diff), and a **bit-identical metallib** (sha256 3a91039f…, 182,351,120 B).
+- `scripts/build-metallib.sh`: SIGPIPE fix, content-aware cache key
+  (rev+metal-source-digest), provenance records the metal-source digest,
+  `check` warns on staleness, symlink/`pwd -P` placement, BSD-safe perms.
+  Provenance: rev 346eff75, metallib 3a91039f…, metal source 981c9e0a…, Xcode 26.6.
+- Bench protocol (`Libraries/PrefillGemmBench/main.swift`): `--no-override`,
+  effective-config print (post-clamp), gateup added to `--checkall`.
+
+### Not shipped / not committed
+Nothing is committed in `mlx-swift-lm` (engine) or `qwen38-mtp-server`. No provenance
+update beyond the recorded build. The integration candidate is the uncommitted engine
+state: submodule nax.h/quantized.cpp + re-cut patch + scripts + bench +
+`benchmarks/results/prefill-gemm/64k-pair-20261001/`.
