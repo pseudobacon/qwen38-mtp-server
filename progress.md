@@ -2826,3 +2826,31 @@ Nothing is committed in `mlx-swift-lm` (engine) or `qwen38-mtp-server`. No prove
 update beyond the recorded build. The integration candidate is the uncommitted engine
 state: submodule nax.h/quantized.cpp + re-cut patch + scripts + bench +
 `benchmarks/results/prefill-gemm/64k-pair-20261001/`.
+
+## 2026-10-01 — qmm_nax repair delivered through the dependency-pin chain
+
+Permanent record. The repair is now durable across the declared repositories
+(via local commits; no push performed):
+
+- **mlx** `8c4c79aa` (branch `feature/qmm-nax-repair`, on `346eff75`; local
+  clone `/tmp/qmm-chain/mlx`): nax.h pair-M descriptor fix + TN==1 zero-padded
+  pair-M branch; quantized.cpp `MLX_QMM_*` knobs (stock defaults) + WN clamp +
+  BM/WM/BN guards. Built metallib bit-identical (`3a91039f…`).
+- **mlx-swift** `00f401ca` (on `472c262`; local clone `/tmp/qmm-chain/mlx-swift`):
+  submodule → `8c4c79aa`; `.gitmodules` URL → `pseudobacon/mlx` fork (upstream
+  not writable); regenerated Cmlx tree (generated files bit-identical to the
+  bench-validated tree).
+- **mlx-swift-lm** `a16c7530` (branch `feature/prefill-ffn-gemm-deliver`, on
+  `b47c064`): Package.swift pin → `00f401ca`.
+- **qwen38-mtp-server** `eed62835` (branch `feature/lev-j-deliver`, on
+  `58c5995`): Package.swift + Package.resolved pin → `00f401ca`.
+
+Fresh-state validation (clean worktrees, clean `.build`, path-dep to the
+level-2 clone): engine bench M=512 4-config checkall 10/10, M=16 no-override,
+64K spot — all PASS; metallib bit-identical; server full suite 237/237 PASS.
+
+Chain is local-only: `346eff75` and `472c262` (the parents) were never pushed,
+so fresh *github* resolves of the new pins fail until a four-repo push
+(pseudobacon/{mlx,mlx-swift,mlx-swift-lm,qwen38-mtp-server}). All four remotes
+are writable (`gh` = pseudobacon). Decision preserved: stock tile policy
+global default; bm128/wm4 experimental override only.
