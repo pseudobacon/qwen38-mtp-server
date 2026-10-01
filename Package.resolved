@@ -42,7 +42,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pseudobacon/mlx-swift",
       "state" : {
-        "revision" : "472c262a6b54c2484092f7a1e60446fc75e1a451"
+        "revision" : "00f401ca8b290ddfa7a66c18009930664b244751"
       }
     },
     {
